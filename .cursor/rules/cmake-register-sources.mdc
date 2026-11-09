@@ -1,0 +1,42 @@
+---
+description: Always register new C++ sources and include dirs in CMakeLists so the IDE and build stay in sync
+alwaysApply: true
+---
+
+# Register New Files in CMakeLists
+
+When adding or moving any engine/game source, update the matching `CMakeLists.txt` in the **same change**. Skipping this leaves the file out of the CMake target, so IntelliSense/clangd report errors and the build ignores the file.
+
+## Checklist (do every time)
+
+1. Add every new `.cpp` to the correct target source list.
+2. If you add a new **public** `include/` directory, add it to `target_include_directories(... PUBLIC ...)`.
+3. If you add a new `src/module/` tree (or need `"module/Foo.hpp"` includes), ensure the parent `src/` is on `target_include_directories(... PRIVATE ...)` (Renderer already has `Renderer/src`).
+4. Do not rely on globbing — list sources explicitly (project convention).
+
+## Where to register
+
+| New file location | Update |
+|---|---|
+| `Engine/**/src/*.cpp` | `Engine/CMakeLists.txt` → `add_library(SatEngine STATIC ...)` |
+| `Engine/**/src/module/*.cpp` | Same — list explicitly (e.g. `Renderer/src/module/MeshPass.cpp`) |
+| `Engine/**/include/` (new public dir) | `Engine/CMakeLists.txt` → `target_include_directories(SatEngine PUBLIC ...)` |
+| `Engine/**/src/` (for `module/` includes) | `target_include_directories(SatEngine PRIVATE ...)` — not PUBLIC |
+| `Game/src/*.cpp` | `Game/CMakeLists.txt` → `add_executable(Game ...)` |
+
+## Example
+
+```cmake
+# After creating Engine/Renderer/src/module/MeshPass.cpp — also edit Engine/CMakeLists.txt:
+add_library(SatEngine STATIC
+    # ... existing sources ...
+    Renderer/src/module/MeshPass.cpp
+)
+
+# Private so "module/MeshPass.hpp" resolves without exposing internals publicly:
+target_include_directories(SatEngine PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/src"
+)
+```
+
+Public headers under an already-registered `include/` path do not need a CMake entry. Module headers under `src/module/` are private; only their `.cpp` files and the private `src/` include path need CMake updates.

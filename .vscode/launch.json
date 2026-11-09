@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug SatEngine",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bin/Debug/SatEngine.exe",
+      "cwd": "${workspaceFolder}/build/bin/Debug",
+      "preLaunchTask": "Build",
+      "stopOnEntry": false
+    },
+    {
+      "name": "Attach SatEngine",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/build/bin/Debug/SatEngine.exe",
+      "stopOnEntry": false
+    }
+  ]
+}

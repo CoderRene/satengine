@@ -1,0 +1,16 @@
+{
+  "cmake.useCMakePresets": "always",
+  "cmake.configurePreset": "windows",
+  "cmake.buildPreset": "windows-debug",
+  "C_Cpp.default.cppStandard": "c++20",
+  "C_Cpp.default.intelliSenseMode": "windows-msvc-x64",
+  "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "C_Cpp.default.compilerPath": "D:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/cl.exe",
+  "C_Cpp.errorSquiggles": "enabled",
+  "clangd.arguments": [
+    "--compile-commands-dir=${workspaceFolder}"
+  ],
+  "dotrush.roslyn.projectOrSolutionFiles": [
+    "d:\\Software Projects\\GameEngine Project\\SatEngine\\build\\SatEngine.sln"
+  ]
+}

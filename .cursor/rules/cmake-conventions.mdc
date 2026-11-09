@@ -1,0 +1,44 @@
+---
+description: Modern CMake conventions for SatEngine library and Game targets
+globs: "**/CMakeLists.txt"
+alwaysApply: false
+---
+
+# CMake Conventions
+
+Root project: C++20, extensions off, MSVC `/W4 /permissive-`, outputs under `build/bin` and `build/lib`.
+
+## Targets (modern CMake)
+
+- `SatEngine` — static library under `Engine/`; public includes from `Engine/*/include`
+- `Game` — executable that links `SatEngine` privately
+- Use target-scoped commands only — no global `include_directories` / `link_libraries` / `add_definitions`
+- `PUBLIC` = part of the consumer API; `PRIVATE` = implementation-only; `INTERFACE` = header-only deps
+- Prefer `PRIVATE` for third-party libs hidden behind wrappers (e.g. GLFW once fully wrapped)
+
+## Dependencies
+
+- Fetch with `FetchContent`; pin a tag; disable docs/tests/examples/install when unused
+- Do not put third-party sources into public include paths unless they are part of the API
+
+## When adding code
+
+```cmake
+# ❌ BAD — new .cpp missing from the target
+add_library(SatEngine STATIC Core/src/Application.cpp)
+
+# ✅ GOOD — every translation unit listed explicitly (including src/module/)
+add_library(SatEngine STATIC
+    Core/src/Application.cpp
+    Core/src/Window.cpp
+    Renderer/src/Renderer.cpp
+    Renderer/src/module/MeshPass.cpp
+)
+```
+
+- Expose public headers with `target_include_directories(... PUBLIC ...)` (`Engine/*/include`)
+- Resolve private `src/module/` headers with `target_include_directories(... PRIVATE .../src)` — never PUBLIC
+- Keep `target_compile_features(... PUBLIC cxx_std_20)` on the library
+- Prefer `target_link_libraries` / `target_compile_options` over directory-wide flags
+- Never hand-edit generated files under `build/`
+- Configure/build via presets / `scripts/build.ps1`; do not invent a parallel layout

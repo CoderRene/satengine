@@ -1,0 +1,28 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "windows",
+      "compilerPath": "D:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/cl.exe",
+      "intelliSenseMode": "windows-msvc-x64",
+      "cppStandard": "c++20",
+      "cStandard": "c17",
+      "windowsSdkVersion": "10.0.26100.0",
+      "configurationProvider": "ms-vscode.cmake-tools",
+      "includePath": [
+        "${workspaceFolder}/Engine/Core/include",
+        "${workspaceFolder}/Engine/Renderer/include",
+        "${workspaceFolder}/Engine/UI/include",
+        "${workspaceFolder}/Engine/ThirdParty/stb",
+        "${workspaceFolder}/build/_deps/glfw-src/include",
+        "${workspaceFolder}/build/_deps/imgui-src",
+        "${workspaceFolder}/build/_deps/imgui-src/backends"
+      ],
+      "defines": [
+        "_DEBUG",
+        "UNICODE",
+        "_UNICODE"
+      ]
+    }
+  ]
+}

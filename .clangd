@@ -1,0 +1,14 @@
+CompileFlags:
+  Add:
+    - -std=c++20
+    - -IEngine/Core/include
+    - -IEngine/Renderer/include
+    - -IEngine/UI/include
+    - -IEngine/ThirdParty/stb
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Core/include"
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Renderer/include"
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/UI/include"
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/ThirdParty/stb"
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/glfw-src/include"
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/imgui-src"
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/imgui-src/backends"

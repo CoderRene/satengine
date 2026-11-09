@@ -1,0 +1,8 @@
+build/
+out/
+.vs/
+.cache/
+CMakeUserPresets.json
+*.user
+compile_commands.json
+Engine/Core/include/EnginePaths.hpp
