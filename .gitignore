@@ -9,3 +9,10 @@ compile_commands.json
 Engine/Core/include/EnginePaths.hpp
 
 Tests/
+# Generated standalone archive encryption keys (never deploy or commit).
+GamePakKey.bin
+GamePakKey.hpp
+
+# Private tooling must remain outside the checkout; ignore accidental generated copies.
+.satengine-private/
+GamePakKeys.cpp

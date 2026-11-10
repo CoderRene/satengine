@@ -20,7 +20,10 @@ public:
     GameBuilder& operator=(GameBuilder&&) = delete;
 
     // Exports to projectRoot/Build/<project-folder-name>.exe.
-    [[nodiscard]] bool start(const std::filesystem::path& projectRoot);
+    // Optional private folder containing generate.py; empty explicitly disables
+    // obfuscation for this export. Encryption and release keys remain enabled.
+    [[nodiscard]] bool start(const std::filesystem::path& projectRoot,
+                             const std::filesystem::path& obfuscatorFolder = {});
     void poll();
     [[nodiscard]] Status status() const;
     [[nodiscard]] const std::string& message() const;

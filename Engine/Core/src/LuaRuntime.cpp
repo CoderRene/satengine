@@ -148,6 +148,9 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
     impl.m_error.clear();
     impl.m_context.clear();
     for (std::size_t index = 0; index < scripts.size(); ++index) {
+        if (scripts[index].bytecode != scripts.front().bytecode) {
+            return impl.fail("Cannot mix source and bytecode script bundles");
+        }
         if (!isValidScriptPath(scripts[index].name)) {
             return impl.fail("Invalid embedded script name");
         }
@@ -264,7 +267,7 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
     lua_setglobal(state, "self");
 
     const std::string chunkLabel(chunkName);
-    if (luaL_loadbufferx(state, source.data(), source.size(), chunkLabel.c_str(), "t") != LUA_OK) {
+    if (luaL_loadbufferx(state, source.data(), source.size(), chunkLabel.c_str(), embedded && !scripts.empty() && scripts.front().bytecode ? "b" : "t") != LUA_OK) {
         impl.fail(lua_tostring(state, -1));
         impl.close();
         return false;

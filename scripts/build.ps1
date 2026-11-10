@@ -1,7 +1,9 @@
 param(
     [ValidateSet("Editor", "GamePlayer")][string]$Target = "Editor",
     [ValidateSet("Debug", "Release")][string]$Configuration = "Debug",
-    [string]$ProjectFolder = ""
+    [string]$ProjectFolder = "",
+    [string]$ObfuscatorFolder = "",
+    [switch]$SkipObfuscation
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,12 +43,25 @@ Push-Location $root
 try {
     if ($Target -eq "GamePlayer") {
         Write-Output "[SatBuild] 2/4 Configuring project and fetching dependencies..."
-        & $cmake --preset windows-gameplayer -B $exportBuild "-DSAT_GAME_PROJECT=$projectPath"
+        $releaseId = $env:SAT_RELEASE_ID
+        if ([string]::IsNullOrWhiteSpace($releaseId)) { $releaseId = [guid]::NewGuid().ToString("N") }
+        $privateOptions = @()
+        if ($SkipObfuscation) {
+            $privateOptions += "-DSAT_ENABLE_OBFUSCATION=OFF"
+            $privateOptions += "-DSAT_OBFUSCATOR_DIR="
+        } elseif (-not [string]::IsNullOrWhiteSpace($ObfuscatorFolder)) {
+            $privateOptions += "-DSAT_ENABLE_OBFUSCATION=ON"
+            $privateOptions += "-DSAT_OBFUSCATOR_DIR=$ObfuscatorFolder"
+        } else {
+            $privateOptions += "-DSAT_ENABLE_OBFUSCATION=ON"
+            $privateOptions += "-DSAT_OBFUSCATOR_DIR="
+        }
+        & $cmake --preset windows-gameplayer -B $exportBuild "-DSAT_GAME_PROJECT=$projectPath" "-DSAT_RELEASE_ID=$releaseId" @privateOptions
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        Write-Output "[SatBuild] 3/4 Compiling engine and embedded Lua game..."
+        Write-Output "[SatBuild] 3/4 Compiling engine, Lua bytecode and game pak..."
         & $cmake --build $exportBuild --config $Configuration --target GamePlayer
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        Write-Output "[SatBuild] 4/4 Packaging standalone executable..."
+        Write-Output "[SatBuild] 4/4 Packaging standalone executable and pak..."
         & $cmake --install $exportBuild --config $Configuration --prefix $outputPath
         exit $LASTEXITCODE
     }

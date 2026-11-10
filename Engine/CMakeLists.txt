@@ -10,6 +10,16 @@ target_include_directories(SatScene PUBLIC
 )
 target_compile_features(SatScene PUBLIC cxx_std_20)
 
+add_library(SatPak STATIC Core/src/PakArchive.cpp Core/src/module/Pak/PakCrypto.cpp)
+if(WIN32)
+    target_link_libraries(SatPak PRIVATE bcrypt)
+else()
+    find_package(OpenSSL 3 REQUIRED COMPONENTS Crypto)
+    target_link_libraries(SatPak PRIVATE OpenSSL::Crypto)
+endif()
+target_include_directories(SatPak PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Core/include")
+target_compile_features(SatPak PUBLIC cxx_std_20)
+
 include(FetchContent)
 # Official Lua release, pinned and checksum verified; no system Lua installation needed.
 # Populate only — the tarball has no CMakeLists.txt, so MakeAvailable cannot add_subdirectory.
@@ -115,6 +125,10 @@ if(Python3_Interpreter_FOUND)
 else()
     message(STATUS "Python3 not found; skip SatLuaDefs stub generation target")
 endif()
+
+add_executable(SatPakBuilder "${PROJECT_SOURCE_DIR}/Tools/PakBuilder/main.cpp")
+target_link_libraries(SatPakBuilder PRIVATE SatPak SatLua)
+target_include_directories(SatPakBuilder PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Core/src")
 
 if(NOT SAT_BUILD_GAME_PLAYER AND NOT SAT_BUILD_EDITOR)
     return()

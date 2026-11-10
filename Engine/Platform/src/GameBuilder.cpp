@@ -157,7 +157,8 @@ GameBuilder::GameBuilder(std::filesystem::path engineRoot)
     : m_impl(std::make_unique<Impl>(std::move(engineRoot))) {}
 GameBuilder::~GameBuilder() = default;
 
-bool GameBuilder::start(const std::filesystem::path& projectRoot) {
+bool GameBuilder::start(const std::filesystem::path& projectRoot,
+                        const std::filesystem::path& obfuscatorFolder) {
     auto& impl = *m_impl;
     if (impl.m_status == Status::Building) {
         return false;
@@ -208,6 +209,11 @@ bool GameBuilder::start(const std::filesystem::path& projectRoot) {
     std::wstring command = quoteArgument(powershell) +
         L" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + quoteArgument(script) +
         L" -Target GamePlayer -Configuration Release -ProjectFolder " + quoteArgument(project);
+    if (obfuscatorFolder.empty()) {
+        command += L" -SkipObfuscation";
+    } else {
+        command += L" -ObfuscatorFolder " + quoteArgument(obfuscatorFolder);
+    }
     SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
     NativeHandle log(CreateFileW((output / "build.log").c_str(), GENERIC_WRITE,
         FILE_SHARE_READ | FILE_SHARE_WRITE, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
@@ -237,6 +243,7 @@ bool GameBuilder::start(const std::filesystem::path& projectRoot) {
     return true;
 #else
     (void)projectRoot;
+    (void)obfuscatorFolder;
     return impl.fail("Standalone builds require Windows and Visual Studio with the C++ toolset.");
 #endif
 }
@@ -271,10 +278,13 @@ void GameBuilder::poll() {
     impl.m_finishedAt = Impl::Clock::now();
     impl.m_process.reset();
     std::error_code error;
-    if (exitCode == 0 && std::filesystem::is_regular_file(impl.m_executablePath, error)) {
+    auto pakPath = impl.m_executablePath;
+    pakPath.replace_extension(".pak");
+    if (exitCode == 0 && std::filesystem::is_regular_file(impl.m_executablePath, error) &&
+        std::filesystem::is_regular_file(pakPath, error)) {
         impl.m_progress = 1.0f;
         impl.m_status = Status::Succeeded;
-        impl.m_message = "Build succeeded. Run " + impl.m_executablePath.filename().string() + " from the project Build folder.";
+        impl.m_message = "Build succeeded. Run " + impl.m_executablePath.filename().string() + " from the project Build folder; keep its .pak alongside it.";
     } else {
         impl.fail("Build failed (exit code " + std::to_string(exitCode) + "). See build.log for details.");
     }

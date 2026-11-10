@@ -126,10 +126,12 @@ Entity& Scene::createEntity(std::string name) {
         m_entityIndices.erase(inserted);
         throw;
     }
+    markEdited();
     return m_entities.back();
 }
 
 void Scene::clear() {
+    markEdited();
     ++m_destructionRevision;
     m_entities.clear();
     m_entityIndices.clear();
@@ -149,6 +151,7 @@ bool Scene::attachScript(std::size_t index, std::string path) {
         return false;
     }
     target->scripts.push_back({std::move(path), true});
+    markEdited();
     return true;
 }
 
@@ -179,6 +182,7 @@ bool Scene::remove(std::size_t index) {
     if (index >= m_entities.size()) {
         return false;
     }
+    markEdited();
     ++m_destructionRevision;
     m_entityIndices.erase(m_entities[index].id());
     if (index + 1 != m_entities.size()) {
@@ -197,7 +201,10 @@ bool Scene::rename(std::size_t index, std::string name) {
     if (name.empty()) {
         return false;
     }
-    m_entities[index].name = std::move(name);
+    if (m_entities[index].name != name) {
+        m_entities[index].name = std::move(name);
+        markEdited();
+    }
     return true;
 }
 
@@ -205,12 +212,16 @@ bool Scene::setMainCamera(std::size_t index) {
     if (index >= m_entities.size() || !m_entities[index].hasCamera) {
         return false;
     }
-    for (Entity& entity : m_entities) {
+    bool changed = false;
+    for (std::size_t cameraIndex = 0; cameraIndex < m_entities.size(); ++cameraIndex) {
+        Entity& entity = m_entities[cameraIndex];
         if (entity.hasCamera) {
-            entity.camera.isMain = false;
+            const bool isMain = cameraIndex == index;
+            changed |= entity.camera.isMain != isMain;
+            entity.camera.isMain = isMain;
         }
     }
-    m_entities[index].camera.isMain = true;
+    if (changed) { markEdited(); }
     return true;
 }
 

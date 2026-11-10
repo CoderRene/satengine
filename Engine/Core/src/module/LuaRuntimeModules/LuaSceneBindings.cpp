@@ -99,6 +99,7 @@ int setVector(lua_State* state) {
     const float y = checkedFloat(state, 3);
     const float z = checkedFloat(state, 4);
     entity.transform.*member = {x, y, z};
+    sceneFor(state).markEdited();
     return 0;
 }
 
@@ -117,6 +118,7 @@ int setPosition(lua_State* state) {
         checkedDouble(state, 3),
         checkedDouble(state, 4),
     };
+    sceneFor(state).markEdited();
     return 0;
 }
 
@@ -151,6 +153,7 @@ int setCameraFov(lua_State* state) {
         return luaL_argerror(state, 2, "vertical FOV must be greater than 0 and less than 180 degrees");
     }
     camera.fieldOfView = fov;
+    sceneFor(state).markEdited();
     return 0;
 }
 
@@ -174,6 +177,7 @@ int setCameraClipPlanes(lua_State* state) {
     // Validate float-converted values before committing either plane.
     camera.nearClip = nearClip;
     camera.farClip = farClip;
+    sceneFor(state).markEdited();
     return 0;
 }
 
@@ -196,6 +200,7 @@ int setCameraClearColor(lua_State* state) {
     camera.clearColor[1] = green;
     camera.clearColor[2] = blue;
     camera.clearColor[3] = alpha;
+    sceneFor(state).markEdited();
     return 0;
 }
 
@@ -222,6 +227,7 @@ int addComponent(lua_State* state) {
     }
     entity.*component = {};
     entity.*flag = true;
+    sceneFor(state).markEdited();
     lua_pushboolean(state, true);
     return 1;
 }
@@ -234,6 +240,7 @@ int removeComponent(lua_State* state) {
         return 1;
     }
     entity.*flag = false;
+    sceneFor(state).markEdited();
     entity.*component = {};
     lua_pushboolean(state, true);
     return 1;
@@ -265,7 +272,11 @@ int setScriptEnabled(lua_State* state) {
         lua_pushboolean(state, false);
         return 1;
     }
-    script->enabled = lua_toboolean(state, 3) != 0;
+    const bool enabled = lua_toboolean(state, 3) != 0;
+    if (script->enabled != enabled) {
+        script->enabled = enabled;
+        sceneFor(state).markEdited();
+    }
     lua_pushboolean(state, true);
     return 1;
 }

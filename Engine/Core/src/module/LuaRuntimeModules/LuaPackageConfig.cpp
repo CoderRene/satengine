@@ -28,7 +28,7 @@ int embeddedSearcher(lua_State* state) {
     std::size_t size = 0;
     const char* source = lua_tolstring(state, -1, &size);
     lua_pushfstring(state, "@Scripts/%s", lua_tostring(state, -2));
-    if (luaL_loadbufferx(state, source, size, lua_tostring(state, -1), "t") != LUA_OK) {
+    if (luaL_loadbufferx(state, source, size, lua_tostring(state, -1), lua_tostring(state, lua_upvalueindex(2))) != LUA_OK) {
         return lua_error(state);
     }
     lua_pushvalue(state, -2);
@@ -58,7 +58,8 @@ void configureEmbeddedSearchers(lua_State* state, std::span<const LuaScriptSourc
         lua_pushlstring(state, script.source.data(), script.source.size());
         lua_rawset(state, -3);
     }
-    lua_pushcclosure(state, embeddedSearcher, 1);
+    lua_pushstring(state, !scripts.empty() && scripts.front().bytecode ? "b" : "t");
+    lua_pushcclosure(state, embeddedSearcher, 2);
     lua_rawseti(state, -2, 2);
     lua_setfield(state, -3, "searchers");
     lua_pop(state, 2); // Original searchers, package.

@@ -484,12 +484,18 @@ struct ViewportPanel::Impl {
                                     const float offset = dot(hit - startPos, axis);
                                     const double delta =
                                         static_cast<double>(offset - drag.startAxisOffset);
-                                    entity->transform.position = drag.startPosition +
+                                    const DVec3 position = drag.startPosition +
                                         DVec3{
                                             static_cast<double>(axis.x) * delta,
                                             static_cast<double>(axis.y) * delta,
                                             static_cast<double>(axis.z) * delta,
                                         };
+                                    if (position.x != entity->transform.position.x ||
+                                        position.y != entity->transform.position.y ||
+                                        position.z != entity->transform.position.z) {
+                                        entity->transform.position = position;
+                                        scene->markEdited();
+                                    }
                                 }
                             }
                         } else if (leftClicked) {

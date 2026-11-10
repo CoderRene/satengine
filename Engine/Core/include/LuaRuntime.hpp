@@ -17,6 +17,9 @@ class ScriptLog;
 struct LuaScriptSource {
     std::string_view name;
     std::string_view source;
+    // All entries in a bundle must use the same format. Binary chunks must come
+    // from a trusted compiler matching this runtime Lua build.
+    bool bytecode = false;
 };
 
 // Window-thread only. The borrowed scene must outlive this runtime.

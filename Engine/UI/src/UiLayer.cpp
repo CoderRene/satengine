@@ -29,10 +29,12 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -40,7 +42,10 @@ namespace sat {
 
 struct UiLayer::Impl {
     Impl(Scene& scene, Project& project, const Input& input)
-    : project(project), scene(scene), scripts(scene, &input, &scriptLog) {}
+    : project(project), scene(scene), scripts(scene, &input, &scriptLog),
+      savedSceneRevision(scene.editRevision()) {
+        if (project.isOpen()) { recordLoadedScene(); }
+    }
     GLFWwindow* window = nullptr;
     Renderer* renderer = nullptr;
     bool glfwReady = false;
@@ -63,8 +68,29 @@ struct UiLayer::Impl {
     bool focusLuaLog = false;
     std::string sceneError;
 
+    std::uint64_t savedSceneRevision;
+    bool hasSavedScene = false;
+
+    [[nodiscard]] bool hasUnsavedChanges() const {
+        const Scene& authoredScene = playMode ? editScene : scene;
+        return authoredScene.editRevision() != savedSceneRevision ||
+            (project.isOpen() && !hasSavedScene);
+    }
+
+    void recordLoadedScene() {
+        savedSceneRevision = scene.editRevision();
+        std::error_code error;
+        // Legacy projects without Scene.sat have not saved their default scene.
+        hasSavedScene = std::filesystem::is_regular_file(project.root() / "Scene.sat", error);
+    }
+
     bool saveScene() {
-        return !project.isOpen() || project.saveScene(scene, sceneError);
+        if (!project.isOpen()) { return true; }
+        const Scene& authoredScene = playMode ? editScene : scene;
+        if (!project.saveScene(authoredScene, sceneError)) { return false; }
+        savedSceneRevision = authoredScene.editRevision();
+        hasSavedScene = true;
+        return true;
     }
 
     void stopPlay() {
@@ -131,6 +157,7 @@ struct UiLayer::Impl {
         }
         project = std::move(opened);
         scene = std::move(loaded);
+        recordLoadedScene();
         if (hierarchy) { hierarchy->setSelectedIndex(-1); }
         if (viewport) { viewport->resetInteraction(); }
         recent.add(project.root());
@@ -374,8 +401,12 @@ void UiLayer::beginFrame() {
             const bool building = m_impl->builder.status() == GameBuilder::Status::Building;
             const bool canBuild = m_impl->project.isOpen() && !m_impl->playMode && !building;
             if (ImGui::MenuItem("Build Standalone", nullptr, false, canBuild)) {
-                const bool started = m_impl->saveScene() && m_impl->builder.start(m_impl->project.root());
-                (void)started; // Failure details are displayed in Build Status.
+                if (m_impl->saveScene()) {
+                    const auto obfuscatorFolder = openFolderDialog(m_impl->window,
+                        "Optional obfuscator folder (generate.py) - Cancel builds without obfuscation");
+                    const bool started = m_impl->builder.start(m_impl->project.root(), obfuscatorFolder);
+                    (void)started; // Failure details are displayed in Build Status.
+                }
                 m_impl->showBuildStatus = true;
             }
             if (!m_impl->project.isOpen()) {
@@ -389,6 +420,15 @@ void UiLayer::beginFrame() {
                 m_impl->showBuildStatus = !m_impl->showBuildStatus;
             }
             ImGui::EndMenu();
+        }
+
+        if (m_impl->hasUnsavedChanges()) {
+            ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f), "* Unsaved changes");
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", m_impl->project.isOpen()
+                    ? "Scene edits have not been saved. Use File > Save Scene."
+                    : "Open or create a project to save your scene.");
+            }
         }
 
         const bool playing = m_impl->playMode;
@@ -579,6 +619,7 @@ void UiLayer::beginFrame() {
                 if (created.loadScene(loaded, m_impl->sceneError)) {
                     m_impl->project = std::move(created);
                     m_impl->scene = std::move(loaded);
+                    m_impl->recordLoadedScene();
                     if (m_impl->hierarchy) { m_impl->hierarchy->setSelectedIndex(-1); }
                     m_impl->recent.add(m_impl->project.root());
                     if (!m_impl->syncLuaToolingFor(m_impl->project)) {

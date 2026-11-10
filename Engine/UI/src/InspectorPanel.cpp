@@ -69,25 +69,27 @@ void InspectorPanel::onImGuiRender(int selectedIndex) {
         return;
     }
 
+    bool changed = false;
     ImGui::PushID(selectedIndex);
     ImGui::TextUnformatted(entity->name.c_str());
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::DragScalarN(
+        changed |= ImGui::DragScalarN(
             "Position", ImGuiDataType_Double, &entity->transform.position.x, 3, 0.05f);
-        ImGui::DragFloat3("Rotation", &entity->transform.rotation.x, 0.5f);
-        ImGui::DragFloat3("Scale", &entity->transform.scale.x, 0.05f);
+        changed |= ImGui::DragFloat3("Rotation", &entity->transform.rotation.x, 0.5f);
+        changed |= ImGui::DragFloat3("Scale", &entity->transform.scale.x, 0.05f);
     }
 
     if (entity->hasCamera &&
         ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::DragFloat("Field of View", &entity->camera.fieldOfView, 0.1f, 1.0f, 179.0f);
-        ImGui::DragFloat("Near Clip", &entity->camera.nearClip, 0.01f, 0.001f, 1000.0f);
-        ImGui::DragFloat("Far Clip", &entity->camera.farClip, 1.0f, 0.1f, 100000.0f);
-        ImGui::ColorEdit4("Clear Color", entity->camera.clearColor);
+        changed |= ImGui::DragFloat("Field of View", &entity->camera.fieldOfView, 0.1f, 1.0f, 179.0f);
+        changed |= ImGui::DragFloat("Near Clip", &entity->camera.nearClip, 0.01f, 0.001f, 1000.0f);
+        changed |= ImGui::DragFloat("Far Clip", &entity->camera.farClip, 1.0f, 0.1f, 100000.0f);
+        changed |= ImGui::ColorEdit4("Clear Color", entity->camera.clearColor);
         bool isMain = entity->camera.isMain;
         if (ImGui::Checkbox("Main Camera", &isMain)) {
+            changed = true;
             if (isMain) {
                 if (!m_impl->scene->setMainCamera(static_cast<std::size_t>(selectedIndex))) {
                     entity->camera.isMain = false;
@@ -100,6 +102,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex) {
 
     if (entity->hasCamera && ImGui::Button("Remove Camera")) {
         entity->hasCamera = false;
+        changed = true;
         entity->camera = {};
     }
 
@@ -115,6 +118,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex) {
 
     if (entity->hasMesh && ImGui::Button("Remove Mesh")) {
         entity->hasMesh = false;
+        changed = true;
     }
 
     int removeScript = -1;
@@ -123,7 +127,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex) {
         ImGui::PushID(static_cast<int>(index));
         const std::string label = "Lua Script: " + script.path;
         if (ImGui::CollapsingHeader(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-            ImGui::Checkbox("Enabled", &script.enabled);
+            changed |= ImGui::Checkbox("Enabled", &script.enabled);
             ImGui::TextWrapped("Scripts/%s", script.path.c_str());
             std::error_code error;
             if (!m_impl->project->isOpen() ||
@@ -139,6 +143,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex) {
     }
     if (removeScript >= 0) {
         entity->scripts.erase(entity->scripts.begin() + removeScript);
+        changed = true;
     }
 
     ImGui::Separator();
@@ -150,10 +155,12 @@ void InspectorPanel::onImGuiRender(int selectedIndex) {
         if (ImGui::MenuItem("Mesh (Cube)", nullptr, false, !entity->hasMesh)) {
             entity->mesh = {};
             entity->hasMesh = true;
+            changed = true;
         }
         if (ImGui::MenuItem("Camera", nullptr, false, !entity->hasCamera)) {
             entity->camera = {};
             entity->hasCamera = true;
+            changed = true;
         }
         if (ImGui::BeginMenu("Lua Script")) {
             if (!m_impl->project->isOpen()) {
@@ -176,6 +183,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex) {
         }
         ImGui::EndPopup();
     }
+    if (changed) { m_impl->scene->markEdited(); }
     ImGui::PopID();
     ImGui::End();
 }

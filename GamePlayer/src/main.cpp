@@ -1,5 +1,6 @@
 #include "Application.hpp"
-#include "EmbeddedLuaProject.hpp"
+#include "PakArchive.hpp"
+#include "GamePakKeys.hpp"
 #include "LuaRuntime.hpp"
 #include "SceneFile.hpp"
 
@@ -10,13 +11,16 @@
 #include <windows.h>
 #endif
 
+#include <array>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <streambuf>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace {
 
@@ -104,13 +108,40 @@ public:
 protected:
     void onStart() override {
         std::string error;
-        if (!sat::deserializeScene(sat::embeddedLuaScene(), scene(), error)) {
+        const std::string_view pakName = SAT_GAME_PAK_NAME;
+        const auto pakPath = executableFolder() / std::filesystem::path(std::u8string(pakName.begin(), pakName.end()));
+        const auto loadGroup = [&](sat::PakArchive& archive, const std::filesystem::path& path, std::string_view group) {
+            sat::ScopedPakKey key;
+            if (!sat::loadGamePakKey(group, key.bytes)) { error = "Missing archive group key"; return false; }
+            return archive.load(path, error, key.bytes);
+        };
+        if (!loadGroup(m_archive, pakPath, "scripts")) {
             m_failed = true;
-            std::cerr << "Cannot load embedded scene: " << error << '\n';
+            std::cerr << error << '\n';
             requestStop();
             return;
         }
-        if (!m_scripts.start(sat::embeddedLuaScripts())) {
+        const std::array<std::string_view, 3> groups{"textures", "audio", "assets"};
+        for (std::size_t index = 0; index < groups.size(); ++index) {
+            auto name = pakPath.stem(); name += "." + std::string(groups[index]); name += pakPath.extension();
+            if (!loadGroup(m_assets[index], pakPath.parent_path() / name, groups[index])) {
+                m_failed = true;
+                std::cerr << error << '\n'; requestStop(); return;
+            }
+        }
+        if (!sat::deserializeScene(m_archive.find("Scene.sat"), scene(), error)) {
+            m_failed = true;
+            std::cerr << "Cannot load packed scene: " << error << '\n';
+            requestStop();
+            return;
+        }
+        std::vector<sat::LuaScriptSource> scripts;
+        for (const auto& entry : m_archive.entries()) {
+            if (entry.name.starts_with("Scripts/") && entry.name.ends_with(".lua")) {
+                scripts.push_back({std::string_view(entry.name).substr(8), entry.bytes, true});
+            }
+        }
+        if (!m_scripts.start(scripts)) {
             reportFailure();
         }
     }
@@ -131,6 +162,8 @@ private:
         std::cerr << m_scripts.error() << '\n';
         requestStop();
     }
+    sat::PakArchive m_archive;
+    std::array<sat::PakArchive, 3> m_assets;
     sat::LuaRuntime m_scripts;
     bool m_failed = false;
 };

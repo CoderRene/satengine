@@ -70,6 +70,11 @@ public:
     // entities always get fresh IDs. IDs are not serialized. Load replaces them.
     [[nodiscard]] const std::vector<Entity>& entities() const;
     [[nodiscard]] std::size_t entityCount() const { return m_entities.size(); }
+    // Structural mutators advance this automatically. After editing fields through
+    // a borrowed Entity*, callers must markEdited(). Reads must not mark edits.
+    // Copies preserve the revision, allowing editor Play snapshots to restore it.
+    [[nodiscard]] std::uint64_t editRevision() const { return m_editRevision; }
+    void markEdited() { ++m_editRevision; }
     // Changes on remove/clear so runtime hosts can retire destroyed owners lazily.
     [[nodiscard]] std::uint64_t destructionRevision() const { return m_destructionRevision; }
     [[nodiscard]] std::optional<std::size_t> entityIndex(EntityId id) const;
@@ -98,6 +103,7 @@ private:
     std::vector<Entity> m_entities;
     std::unordered_map<EntityId, std::size_t> m_entityIndices;
     std::uint64_t m_destructionRevision = 0;
+    std::uint64_t m_editRevision = 0;
     int m_cameraCount = 0;
     int m_cubeCount = 0;
     int m_emptyCount = 0;

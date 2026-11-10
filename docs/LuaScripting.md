@@ -48,7 +48,7 @@ tracebacks identify the owning entity and script. Window-thread use only.
 
 `require("movement")` loads `Scripts/movement.lua`; dotted module names and
 `Scripts/module/init.lua` are supported. Built games load these modules from the
-embedded bundle without filesystem fallback.
+in-memory bundle without filesystem fallback (compiled bytecode from the standalone pak).
 
 | Function | Behavior |
 | --- | --- |
@@ -164,13 +164,21 @@ sat.setScriptEnabled(sat.findEntity("Target"), "target.lua", false)
 
 ## Saving and building
 
+The top bar shows an amber **Unsaved changes** indicator after scene edits.
+A successful save clears it; a failed save leaves it visible. Play-mode changes
+are excluded because Stop restores the saved editor scene.
+
 **File > Save Scene** saves entities, transforms, mesh/camera components and
 script attachments to the project's versioned `Scene.sat` file. The editor also
 saves before Play, Build, switching projects and normal shutdown. A malformed
 scene is reported rather than overwritten. Older projects without Scene.sat
 start with a default camera and no attached scripts; add attachments and save.
 
-Choose **Build > Build Standalone**. Builds go to
+Choose **Build > Build Standalone**. The editor opens a folder picker for the
+optional private obfuscator: select the folder containing `generate.py`.
+Cancel the picker to build without obfuscation; encryption stays enabled.
+A selected folder without the tool also uses the fallback. The selection is passed
+only to the build configuration, not saved in project files. Builds go to
 `<project>/Build/<project-folder-name>.exe`; `Build/build.log` contains the build
 output and `Build/.satengine-build/` holds reusable intermediate files. Build
 Status shows live logs, elapsed time and a stage-based percentage (prepare,
@@ -188,9 +196,70 @@ Command-line equivalents:
 
 The default project is `Examples/LuaCube`. A direct CMake build can select another
 project using `-DSAT_GAME_PROJECT="C:/path/to/project"`. Scene.sat and all project
-Lua files are embedded, so the named executable runs without the original project
-folder. Rebuild after scene/script changes. General asset packaging is not yet
-implemented; explicit `io`, `dofile` and `loadfile` calls still access disk.
+Lua scripts are precompiled by `SatPakBuilder` using the player's pinned Lua
+version. The build produces `<project-folder-name>.exe` and an encrypted archive
+set: `<project-folder-name>.pak`, then `.1.pak`, `.2.pak`, and so on as needed.
+Ship the executable and every current part together. The player locates the pak beside its executable,
+independently of the working directory. Missing/invalid pak errors go to the log.
+
+The versioned pak contains `Scene.sat`, compiled scripts under `Scripts/` (the
+`.lua` paths are retained for attachments and `require`), and every file under
+`Assets/`, including textures and audio. Assets are packed unchanged. C++
+`PakArchive::find` returns borrowed binary bytes from memory; texture decoding
+and audio playback are not introduced by packaging. Lua `io`, `dofile` and
+`loadfile` still access disk, rather than transparently reading the pak.
+
+The engine validates archive sizes, paths, duplicate names and format version,
+then loads the archive into memory once. Entry scripts and required modules are
+loaded with Lua's bytecode-only mode. Bytecode retains debug locations for
+tracebacks and is specific to the Lua version/build architecture; rebuild the pak
+with its player. Rebuild after scene, script or asset changes. Syntax errors in
+any project script fail the build. Editor Play continues to load source files.
+Each physical part is at most 2 GiB including encryption overhead. The logical
+archive stream splits across parts automatically, including files larger than a
+single part. The old 100000-entry cap is removed; the format stores a 32-bit entry
+count. Sets are limited to 4096 parts and available address space. The packer and
+loader currently hold the logical archive in memory; splitting does not provide
+asset streaming or reduce total RAM requirements.
+
+AES-256-GCM encrypts paths and payloads and authenticates part metadata. Fresh
+random nonces and a random set ID prevent accidental generation mixing. Missing,
+wrong-key, damaged, reordered or mixed-set parts fail loading before Lua runs.
+There is no plaintext-format fallback. Archives remain uncompressed.
+
+Independent random 256-bit keys are generated for scripts/scene, textures,
+audio, and other assets. The primary `.pak` holds scripts and scene; additional
+`<name>.textures.pak`, `<name>.audio.pak`, and `<name>.assets.pak` groups are always
+emitted, even when empty. Each group splits at 2 GiB. Ship all current files listed
+in the generated `.pak.parts` build manifest; the manifest itself is not required
+by the player. CMake stages and installs all current groups and parts.
+
+Keys and generated reconstruction code live outside the checkout and project.
+The default private root is `~/Desktop/SatEnginePrivate` (`%USERPROFILE%/Desktop/SatEnginePrivate` on Windows),
+overridable with `SAT_PRIVATE_ROOT` environment variable or CMake cache path.
+The optional private tool is `<private-root>/generate.py`; its implementation is
+not part of this repository. It accepts `--project`, `--release`, and `--output`,
+then emits `scripts.bin`, `textures.bin`, `audio.bin`, `assets.bin` (32 bytes each)
+and `GamePakKeys.cpp` implementing the public `GamePakKeys.hpp` contract.
+
+If the private tool exists, the build uses it. If absent, the public fallback
+`scripts/generate_release_keys.py` emits an unobfuscated provider and the build
+continues with encryption enabled. CMake reports the selected mode. A present but
+failing private tool fails the build rather than silently downgrading. Private
+tools, generated code, and key files are neither installed nor bundled.
+
+Each standalone export via `build.ps1` generates a fresh public release ID unless
+`SAT_RELEASE_ID` is supplied in the environment. Direct CMake builds cache a
+release ID for incremental builds; pass `-DSAT_RELEASE_ID=<new-id>` to rotate it.
+Generated outputs are isolated by project/build/release. Deploy the matching
+player and complete archive set together. Runtime key buffers are securely cleared
+after each group is loaded, including failure paths. Windows uses BCrypt;
+portable tests require OpenSSL 3 Crypto. Python 3 is required for standalone key
+provider generation. Keep private files outside source control and restrict
+access to the private root using host filesystem permissions.
+Encryption deters casual inspection; a determined reader can extract a key from
+the distributed player. It is not DRM or protection against a compromised client.
+Rebuild old v1 archives; they are no longer accepted.
 
 The Windows game opens no console or error dialogs. Errors and Lua tracebacks go
 to `SatGame.log` beside the executable; if unwritable, it uses
