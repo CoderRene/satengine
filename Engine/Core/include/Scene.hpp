@@ -3,8 +3,11 @@
 #include "Math.hpp"
 
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace sat {
@@ -40,7 +43,12 @@ struct ScriptComponent {
 
 [[nodiscard]] bool isValidScriptPath(std::string_view path);
 
+// Opaque runtime identity. Zero is invalid. IDs are never reused within a process.
+using EntityId = std::uint64_t;
+inline constexpr EntityId kInvalidEntityId = 0;
+
 struct Entity {
+    [[nodiscard]] EntityId id() const { return m_id; }
     std::string name;
     Transform transform;
     bool hasCamera = false;
@@ -48,13 +56,30 @@ struct Entity {
     bool hasMesh = false;
     MeshComponent mesh;
     std::vector<ScriptComponent> scripts;
+
+private:
+    friend class Scene;
+    EntityId m_id = kInvalidEntityId;
 };
 
 class Scene {
 public:
     Scene();
 
+    // Window-thread only. Copies preserve identity for snapshots; newly created
+    // entities always get fresh IDs. IDs are not serialized. Load replaces them.
     [[nodiscard]] const std::vector<Entity>& entities() const;
+    [[nodiscard]] std::size_t entityCount() const { return m_entities.size(); }
+    // Changes on remove/clear so runtime hosts can retire destroyed owners lazily.
+    [[nodiscard]] std::uint64_t destructionRevision() const { return m_destructionRevision; }
+    [[nodiscard]] std::optional<std::size_t> entityIndex(EntityId id) const;
+    [[nodiscard]] Entity* entityById(EntityId id);
+    [[nodiscard]] const Entity* entityById(EntityId id) const;
+    [[nodiscard]] bool destroyEntity(EntityId id);
+    [[nodiscard]] bool setMainCameraById(EntityId id);
+    // Indices are temporary positions for editor/serialization use, never handles.
+    // Creation may invalidate references; removal swaps in the last entity and
+    // invalidates references/indices. IDs of surviving entities remain valid.
     [[nodiscard]] Entity* entity(std::size_t index);
     [[nodiscard]] const Entity* entity(std::size_t index) const;
     [[nodiscard]] int mainCameraIndex() const;
@@ -70,9 +95,9 @@ public:
     [[nodiscard]] bool setMainCamera(std::size_t index);
 
 private:
-    static Entity makeCameraEntity(std::string name, bool isMain);
-
     std::vector<Entity> m_entities;
+    std::unordered_map<EntityId, std::size_t> m_entityIndices;
+    std::uint64_t m_destructionRevision = 0;
     int m_cameraCount = 0;
     int m_cubeCount = 0;
     int m_emptyCount = 0;

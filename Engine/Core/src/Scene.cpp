@@ -1,12 +1,30 @@
 #include "Scene.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <limits>
+#include <stdexcept>
 #include <utility>
 
 namespace sat {
 
 namespace {
+
+EntityId nextEntityId() {
+    // Global uniqueness prevents a stale ID from aliasing an entity after clear,
+    // scene replacement, or a new Play session. Never wrap into a previous ID.
+    static std::atomic<EntityId> next{1};
+    EntityId id = next.load(std::memory_order_relaxed);
+    for (;;) {
+        if (id > static_cast<EntityId>(std::numeric_limits<std::int64_t>::max())) {
+            throw std::overflow_error("Entity ID space exhausted");
+        }
+        if (next.compare_exchange_weak(id, id + 1, std::memory_order_relaxed)) {
+            return id;
+        }
+    }
+}
 
 void trimInPlace(std::string& value) {
     while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
@@ -38,23 +56,40 @@ bool isValidScriptPath(std::string_view path) {
     return true;
 }
 
-Entity Scene::makeCameraEntity(std::string name, bool isMain) {
-    Entity entity;
-    entity.name = std::move(name);
-    entity.hasCamera = true;
-    entity.camera.isMain = isMain;
-    if (isMain) {
-        entity.transform.position = {0.0f, 1.0f, -5.0f};
-    }
-    return entity;
-}
-
 Scene::Scene() {
-    m_entities.push_back(makeCameraEntity("Main Camera", true));
+    Entity& camera = createEntity("Main Camera");
+    camera.hasCamera = true;
+    camera.camera.isMain = true;
+    camera.transform.position = {0.0f, 1.0f, -5.0f};
 }
 
 const std::vector<Entity>& Scene::entities() const {
     return m_entities;
+}
+
+std::optional<std::size_t> Scene::entityIndex(EntityId id) const {
+    const auto found = m_entityIndices.find(id);
+    return found != m_entityIndices.end() ? std::optional{found->second} : std::nullopt;
+}
+
+Entity* Scene::entityById(EntityId id) {
+    const auto found = m_entityIndices.find(id);
+    return found != m_entityIndices.end() ? &m_entities[found->second] : nullptr;
+}
+
+const Entity* Scene::entityById(EntityId id) const {
+    const auto found = m_entityIndices.find(id);
+    return found != m_entityIndices.end() ? &m_entities[found->second] : nullptr;
+}
+
+bool Scene::destroyEntity(EntityId id) {
+    const auto found = m_entityIndices.find(id);
+    return found != m_entityIndices.end() && remove(found->second);
+}
+
+bool Scene::setMainCameraById(EntityId id) {
+    const auto found = m_entityIndices.find(id);
+    return found != m_entityIndices.end() && setMainCamera(found->second);
 }
 
 Entity* Scene::entity(std::size_t index) {
@@ -83,12 +118,21 @@ int Scene::mainCameraIndex() const {
 Entity& Scene::createEntity(std::string name) {
     Entity entity;
     entity.name = std::move(name);
-    m_entities.push_back(std::move(entity));
+    entity.m_id = nextEntityId();
+    const auto inserted = m_entityIndices.emplace(entity.m_id, m_entities.size()).first;
+    try {
+        m_entities.push_back(std::move(entity));
+    } catch (...) {
+        m_entityIndices.erase(inserted);
+        throw;
+    }
     return m_entities.back();
 }
 
 void Scene::clear() {
+    ++m_destructionRevision;
     m_entities.clear();
+    m_entityIndices.clear();
     m_cameraCount = 0;
     m_cubeCount = 0;
     m_emptyCount = 0;
@@ -119,12 +163,8 @@ void Scene::addEmpty() {
 
 void Scene::addCamera() {
     ++m_cameraCount;
-    if (m_cameraCount == 1) {
-        m_entities.push_back(makeCameraEntity("Camera", false));
-    } else {
-        m_entities.push_back(
-            makeCameraEntity("Camera " + std::to_string(m_cameraCount), false));
-    }
+    Entity& camera = createEntity(m_cameraCount == 1 ? "Camera" : "Camera " + std::to_string(m_cameraCount));
+    camera.hasCamera = true;
 }
 
 void Scene::addCube() {
@@ -139,7 +179,13 @@ bool Scene::remove(std::size_t index) {
     if (index >= m_entities.size()) {
         return false;
     }
-    m_entities.erase(m_entities.begin() + static_cast<std::ptrdiff_t>(index));
+    ++m_destructionRevision;
+    m_entityIndices.erase(m_entities[index].id());
+    if (index + 1 != m_entities.size()) {
+        m_entities[index] = std::move(m_entities.back());
+        m_entityIndices.find(m_entities[index].id())->second = index;
+    }
+    m_entities.pop_back();
     return true;
 }
 

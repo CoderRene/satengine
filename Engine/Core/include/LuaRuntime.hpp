@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <span>
@@ -19,7 +20,7 @@ struct LuaScriptSource {
 
 // Window-thread only. The borrowed scene must outlive this runtime.
 // Scripts are trusted project code and have access to Lua's standard libraries.
-// Entity IDs are one-based scene indices, valid until a host removes/reorders entities.
+// Entity IDs are opaque positive integers; retain them instead of scene indices.
 class LuaRuntime {
 public:
     explicit LuaRuntime(Scene& scene, const Input* input = nullptr);
@@ -31,13 +32,15 @@ public:
     LuaRuntime& operator=(LuaRuntime&&) = delete;
 
     // Starts enabled script components attached to scene entities. Each component
-    // has a separate VM and self.entity (a one-based owning entity ID).
+    // has a separate VM and self.entity (the stable owning entity ID).
     // No file is executed merely because it exists in Scripts/.
     // Failure disables updates. Call stop() to release the VM; restarting clears errors.
     [[nodiscard]] bool start(const std::filesystem::path& projectRoot);
     // Runs an embedded project without filesystem module lookup. Sources are
     // copied into the VM during this call and need not outlive it.
     [[nodiscard]] bool start(std::span<const LuaScriptSource> scripts);
+    // Destroyed owners stop at callback boundaries, before any further updates.
+    // Their onStop runs once with an invalid self.entity; use isEntityValid in Lua.
     [[nodiscard]] bool update(float deltaSeconds);
     // Calls optional onStop() once after successful startup, then releases the VM.
     // Preserves the first failure. Repeated calls are harmless.
@@ -48,7 +51,7 @@ public:
 private:
     [[nodiscard]] bool startSource(std::string_view source, std::string_view chunkName,
                                    std::string_view modulePath,
-                                   std::span<const LuaScriptSource> scripts, bool embedded, std::size_t ownerId);
+                                   std::span<const LuaScriptSource> scripts, bool embedded, std::uint64_t ownerId);
     [[nodiscard]] bool startScripts(const std::filesystem::path& root,
                                     std::span<const LuaScriptSource> scripts, bool embedded);
     struct Impl;

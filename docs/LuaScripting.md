@@ -18,7 +18,7 @@ Place new `.lua` files under `Scripts/` using your code editor; reopen Add Compo
 to refresh the script list. Missing files are flagged in Inspector.
 
 Each script component has its own Lua VM, globals, module cache and local state.
-`self.entity` is its owning entity's one-based ID. Define optional global callbacks:
+`self.entity` is its owning entity's stable ID. Define optional global callbacks:
 
 ```lua
 local angle = 0
@@ -39,8 +39,9 @@ end
 
 Scripts start in entity/component order. A script's top-level code runs before
 its onStart; then each instance receives updates in the same order. The active
-component roster is fixed for a Play session. Editor changes are disabled during
-Play. Restarting Play creates fresh instances. On error, updates stop, successful
+component roster is fixed for a Play session, except that destroyed owners retire
+their components. Newly created entities do not automatically run scripts. Editor
+changes are disabled during Play. Restarting Play creates fresh instances. On error, updates stop, successful
 instances receive onStop, and the editor restores the original scene. Startup
 failure does not call onStop on the failing instance. The first error is retained;
 tracebacks identify the owning entity and script. Window-thread use only.
@@ -54,16 +55,65 @@ embedded bundle without filesystem fallback.
 | `sat.createEntity(name)` | Create an empty entity and return its ID |
 | `sat.createCube(name)` | Create a cube and return its ID |
 | `sat.createCamera(name)` | Create a camera and return its ID |
-| `sat.findEntity(name)` | Return the first matching ID, or nil |
+| `sat.findEntity(name)` | Return the first live matching ID, or nil |
+| `sat.destroyEntity(id)` | Destroy immediately; return false for an invalid/already destroyed ID |
+| `sat.isEntityValid(id)` | Return whether this ID identifies a live entity in this scene |
+| `sat.getName(id)` | Return the live entity's name |
+| `sat.getEntities()` | Return a new array containing the current live IDs |
+| `sat.getEntityCount()` | Return the number of live entities |
 | `sat.getPosition(id)` / `sat.setPosition(id, x, y, z)` | Read three numbers / write position |
 | `sat.getRotation(id)` / `sat.setRotation(id, x, y, z)` | Read/write Euler rotation in degrees |
 | `sat.getScale(id)` / `sat.setScale(id, x, y, z)` | Read/write scale |
 | `sat.setMainCamera(id)` | Select an entity with a camera as the main camera |
 
 Transforms use the engine's left-handed coordinates (+Y up, +Z forward); scale
-is dimensionless. Entity IDs survive creation but not removal/reordering or a
-new Play session. Scripts cannot remove entities or attach components at runtime.
-Invalid IDs, nonfinite numbers and invalid callbacks produce Lua errors.
+is dimensionless. Entity IDs are opaque positive Lua integers, not array indices.
+All entity APIs, including camera selection and `self.entity`, use these IDs. Creation, vector
+growth, and destruction/reordering of other entities preserve surviving IDs.
+Destroyed IDs never identify a replacement entity. Do not perform arithmetic on
+IDs or persist them in project files: scene loads create fresh runtime IDs.
+Scene copies used for editor Play snapshots preserve identities; Stop restores
+the authored snapshot, and runtime-created entities disappear.
+
+`getEntities()` returns a snapshot, so it is safe to iterate that array while
+creating or destroying entities. Storage/enumeration order may change after a
+deletion; duplicate names are allowed, so keep IDs instead of relying on names
+or list positions. The array itself does not keep entities alive. `getName`,
+transform functions and `setMainCamera` reject stale/invalid IDs with Lua errors.
+`destroyEntity` and `isEntityValid` return false for invalid integer IDs; noninteger
+arguments produce Lua errors. Nonfinite numbers and invalid callbacks also
+produce Lua errors. Scripts cannot attach components at runtime.
+
+```lua
+local projectile = sat.createCube("Projectile")
+sat.setPosition(projectile, 0, 1, 0)
+print(sat.getName(projectile), sat.getEntityCount())
+for _, id in ipairs(sat.getEntities()) do
+    if sat.getName(id) == "Projectile" then
+        sat.destroyEntity(id)
+    end
+end
+assert(not sat.isEntityValid(projectile))
+```
+
+Destruction is immediate: the entity disappears from lookup, enumeration and
+rendering, and its handle becomes invalid. The callback that destroys it may
+finish, but must check validity before accessing that entity again. Its started
+script components receive `onStop()` once at the next callback boundary, before
+any further gameplay callbacks. `self.entity` is already invalid inside that
+`onStop`; use `sat.isEntityValid` before accessing it. `onStop` can clean up other
+live entities and can itself destroy other scripted owners. Unstarted components
+on destroyed entities are skipped entirely. A top-level chunk that destroys its
+owner finishes without `onStart`, then receives `onStop` if the chunk succeeded.
+Stop errors preserve the existing first-error policy and halt updates.
+
+For C++ hosts, `Entity::id()`, `Scene::entityById`, `destroyEntity`,
+`setMainCameraById` and `entityCount` expose the same lifecycle. Lookup and removal
+are average constant time; destruction swaps the last entity into the removed
+slot. `entity(index)` remains a temporary editor/serialization index API;
+`entityIndex(id)` resolves a live handle to its current optional index. Borrowed
+entity references/pointers and indices must be reacquired after structural scene
+changes. All scene/runtime operations run on the window thread.
 
 ## Saving and building
 

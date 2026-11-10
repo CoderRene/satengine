@@ -26,10 +26,11 @@ Scene& sceneFor(lua_State* state) {
 Entity& checkedEntity(lua_State* state) {
     const lua_Integer id = luaL_checkinteger(state, 1);
     Scene& scene = sceneFor(state);
-    if (id < 1 || static_cast<lua_Unsigned>(id) > scene.entities().size()) {
-        luaL_error(state, "invalid entity ID");
+    Entity* entity = id > 0 ? scene.entityById(static_cast<EntityId>(id)) : nullptr;
+    if (entity == nullptr) {
+        luaL_error(state, "invalid or destroyed entity ID");
     }
-    return *scene.entity(static_cast<std::size_t>(id - 1));
+    return *entity;
 }
 
 float checkedFloat(lua_State* state, int argument) {
@@ -42,22 +43,24 @@ float checkedFloat(lua_State* state, int argument) {
 
 int createEntity(lua_State* state) {
     const char* name = luaL_checkstring(state, 1);
-    sceneFor(state).createEntity(name);
-    lua_pushinteger(state, static_cast<lua_Integer>(sceneFor(state).entities().size()));
+    const EntityId id = sceneFor(state).createEntity(name).id();
+    lua_pushinteger(state, static_cast<lua_Integer>(id));
     return 1;
 }
 
 int createCube(lua_State* state) {
     const char* name = luaL_checkstring(state, 1);
-    sceneFor(state).createEntity(name).hasMesh = true;
-    lua_pushinteger(state, static_cast<lua_Integer>(sceneFor(state).entities().size()));
+    Entity& entity = sceneFor(state).createEntity(name);
+    entity.hasMesh = true;
+    lua_pushinteger(state, static_cast<lua_Integer>(entity.id()));
     return 1;
 }
 
 int createCamera(lua_State* state) {
     const char* name = luaL_checkstring(state, 1);
-    sceneFor(state).createEntity(name).hasCamera = true;
-    lua_pushinteger(state, static_cast<lua_Integer>(sceneFor(state).entities().size()));
+    Entity& entity = sceneFor(state).createEntity(name);
+    entity.hasCamera = true;
+    lua_pushinteger(state, static_cast<lua_Integer>(entity.id()));
     return 1;
 }
 
@@ -66,11 +69,46 @@ int findEntity(lua_State* state) {
     const auto& entities = sceneFor(state).entities();
     for (std::size_t index = 0; index < entities.size(); ++index) {
         if (entities[index].name == name) {
-            lua_pushinteger(state, static_cast<lua_Integer>(index + 1));
+            lua_pushinteger(state, static_cast<lua_Integer>(entities[index].id()));
             return 1;
         }
     }
     lua_pushnil(state);
+    return 1;
+}
+
+int destroyEntity(lua_State* state) {
+    const lua_Integer id = luaL_checkinteger(state, 1);
+    lua_pushboolean(state, id > 0 && sceneFor(state).destroyEntity(static_cast<EntityId>(id)));
+    return 1;
+}
+
+int isEntityValid(lua_State* state) {
+    const lua_Integer id = luaL_checkinteger(state, 1);
+    lua_pushboolean(state, id > 0 && sceneFor(state).entityById(static_cast<EntityId>(id)) != nullptr);
+    return 1;
+}
+
+int getName(lua_State* state) {
+    const auto& name = checkedEntity(state).name;
+    lua_pushlstring(state, name.data(), name.size());
+    return 1;
+}
+
+int getEntityCount(lua_State* state) {
+    lua_pushinteger(state, static_cast<lua_Integer>(sceneFor(state).entityCount()));
+    return 1;
+}
+
+int getEntities(lua_State* state) {
+    const auto& entities = sceneFor(state).entities();
+    const auto capacity = std::min(entities.size(), static_cast<std::size_t>(std::numeric_limits<int>::max()));
+    lua_createtable(state, static_cast<int>(capacity), 0);
+    lua_Integer index = 1;
+    for (const auto& entity : entities) {
+        lua_pushinteger(state, static_cast<lua_Integer>(entity.id()));
+        lua_rawseti(state, -2, index++);
+    }
     return 1;
 }
 
@@ -94,9 +132,8 @@ int setVector(lua_State* state) {
 }
 
 int setMainCamera(lua_State* state) {
-    checkedEntity(state);
-    const auto index = static_cast<std::size_t>(lua_tointeger(state, 1) - 1);
-    if (!sceneFor(state).setMainCamera(index)) {
+    const EntityId id = checkedEntity(state).id();
+    if (!sceneFor(state).setMainCameraById(id)) {
         return luaL_error(state, "entity has no camera");
     }
     return 0;
@@ -213,6 +250,8 @@ struct LuaRuntime::Impl {
     lua_State* m_state = nullptr;
     bool m_running = false;
     bool m_started = false;
+    EntityId m_ownerId = kInvalidEntityId;
+    std::uint64_t m_lastDestructionRevision = 0;
     std::string m_error;
     std::string m_context;
     std::vector<std::unique_ptr<LuaRuntime>> m_instances;
@@ -225,6 +264,27 @@ struct LuaRuntime::Impl {
         }
         m_running = false;
         m_started = false;
+    }
+
+    bool retireDestroyed(bool force = false) {
+        if (!force && m_lastDestructionRevision == m_scene.destructionRevision()) {
+            return true;
+        }
+        // A stop callback may destroy an owner already visited in this sweep.
+        // Only rescan when destruction actually changes; normal updates are O(n).
+        do {
+            m_lastDestructionRevision = m_scene.destructionRevision();
+            for (const auto& instance : m_instances) {
+                auto& child = *instance->m_impl;
+                if (child.m_state != nullptr && m_scene.entityById(child.m_ownerId) == nullptr) {
+                    instance->stop();
+                    if (!instance->error().empty()) {
+                        return fail(instance->error());
+                    }
+                }
+            }
+        } while (m_lastDestructionRevision != m_scene.destructionRevision());
+        return true;
     }
 
     bool fail(const std::string& message) {
@@ -299,7 +359,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
     // Snapshot the roster before executing user code: creating entities may grow
     // the scene vector. The roster remains fixed until the next Play.
     struct Attachment {
-        std::size_t ownerId;
+        EntityId ownerId;
         std::string entityName;
         std::string path;
     };
@@ -311,7 +371,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
                 if (!isValidScriptPath(component.path)) {
                     return impl.fail("Invalid script path on entity " + entity.name);
                 }
-                attachments.push_back({index + 1, entity.name, component.path});
+                attachments.push_back({entity.id(), entity.name, component.path});
             }
         }
     }
@@ -321,6 +381,9 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
         modulePath = directory + "/?.lua;" + directory + "/?/init.lua";
     }
     for (const auto& attachment : attachments) {
+        if (impl.m_scene.entityById(attachment.ownerId) == nullptr) {
+            continue; // Earlier startup code may destroy an unstarted owner.
+        }
         std::string ownedSource;
         std::string_view source;
         if (embedded) {
@@ -358,6 +421,14 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
             return false;
         }
         impl.m_instances.push_back(std::move(instance));
+        if (!impl.retireDestroyed()) {
+            stop();
+            return false;
+        }
+    }
+    if (!impl.retireDestroyed()) {
+        stop();
+        return false;
     }
     impl.m_running = true;
     return true;
@@ -365,8 +436,9 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
 
 bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName,
                              std::string_view modulePath,
-                             std::span<const LuaScriptSource> scripts, bool embedded, std::size_t ownerId) {
+                             std::span<const LuaScriptSource> scripts, bool embedded, std::uint64_t ownerId) {
     auto& impl = *m_impl;
+    impl.m_ownerId = ownerId;
     impl.m_state = luaL_newstate();
     if (impl.m_state == nullptr) {
         return impl.fail("Cannot allocate Lua state");
@@ -402,6 +474,11 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
         {"createCube", guarded<createCube>},
         {"createCamera", guarded<createCamera>},
         {"findEntity", guarded<findEntity>},
+        {"destroyEntity", guarded<destroyEntity>},
+        {"isEntityValid", guarded<isEntityValid>},
+        {"getName", guarded<getName>},
+        {"getEntities", guarded<getEntities>},
+        {"getEntityCount", guarded<getEntityCount>},
         {"getPosition", guarded<getVector<&Transform::position>>},
         {"setPosition", guarded<setVector<&Transform::position>>},
         {"getRotation", guarded<getVector<&Transform::rotation>>},
@@ -572,7 +649,7 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
         impl.close();
         return false;
     }
-    if (!impl.call(0) || !impl.callback("onStart")) {
+    if (!impl.call(0) || (impl.m_scene.entityById(impl.m_ownerId) != nullptr && !impl.callback("onStart"))) {
         impl.close();
         return false;
     }
@@ -592,9 +669,15 @@ bool LuaRuntime::update(float deltaSeconds) {
     if (impl.m_state != nullptr) {
         return impl.callback("onUpdate", true, deltaSeconds);
     }
+    if (!impl.retireDestroyed(true)) {
+        return false;
+    }
     for (const auto& instance : impl.m_instances) {
-        if (!instance->update(deltaSeconds)) {
+        if (instance->running() && !instance->update(deltaSeconds)) {
             return impl.fail(instance->error());
+        }
+        if (!impl.retireDestroyed()) {
+            return false;
         }
     }
     return true;
