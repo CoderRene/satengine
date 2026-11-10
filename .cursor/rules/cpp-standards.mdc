@@ -1,12 +1,14 @@
 ---
 description: SatEngine C++20 coding conventions for headers and sources
 globs: "**/*.{hpp,h,cpp,cc,cxx}"
-alwaysApply: false
+alwaysApply: true
 ---
 
 # C++ Standards
 
 Target C++20. Match existing SatEngine style. Keep APIs small, explicit, and const-correct. Prefer clear code and enforceable rules over unnecessary abstraction.
+
+IMPORTANT: Make the code as optimize as possible. As performant as possible.
 
 ## Naming
 

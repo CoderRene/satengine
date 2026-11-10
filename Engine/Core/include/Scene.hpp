@@ -13,13 +13,13 @@
 namespace sat {
 
 struct Transform {
-    Vec3 position{};
+    DVec3 position{};
     Vec3 rotation{};
     Vec3 scale{1.0f, 1.0f, 1.0f};
 };
 
 inline Mat4 matrixFromTransform(const Transform& transform) {
-    return matrixFromTRS(transform.position, transform.rotation, transform.scale);
+    return matrixFromTRS(toVec3(transform.position), transform.rotation, transform.scale);
 }
 
 struct CameraComponent {

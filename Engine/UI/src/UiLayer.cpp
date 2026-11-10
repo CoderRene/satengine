@@ -614,7 +614,7 @@ void UiLayer::endFrame() {
         }
         if (entities[i].hasCamera) {
             CameraFrustumInstance frustum{};
-            frustum.position = entities[i].transform.position;
+            frustum.position = toVec3(entities[i].transform.position);
             frustum.rotation = entities[i].transform.rotation;
             frustum.fieldOfView = entities[i].camera.fieldOfView;
             frustum.nearClip = entities[i].camera.nearClip;
@@ -637,7 +637,7 @@ void UiLayer::endFrame() {
         const Entity* selected = m_impl->scene.entity(static_cast<std::size_t>(selectedEntity));
         if (selected != nullptr) {
             sceneDraw.showTranslateGizmo = true;
-            sceneDraw.translateGizmoOrigin = selected->transform.position;
+            sceneDraw.translateGizmoOrigin = toVec3(selected->transform.position);
         }
     }
 

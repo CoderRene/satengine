@@ -74,7 +74,8 @@ void InspectorPanel::onImGuiRender(int selectedIndex) {
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::DragFloat3("Position", &entity->transform.position.x, 0.05f);
+        ImGui::DragScalarN(
+            "Position", ImGuiDataType_Double, &entity->transform.position.x, 3, 0.05f);
         ImGui::DragFloat3("Rotation", &entity->transform.rotation.x, 0.5f);
         ImGui::DragFloat3("Scale", &entity->transform.scale.x, 0.05f);
     }

@@ -61,7 +61,7 @@ embedded bundle without filesystem fallback.
 | `sat.getName(id)` | Return the live entity's name |
 | `sat.getEntities()` | Return a new array containing the current live IDs |
 | `sat.getEntityCount()` | Return the number of live entities |
-| `sat.getPosition(id)` / `sat.setPosition(id, x, y, z)` | Read three numbers / write position |
+| `sat.getPosition(id)` / `sat.setPosition(id, x, y, z)` | Read three numbers / write double-precision world position |
 | `sat.getRotation(id)` / `sat.setRotation(id, x, y, z)` | Read/write Euler rotation in degrees |
 | `sat.getScale(id)` / `sat.setScale(id, x, y, z)` | Read/write scale |
 | `sat.setMainCamera(id)` | Select an entity with a camera as the main camera |
@@ -75,8 +75,9 @@ embedded bundle without filesystem fallback.
 | `sat.isScriptEnabled(id, path)` | Return whether that attached script path is enabled (false if not attached) |
 | `sat.setScriptEnabled(id, path, enabled)` | Enable/disable an attached script; return true if found, false if not attached |
 
-Transforms use the engine's left-handed coordinates (+Y up, +Z forward); scale
-is dimensionless. Entity IDs are opaque positive Lua integers, not array indices.
+Transforms use the engine's left-handed coordinates (+Y up, +Z forward). Entity
+position is double-precision world space; rotation is Euler degrees and scale
+is dimensionless float. Entity IDs are opaque positive Lua integers, not array indices.
 All entity APIs, including camera selection and `self.entity`, use these IDs. Creation, vector
 growth, and destruction/reordering of other entities preserve surviving IDs.
 Destroyed IDs never identify a replacement entity. Do not perform arithmetic on

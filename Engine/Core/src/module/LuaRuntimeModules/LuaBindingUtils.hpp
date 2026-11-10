@@ -31,6 +31,14 @@ inline float checkedFloat(lua_State* state, int argument) {
     return static_cast<float>(value);
 }
 
+inline double checkedDouble(lua_State* state, int argument) {
+    const lua_Number value = luaL_checknumber(state, argument);
+    if (!std::isfinite(value)) {
+        luaL_argerror(state, argument, "expected a finite number");
+    }
+    return static_cast<double>(value);
+}
+
 // Never allow C++ exceptions across the Lua C boundary. Lua errors are raised
 // only after exception handlers (and their C++ objects) have been unwound.
 template<int (*function)(lua_State*)>

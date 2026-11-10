@@ -13,6 +13,13 @@ struct Vec3 {
     float z = 0.0f;
 };
 
+// Absolute/simulation world positions. Narrow to Vec3 only at the render boundary.
+struct DVec3 {
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+};
+
 struct Mat4 {
     float m[16] = {
         1, 0, 0, 0,
@@ -36,6 +43,26 @@ inline Vec3 operator-(const Vec3& a, const Vec3& b) {
 
 inline Vec3 operator*(const Vec3& v, float s) {
     return {v.x * s, v.y * s, v.z * s};
+}
+
+inline DVec3 operator+(const DVec3& a, const DVec3& b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+inline DVec3 operator-(const DVec3& a, const DVec3& b) {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+inline DVec3 operator*(const DVec3& v, double s) {
+    return {v.x * s, v.y * s, v.z * s};
+}
+
+[[nodiscard]] inline Vec3 toVec3(const DVec3& v) {
+    return {
+        static_cast<float>(v.x),
+        static_cast<float>(v.y),
+        static_cast<float>(v.z),
+    };
 }
 
 inline Mat4 operator*(const Mat4& a, const Mat4& b) {

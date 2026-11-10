@@ -78,7 +78,7 @@ void drawCameraIcons(
         float sx = 0.0f;
         float sy = 0.0f;
         if (!projectWorldToScreen(
-                entities[i].transform.position,
+                toVec3(entities[i].transform.position),
                 view,
                 projection,
                 viewW,
@@ -337,7 +337,7 @@ struct ViewportPanel::Impl {
         bool active = false;
         int entityIndex = -1;
         int axis = -1;
-        Vec3 startPosition{};
+        DVec3 startPosition{};
         float startAxisOffset = 0.0f;
     } gizmoDrag;
 
@@ -478,13 +478,18 @@ struct ViewportPanel::Impl {
                                     planeNormal = cross(axis, right);
                                 }
                                 planeNormal = normalize(planeNormal);
+                                const Vec3 startPos = toVec3(drag.startPosition);
                                 Vec3 hit{};
-                                if (intersectRayPlane(
-                                        mouseRay, drag.startPosition, planeNormal, hit)) {
-                                    const float offset = dot(hit - drag.startPosition, axis);
-                                    entity->transform.position =
-                                        drag.startPosition +
-                                        axis * (offset - drag.startAxisOffset);
+                                if (intersectRayPlane(mouseRay, startPos, planeNormal, hit)) {
+                                    const float offset = dot(hit - startPos, axis);
+                                    const double delta =
+                                        static_cast<double>(offset - drag.startAxisOffset);
+                                    entity->transform.position = drag.startPosition +
+                                        DVec3{
+                                            static_cast<double>(axis.x) * delta,
+                                            static_cast<double>(axis.y) * delta,
+                                            static_cast<double>(axis.z) * delta,
+                                        };
                                 }
                             }
                         } else if (leftClicked) {
@@ -496,7 +501,7 @@ struct ViewportPanel::Impl {
                                     gizmoAxis = hitTranslateGizmoAxis(
                                         mouseX,
                                         mouseY,
-                                        selectedEntity->transform.position,
+                                        toVec3(selectedEntity->transform.position),
                                         view,
                                         projection,
                                         viewW,
@@ -525,10 +530,9 @@ struct ViewportPanel::Impl {
                                     drag.axis = gizmoAxis;
                                     drag.startPosition = entity->transform.position;
                                     drag.startAxisOffset = 0.0f;
-                                    if (intersectRayPlane(
-                                            mouseRay, drag.startPosition, planeNormal, hit)) {
-                                        drag.startAxisOffset =
-                                            dot(hit - drag.startPosition, axis);
+                                    const Vec3 startPos = toVec3(drag.startPosition);
+                                    if (intersectRayPlane(mouseRay, startPos, planeNormal, hit)) {
+                                        drag.startAxisOffset = dot(hit - startPos, axis);
                                     }
                                 }
                             } else {
@@ -544,7 +548,7 @@ struct ViewportPanel::Impl {
                                         hit = intersectRayUnitCube(mouseRay, world, t);
                                     } else if (entities[i].hasCamera) {
                                         const Mat4 world =
-                                            cameraPickWorld(entities[i].transform.position);
+                                            cameraPickWorld(toVec3(entities[i].transform.position));
                                         hit = intersectRayUnitCube(mouseRay, world, t);
                                     }
                                     if (hit && t < bestT) {

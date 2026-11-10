@@ -102,6 +102,24 @@ int setVector(lua_State* state) {
     return 0;
 }
 
+int getPosition(lua_State* state) {
+    const DVec3 value = checkedEntity(state).transform.position;
+    lua_pushnumber(state, value.x);
+    lua_pushnumber(state, value.y);
+    lua_pushnumber(state, value.z);
+    return 3;
+}
+
+int setPosition(lua_State* state) {
+    Entity& entity = checkedEntity(state);
+    entity.transform.position = {
+        checkedDouble(state, 2),
+        checkedDouble(state, 3),
+        checkedDouble(state, 4),
+    };
+    return 0;
+}
+
 CameraComponent& checkedCamera(lua_State* state) {
     Entity& entity = checkedEntity(state);
     if (!entity.hasCamera) {
@@ -265,8 +283,8 @@ void registerSceneBindings(lua_State* state, Scene& scene) {
         {"getName", guarded<getName>},
         {"getEntities", guarded<getEntities>},
         {"getEntityCount", guarded<getEntityCount>},
-        {"getPosition", guarded<getVector<&Transform::position>>},
-        {"setPosition", guarded<setVector<&Transform::position>>},
+        {"getPosition", guarded<getPosition>},
+        {"setPosition", guarded<setPosition>},
         {"getRotation", guarded<getVector<&Transform::rotation>>},
         {"setRotation", guarded<setVector<&Transform::rotation>>},
         {"getScale", guarded<getVector<&Transform::scale>>},

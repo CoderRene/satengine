@@ -20,18 +20,23 @@ constexpr std::size_t kMaxScripts = 128;
 bool finite(const Vec3& value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
+
+bool finite(const DVec3& value) {
+    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
 } // namespace
 
 std::string serializeScene(const Scene& scene) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << std::setprecision(std::numeric_limits<float>::max_digits10);
     out << "SatScene 1\n" << scene.entities().size() << '\n';
     for (const auto& entity : scene.entities()) {
         const auto& t = entity.transform;
         const auto& c = entity.camera;
         out << std::quoted(entity.name) << '\n'
+            << std::setprecision(std::numeric_limits<double>::max_digits10)
             << t.position.x << ' ' << t.position.y << ' ' << t.position.z << ' '
+            << std::setprecision(std::numeric_limits<float>::max_digits10)
             << t.rotation.x << ' ' << t.rotation.y << ' ' << t.rotation.z << ' '
             << t.scale.x << ' ' << t.scale.y << ' ' << t.scale.z << '\n'
             << entity.hasMesh << ' ' << static_cast<int>(entity.mesh.primitive) << '\n'

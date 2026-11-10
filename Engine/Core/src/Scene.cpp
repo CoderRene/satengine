@@ -60,7 +60,7 @@ Scene::Scene() {
     Entity& camera = createEntity("Main Camera");
     camera.hasCamera = true;
     camera.camera.isMain = true;
-    camera.transform.position = {0.0f, 1.0f, -5.0f};
+    camera.transform.position = {0.0, 1.0, -5.0};
 }
 
 const std::vector<Entity>& Scene::entities() const {
