@@ -5,16 +5,20 @@
 namespace sat {
 
 class Renderer;
+class Scene;
+class Project;
 class Window;
 
 class UiLayer {
 public:
-    UiLayer(Window& window, Renderer& renderer);
+    // All borrowed objects must outlive this layer. Use only on the window/render thread.
+    UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& project);
     ~UiLayer();
 
     UiLayer(const UiLayer&) = delete;
     UiLayer& operator=(const UiLayer&) = delete;
 
+    [[nodiscard]] bool valid() const;
     void beginFrame();
     void endFrame();
 

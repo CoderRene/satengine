@@ -46,11 +46,14 @@ public:
     [[nodiscard]] std::uintptr_t createTexture(const unsigned char* rgba, int width, int height);
     void destroyTexture(std::uintptr_t texture);
 
-    void drawImGui();
+    // Render a game scene to the window, with no UI backend required.
+    [[nodiscard]] bool renderWindow(const GameViewCamera& camera, const SceneDrawList& drawList = {});
     void present();
 
-    // ImGui_ImplDX11_Shutdown must run while the ImGui context is still alive.
-    void shutdownImGui();
+    // Borrowed D3D11 device/context for optional integrations. Valid for this renderer's lifetime.
+    [[nodiscard]] void* nativeDevice() const;
+    [[nodiscard]] void* nativeContext() const;
+    void bindWindowTarget();
 
 private:
     struct Impl;

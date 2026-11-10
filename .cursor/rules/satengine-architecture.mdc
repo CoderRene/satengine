@@ -1,5 +1,5 @@
 ---
-description: SatEngine module layout and Engine vs Game boundaries
+description: SatEngine module layout and Engine vs GamePlayer boundaries
 alwaysApply: true
 ---
 
@@ -18,7 +18,7 @@ SatEngine is a C++20 game engine (CMake + GLFW). Prefer small, focused changes t
     - `src/module/` — private render passes and GPU helpers (headers + sources together)
   - `Assets/` — engine-owned assets and loaders
   - `UI/` — editor / ImGui layer (`include/`, `src/`)
-- `Game/` — game executable; game-specific code only; links `SatEngine`
+- `GamePlayer/` — standalone game player executable; links `SatRuntime`
 - `scripts/` — build helpers
 - `build/` — generated; never edit
 
@@ -33,11 +33,11 @@ Use `Engine/<Area>/src/module/` for focused implementation units that are **not*
 
 ## Boundaries
 
-- Engine must never depend on `Game/`
+- Engine must never depend on `GamePlayer/`
 - Public API lives in `Engine/*/include/`; implementation in `src/` (and `src/module/`)
 - Hide third-party types (GLFW, ImGui, D3D) behind engine wrappers / PIMPL
 - Register every new engine `.cpp` in `Engine/CMakeLists.txt`
-- Keep `Game/` thin: startup and game logic only
+- Keep `GamePlayer/` thin: startup and embedded project host only
 
 ## Ownership
 

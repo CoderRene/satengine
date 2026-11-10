@@ -14,7 +14,7 @@ public:
     HierarchyPanel(const HierarchyPanel&) = delete;
     HierarchyPanel& operator=(const HierarchyPanel&) = delete;
 
-    void onImGuiRender();
+    void onImGuiRender(bool readOnly = false);
     [[nodiscard]] int selectedIndex() const;
     void setSelectedIndex(int index);
 

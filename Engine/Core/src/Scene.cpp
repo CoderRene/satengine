@@ -1,6 +1,8 @@
 #include "Scene.hpp"
 
+#include <algorithm>
 #include <cctype>
+#include <utility>
 
 namespace sat {
 
@@ -16,6 +18,25 @@ void trimInPlace(std::string& value) {
 }
 
 } // namespace
+
+bool isValidScriptPath(std::string_view path) {
+    if (path.empty() || path.front() == '/' || !path.ends_with(".lua") ||
+        path.find_first_of("\\:\0", 0, 3) != std::string_view::npos) {
+        return false;
+    }
+    while (!path.empty()) {
+        const auto slash = path.find('/');
+        const auto part = path.substr(0, slash);
+        if (part.empty() || part == "." || part == "..") {
+            return false;
+        }
+        if (slash == std::string_view::npos) {
+            break;
+        }
+        path.remove_prefix(slash + 1);
+    }
+    return true;
+}
 
 Entity Scene::makeCameraEntity(std::string name, bool isMain) {
     Entity entity;
@@ -64,6 +85,36 @@ Entity& Scene::createEntity(std::string name) {
     entity.name = std::move(name);
     m_entities.push_back(std::move(entity));
     return m_entities.back();
+}
+
+void Scene::clear() {
+    m_entities.clear();
+    m_cameraCount = 0;
+    m_cubeCount = 0;
+    m_emptyCount = 0;
+}
+
+bool Scene::attachScript(std::size_t index, std::string path) {
+    Entity* target = entity(index);
+    if (target == nullptr || !isValidScriptPath(path)) {
+        return false;
+    }
+    if (std::any_of(target->scripts.begin(), target->scripts.end(), [&](const ScriptComponent& script) {
+            return script.path == path;
+        })) {
+        return false;
+    }
+    target->scripts.push_back({std::move(path), true});
+    return true;
+}
+
+void Scene::addEmpty() {
+    std::string name;
+    do {
+        ++m_emptyCount;
+        name = m_emptyCount == 1 ? "Empty Entity" : "Empty Entity " + std::to_string(m_emptyCount);
+    } while (std::any_of(m_entities.begin(), m_entities.end(), [&](const Entity& item) { return item.name == name; }));
+    createEntity(std::move(name));
 }
 
 void Scene::addCamera() {

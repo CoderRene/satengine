@@ -11,6 +11,17 @@
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
+    },
+    {
+      "name": "windows-gameplayer",
+      "inherits": "windows",
+      "displayName": "Windows standalone game player (no editor)",
+      "binaryDir": "${sourceDir}/build-gameplayer",
+      "cacheVariables": {
+        "SAT_BUILD_GAME_PLAYER": "ON",
+        "SAT_BUILD_EDITOR": "OFF",
+        "BUILD_TESTING": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -25,6 +36,22 @@
       "displayName": "Windows Release",
       "configurePreset": "windows",
       "configuration": "Release"
+    },
+    {
+      "name": "windows-gameplayer-debug",
+      "configurePreset": "windows-gameplayer",
+      "configuration": "Debug",
+      "targets": [
+        "GamePlayer"
+      ]
+    },
+    {
+      "name": "windows-gameplayer-release",
+      "configurePreset": "windows-gameplayer",
+      "configuration": "Release",
+      "targets": [
+        "GamePlayer"
+      ]
     }
   ]
 }

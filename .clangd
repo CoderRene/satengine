@@ -1,6 +1,7 @@
 CompileFlags:
   Add:
     - -std=c++20
+    - -Ibuild/Engine/generated
     - -IEngine/Core/include
     - -IEngine/Renderer/include
     - -IEngine/UI/include
@@ -12,3 +13,7 @@ CompileFlags:
     - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/glfw-src/include"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/imgui-src"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/imgui-src/backends"
+    - -Ibuild/_deps/lua-src/src
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/lua-src/src"
+    - -Ibuild/Game/SatGameScripts
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/build/Game/SatGameScripts"

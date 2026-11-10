@@ -16,7 +16,9 @@
         "${workspaceFolder}/Engine/ThirdParty/stb",
         "${workspaceFolder}/build/_deps/glfw-src/include",
         "${workspaceFolder}/build/_deps/imgui-src",
-        "${workspaceFolder}/build/_deps/imgui-src/backends"
+        "${workspaceFolder}/build/_deps/imgui-src/backends",
+        "${workspaceFolder}/build/_deps/lua-src/src",
+        "${workspaceFolder}/build/GamePlayer/SatGameScripts"
       ],
       "defines": [
         "_DEBUG",

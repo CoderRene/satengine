@@ -90,9 +90,15 @@ void HierarchyPanel::setSelectedIndex(int index) {
     }
 }
 
-void HierarchyPanel::onImGuiRender() {
+void HierarchyPanel::onImGuiRender(bool readOnly) {
     ImGui::Begin("Hierarchy");
-
+    if (readOnly) {
+        for (const auto& entity : m_impl->scene->entities()) {
+            ImGui::TextUnformatted(entity.name.c_str());
+        }
+        ImGui::End();
+        return;
+    }
     const auto& entities = m_impl->scene->entities();
     for (int i = 0; i < static_cast<int>(entities.size()); ++i) {
         ImGui::PushID(i);
@@ -155,6 +161,10 @@ void HierarchyPanel::onImGuiRender() {
     if (ImGui::BeginPopupContextWindow(
             "HierarchyContext",
             ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+        if (ImGui::MenuItem("Add Empty Entity")) {
+            m_impl->scene->addEmpty();
+            m_impl->selected = static_cast<int>(m_impl->scene->entities().size() - 1);
+        }
         if (ImGui::MenuItem("Add Camera")) {
             m_impl->scene->addCamera();
         }

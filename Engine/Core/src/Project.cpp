@@ -1,5 +1,8 @@
 #include "Project.hpp"
 
+#include "Scene.hpp"
+#include "SceneFile.hpp"
+
 #include <fstream>
 #include <iostream>
 
@@ -16,7 +19,7 @@ bool Project::create(const fs::path& parentDir, const std::string& name) {
         return false;
     }
 
-    if (name.find_first_of("\\/:") != std::string::npos) {
+    if (name == "." || name == ".." || name.find_first_of("\\/:") != std::string::npos) {
         std::cerr << "Project name must not contain path separators\n";
         return false;
     }
@@ -41,7 +44,37 @@ bool Project::create(const fs::path& parentDir, const std::string& name) {
     }
     marker << "name=" << name << '\n';
 
+    marker.close();
+    if (!marker) {
+        std::cerr << "Failed to finish project marker: " << projectDir << '\n';
+        return false;
+    }
     fs::create_directories(projectDir / "Assets", ec);
+    if (!ec) {
+        fs::create_directories(projectDir / "Scripts", ec);
+    }
+    if (ec) {
+        std::cerr << "Failed to create project folders: " << ec.message() << '\n';
+        return false;
+    }
+    std::ofstream script(projectDir / "Scripts" / "main.lua");
+    script << R"lua(-- Attach this file to an entity in Inspector > Add Component > Lua Script.
+function onUpdate(deltaSeconds)
+    local x, y, z = sat.getRotation(self.entity)
+    sat.setRotation(self.entity, x, (y + 45 * deltaSeconds) % 360, z)
+end
+)lua";
+    script.close();
+    if (!script) {
+        std::cerr << "Failed to write Scripts/main.lua in: " << projectDir << '\n';
+        return false;
+    }
+    Scene scene;
+    std::string error;
+    if (!saveSceneFile(projectDir / "Scene.sat", scene, error)) {
+        std::cerr << error << '\n';
+        return false;
+    }
     return open(projectDir);
 }
 
@@ -52,6 +85,33 @@ bool Project::open(const fs::path& projectDir) {
     }
     m_root = fs::absolute(projectDir);
     return true;
+}
+
+bool Project::loadScene(Scene& scene, std::string& error) const {
+    if (!isOpen()) {
+        error = "No project is open.";
+        return false;
+    }
+    std::error_code ec;
+    const bool exists = fs::exists(m_root / "Scene.sat", ec);
+    if (ec) {
+        error = "Cannot inspect Scene.sat: " + ec.message();
+        return false;
+    }
+    if (!exists) {
+        scene = Scene{}; // Older projects start with a camera; no script is auto-attached.
+        error.clear();
+        return true;
+    }
+    return loadSceneFile(m_root / "Scene.sat", scene, error);
+}
+
+bool Project::saveScene(const Scene& scene, std::string& error) const {
+    if (!isOpen()) {
+        error = "No project is open.";
+        return false;
+    }
+    return saveSceneFile(m_root / "Scene.sat", scene, error);
 }
 
 } // namespace sat

@@ -3,29 +3,28 @@
 #include "ContentPanel.hpp"
 #include "EnginePaths.hpp"
 #include "FileDialog.hpp"
+#include "GameBuilder.hpp"
 #include "HierarchyPanel.hpp"
 #include "InspectorPanel.hpp"
 #include "Math.hpp"
+#include "LuaRuntime.hpp"
 #include "Project.hpp"
 #include "RecentProjects.hpp"
 #include "Renderer.hpp"
 #include "Scene.hpp"
 #include "SceneDraw.hpp"
+#include "SceneRenderData.hpp"
+#include "ViewportPanel.hpp"
 #include "Window.hpp"
 
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
+#include <imgui_impl_dx11.h>
 
 #include <GLFW/glfw3.h>
 
-#include <stb_image.h>
-
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -34,351 +33,102 @@
 #include <vector>
 
 namespace sat {
-namespace {
-
-constexpr float kCameraIconSize = 32.0f;
-
-std::uintptr_t loadIconTexture(Renderer& renderer, const char* assetRelativePath) {
-    const std::string absPath = std::string(SAT_ENGINE_ASSETS_DIR) + "/" + assetRelativePath;
-    const char* paths[] = {absPath.c_str(), assetRelativePath};
-
-    for (const char* path : paths) {
-        int width = 0;
-        int height = 0;
-        int channels = 0;
-        unsigned char* pixels = stbi_load(path, &width, &height, &channels, 4);
-        if (pixels == nullptr) {
-            continue;
-        }
-
-        const std::uintptr_t texture = renderer.createTexture(pixels, width, height);
-        stbi_image_free(pixels);
-        if (texture != 0) {
-            return texture;
-        }
-    }
-
-    std::cerr << "Failed to load icon: " << assetRelativePath << '\n';
-    return 0;
-}
-
-void destroyIconTexture(Renderer& renderer, std::uintptr_t& texture) {
-    if (texture != 0) {
-        renderer.destroyTexture(texture);
-        texture = 0;
-    }
-}
-
-void drawCameraIcons(
-    ImDrawList* draw,
-    const ImVec2& imageMin,
-    const Mat4& view,
-    const Mat4& projection,
-    float viewW,
-    float viewH,
-    const Scene& scene,
-    int selectedIndex,
-    std::uintptr_t cameraIcon) {
-    if (draw == nullptr || cameraIcon == 0) {
-        return;
-    }
-
-    const ImTextureRef iconTex((ImTextureID)cameraIcon);
-    const auto& entities = scene.entities();
-    for (std::size_t i = 0; i < entities.size(); ++i) {
-        if (!entities[i].hasCamera) {
-            continue;
-        }
-
-        float sx = 0.0f;
-        float sy = 0.0f;
-        if (!projectWorldToScreen(
-                entities[i].transform.position,
-                view,
-                projection,
-                viewW,
-                viewH,
-                sx,
-                sy)) {
-            continue;
-        }
-
-        const ImVec2 min(
-            imageMin.x + sx - kCameraIconSize * 0.5f,
-            imageMin.y + sy - kCameraIconSize * 0.5f);
-        const ImVec2 max(min.x + kCameraIconSize, min.y + kCameraIconSize);
-        draw->AddImage(iconTex, min, max);
-
-        if (static_cast<int>(i) == selectedIndex) {
-            draw->AddRect(
-                ImVec2(min.x - 1.0f, min.y - 1.0f),
-                ImVec2(max.x + 1.0f, max.y + 1.0f),
-                IM_COL32(255, 170, 40, 255),
-                2.0f,
-                0,
-                2.0f);
-        }
-    }
-}
-
-Mat4 cameraPickWorld(const Vec3& position) {
-    return translationMatrix(position) *
-        scalingMatrix(Vec3{kCameraPickSize, kCameraPickSize, kCameraPickSize});
-}
-
-float distancePointToSegment2D(
-    float px, float py, float ax, float ay, float bx, float by) {
-    const float abx = bx - ax;
-    const float aby = by - ay;
-    const float apx = px - ax;
-    const float apy = py - ay;
-    const float abLenSq = abx * abx + aby * aby;
-    float t = 0.0f;
-    if (abLenSq > 0.000001f) {
-        t = (apx * abx + apy * aby) / abLenSq;
-        t = std::clamp(t, 0.0f, 1.0f);
-    }
-    const float cx = ax + abx * t;
-    const float cy = ay + aby * t;
-    const float dx = px - cx;
-    const float dy = py - cy;
-    return std::sqrt(dx * dx + dy * dy);
-}
-
-bool intersectRayUnitCube(const Ray& worldRay, const Mat4& world, float& outT) {
-    const Mat4 invWorld = inverse(world);
-    const Vec3 origin = transformPoint(invWorld, worldRay.origin);
-    // Keep direction unnormalized so slab t matches the world-ray parameter.
-    const Vec3 direction = transformDirection(invWorld, worldRay.direction);
-
-    float tMin = 0.0f;
-    float tMax = 1.0e30f;
-    const float bounds[3][2] = {{-0.5f, 0.5f}, {-0.5f, 0.5f}, {-0.5f, 0.5f}};
-    const float o[3] = {origin.x, origin.y, origin.z};
-    const float d[3] = {direction.x, direction.y, direction.z};
-
-    for (int i = 0; i < 3; ++i) {
-        if (std::fabs(d[i]) < 0.000001f) {
-            if (o[i] < bounds[i][0] || o[i] > bounds[i][1]) {
-                return false;
-            }
-            continue;
-        }
-        float t1 = (bounds[i][0] - o[i]) / d[i];
-        float t2 = (bounds[i][1] - o[i]) / d[i];
-        if (t1 > t2) {
-            std::swap(t1, t2);
-        }
-        tMin = (std::max)(tMin, t1);
-        tMax = (std::min)(tMax, t2);
-        if (tMin > tMax) {
-            return false;
-        }
-    }
-
-    if (tMin < 0.0f) {
-        return false;
-    }
-    outT = tMin;
-    return true;
-}
-
-bool intersectRayPlane(
-    const Ray& ray, const Vec3& planePoint, const Vec3& planeNormal, Vec3& outHit) {
-    const float denom = dot(planeNormal, ray.direction);
-    if (std::fabs(denom) < 0.000001f) {
-        return false;
-    }
-    const float t = dot(planePoint - ray.origin, planeNormal) / denom;
-    if (t < 0.0f) {
-        return false;
-    }
-    outHit = ray.origin + ray.direction * t;
-    return true;
-}
-
-int hitTranslateGizmoAxis(
-    float mouseX,
-    float mouseY,
-    const Vec3& origin,
-    const Mat4& view,
-    const Mat4& projection,
-    float viewWidth,
-    float viewHeight) {
-    constexpr float kHitPixels = 12.0f;
-    const Vec3 axes[3] = {
-        {1.0f, 0.0f, 0.0f},
-        {0.0f, 1.0f, 0.0f},
-        {0.0f, 0.0f, 1.0f},
-    };
-
-    int bestAxis = -1;
-    float bestDist = kHitPixels;
-    for (int i = 0; i < 3; ++i) {
-        float x0 = 0.0f;
-        float y0 = 0.0f;
-        float x1 = 0.0f;
-        float y1 = 0.0f;
-        if (!projectWorldToScreen(origin, view, projection, viewWidth, viewHeight, x0, y0)) {
-            continue;
-        }
-        const Vec3 tip = origin + axes[i] * kTranslateGizmoAxisLength;
-        if (!projectWorldToScreen(tip, view, projection, viewWidth, viewHeight, x1, y1)) {
-            continue;
-        }
-        const float dist = distancePointToSegment2D(mouseX, mouseY, x0, y0, x1, y1);
-        if (dist < bestDist) {
-            bestDist = dist;
-            bestAxis = i;
-        }
-    }
-    return bestAxis;
-}
-
-void drawSceneOrientationGizmo(
-    ImDrawList* draw,
-    const ImVec2& imageMin,
-    const ImVec2& imageMax,
-    float yawDegrees,
-    float pitchDegrees) {
-    constexpr float kRadius = 36.0f;
-    constexpr float kAxisLen = 28.0f;
-    constexpr float kPad = 12.0f;
-    const ImVec2 center(
-        imageMax.x - kPad - kRadius,
-        imageMin.y + kPad + kRadius);
-
-    const float pitch = pitchDegrees * kDegToRad;
-    const float yaw = yawDegrees * kDegToRad;
-    const float cosPitch = std::cos(pitch);
-    const Vec3 forward = normalize(Vec3{
-        cosPitch * std::sin(yaw),
-        std::sin(pitch),
-        cosPitch * std::cos(yaw),
-    });
-    const Vec3 right = normalize(cross(Vec3{0.0f, 1.0f, 0.0f}, forward));
-    const Vec3 up = cross(forward, right);
-
-    struct AxisTip {
-        float depth = 0.0f;
-        ImVec2 tip{};
-        ImU32 color = 0;
-        const char* label = "";
-    };
-
-    const auto project = [&](const Vec3& axis) {
-        return AxisTip{
-            dot(axis, forward),
-            ImVec2(
-                center.x + dot(axis, right) * kAxisLen,
-                center.y - dot(axis, up) * kAxisLen),
-            0,
-            "",
-        };
-    };
-
-    AxisTip axes[3] = {
-        project(Vec3{1.0f, 0.0f, 0.0f}),
-        project(Vec3{0.0f, 1.0f, 0.0f}),
-        project(Vec3{0.0f, 0.0f, 1.0f}),
-    };
-    axes[0].color = IM_COL32(242, 64, 64, 255);
-    axes[0].label = "X";
-    axes[1].color = IM_COL32(64, 230, 77, 255);
-    axes[1].label = "Y";
-    axes[2].color = IM_COL32(77, 115, 242, 255);
-    axes[2].label = "Z";
-
-    if (axes[0].depth > axes[1].depth) {
-        std::swap(axes[0], axes[1]);
-    }
-    if (axes[1].depth > axes[2].depth) {
-        std::swap(axes[1], axes[2]);
-    }
-    if (axes[0].depth > axes[1].depth) {
-        std::swap(axes[0], axes[1]);
-    }
-
-    draw->AddCircleFilled(center, kRadius, IM_COL32(20, 20, 24, 160), 32);
-    draw->AddCircle(center, kRadius, IM_COL32(255, 255, 255, 40), 32, 1.0f);
-
-    for (const AxisTip& axis : axes) {
-        draw->AddLine(center, axis.tip, axis.color, 2.0f);
-        draw->AddCircleFilled(axis.tip, 7.0f, axis.color, 16);
-        const ImVec2 textSize = ImGui::CalcTextSize(axis.label);
-        draw->AddText(
-            ImVec2(axis.tip.x - textSize.x * 0.5f, axis.tip.y - textSize.y * 0.5f),
-            IM_COL32(255, 255, 255, 255),
-            axis.label);
-    }
-}
-
-} // namespace
 
 struct UiLayer::Impl {
+    Impl(Scene& scene, Project& project, const Input& input) : project(project), scene(scene), scripts(scene, &input) {}
     GLFWwindow* window = nullptr;
     Renderer* renderer = nullptr;
     bool glfwReady = false;
-    Project project;
-    Scene scene;
+    bool dx11Ready = false;
+    Project& project;
+    Scene& scene;
+    SceneRenderData gameRenderData;
     RecentProjects recent{std::filesystem::path("recent_projects.txt")};
     std::unique_ptr<HierarchyPanel> hierarchy;
     std::unique_ptr<InspectorPanel> inspector;
     std::unique_ptr<ContentPanel> content;
-    int gameViewWidth = 0;
-    int gameViewHeight = 0;
-    int sceneViewWidth = 0;
-    int sceneViewHeight = 0;
+    std::unique_ptr<ViewportPanel> viewport;
 
-    struct EditorCamera {
-        Vec3 position{-5.12f, 3.38f, -5.12f};
-        float yawDegrees = 45.0f;
-        float pitchDegrees = -25.0f;
-        float moveSpeed = 8.0f;
-        bool looking = false;
-        bool draggingPan = false;
-
-        [[nodiscard]] Vec3 forward() const {
-            const float pitch = pitchDegrees * kDegToRad;
-            const float yaw = yawDegrees * kDegToRad;
-            const float cosPitch = std::cos(pitch);
-            return normalize(Vec3{
-                cosPitch * std::sin(yaw),
-                std::sin(pitch),
-                cosPitch * std::cos(yaw),
-            });
-        }
-
-        [[nodiscard]] Vec3 right() const {
-            return normalize(cross(Vec3{0.0f, 1.0f, 0.0f}, forward()));
-        }
-    } editorCamera;
-
-    struct GizmoDrag {
-        bool active = false;
-        int entityIndex = -1;
-        int axis = -1;
-        Vec3 startPosition{};
-        float startAxisOffset = 0.0f;
-    } gizmoDrag;
-
-    std::uintptr_t cameraIcon = 0;
-
-    // Play mode is not implemented yet; FPS is only shown while this is true.
+    LuaRuntime scripts{scene};
+    Scene editScene;
     bool playMode = false;
+    bool focusGameView = false;
+    std::string scriptError;
+    std::string sceneError;
+
+    bool saveScene() {
+        return !project.isOpen() || project.saveScene(scene, sceneError);
+    }
+
+    void stopPlay() {
+        if (!playMode) {
+            return;
+        }
+        scripts.stop();
+        scriptError = scripts.error();
+        scene = std::move(editScene);
+        playMode = false;
+        focusGameView = false;
+        if (viewport) {
+            viewport->resetInteraction();
+        }
+        if (hierarchy) {
+            hierarchy->setSelectedIndex(-1);
+        }
+    }
+
+    void startPlay() {
+        if (playMode || !project.isOpen()) {
+            return;
+        }
+        if (!saveScene()) {
+            return;
+        }
+        editScene = scene;
+        scriptError.clear();
+        playMode = true;
+        if (viewport) {
+            viewport->resetInteraction();
+        }
+        if (!scripts.start(project.root())) {
+            stopPlay();
+        } else {
+            focusGameView = true;
+        }
+    }
+    GameBuilder builder{std::filesystem::path(SAT_ENGINE_SOURCE_DIR)};
+    bool showBuildStatus = false;
     bool openNewProjectModal = false;
     std::filesystem::path newProjectParent;
     char newProjectName[128] = {};
 
     bool openProject(const std::filesystem::path& folder) {
-        if (!project.open(folder)) {
+        Project opened;
+        if (!opened.open(folder)) {
             recent.remove(folder);
             return false;
         }
+        if (project.isOpen() && opened.root() == project.root()) {
+            return true;
+        }
+        Scene loaded;
+        if (!opened.loadScene(loaded, sceneError)) {
+            return false;
+        }
+        stopPlay();
+        if (!saveScene()) {
+            return false;
+        }
+        project = std::move(opened);
+        scene = std::move(loaded);
+        scriptError.clear();
+        if (hierarchy) { hierarchy->setSelectedIndex(-1); }
+        if (viewport) { viewport->resetInteraction(); }
         recent.add(project.root());
         return true;
     }
 };
+
 static void applySatTheme() {
     ImGui::StyleColorsDark(); // start from a known base
 
@@ -456,8 +206,8 @@ static void applySatTheme() {
     c[ImGuiCol_ResizeGripActive]     = accentActive;
 }
 
-UiLayer::UiLayer(Window& window, Renderer& renderer)
-    : m_impl(std::make_unique<Impl>()) {
+UiLayer::UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& project)
+    : m_impl(std::make_unique<Impl>(scene, project, window.input())) {
     m_impl->window = static_cast<GLFWwindow*>(window.nativeHandle());
     m_impl->renderer = &renderer;
     if (m_impl->window == nullptr) {
@@ -466,9 +216,9 @@ UiLayer::UiLayer(Window& window, Renderer& renderer)
     }
 
     m_impl->hierarchy = std::make_unique<HierarchyPanel>(m_impl->scene);
-    m_impl->inspector = std::make_unique<InspectorPanel>(m_impl->scene);
+    m_impl->inspector = std::make_unique<InspectorPanel>(m_impl->scene, m_impl->project);
     m_impl->content = std::make_unique<ContentPanel>(m_impl->project, renderer);
-    m_impl->cameraIcon = loadIconTexture(renderer, "Icons/video_camera_ic.png");
+    m_impl->viewport = std::make_unique<ViewportPanel>(m_impl->scene, renderer);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -492,12 +242,19 @@ UiLayer::UiLayer(Window& window, Renderer& renderer)
         return;
     }
     m_impl->glfwReady = true;
+    m_impl->dx11Ready = ImGui_ImplDX11_Init(
+        static_cast<ID3D11Device*>(renderer.nativeDevice()),
+        static_cast<ID3D11DeviceContext*>(renderer.nativeContext()));
+    if (!m_impl->dx11Ready) {
+        std::cerr << "Failed to start UI: Direct3D 11 backend\n";
+    }
 }
 
 UiLayer::~UiLayer() {
-    if (m_impl->renderer != nullptr) {
-        destroyIconTexture(*m_impl->renderer, m_impl->cameraIcon);
-        m_impl->renderer->shutdownImGui();
+    m_impl->stopPlay();
+    if (!m_impl->saveScene()) { std::cerr << m_impl->sceneError << '\n'; }
+    if (m_impl->dx11Ready) {
+        ImGui_ImplDX11_Shutdown();
     }
     if (m_impl->glfwReady) {
         ImGui_ImplGlfw_Shutdown();
@@ -507,14 +264,24 @@ UiLayer::~UiLayer() {
     }
 }
 
+bool UiLayer::valid() const {
+    return m_impl->glfwReady && m_impl->dx11Ready &&
+        m_impl->renderer != nullptr && m_impl->renderer->valid();
+}
+
 void UiLayer::beginFrame() {
-    if (!m_impl->glfwReady || m_impl->renderer == nullptr || !m_impl->renderer->valid()) {
+    if (!valid()) {
         return;
     }
 
+    m_impl->builder.poll();
     m_impl->renderer->newFrame();
+    ImGui_ImplDX11_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    if (m_impl->playMode && !m_impl->scripts.update(ImGui::GetIO().DeltaTime)) {
+        m_impl->stopPlay();
+    }
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -551,6 +318,10 @@ void UiLayer::beginFrame() {
                     m_impl->openProject(folder);
                 }
             }
+            if (ImGui::MenuItem("Save Scene", nullptr, false, m_impl->project.isOpen() && !m_impl->playMode)) {
+                const bool saved = m_impl->saveScene();
+                (void)saved; // Failure details appear in Scene Errors.
+            }
             if (ImGui::BeginMenu("Recent...")) {
                 const auto& recent = m_impl->recent.entries();
                 if (recent.empty()) {
@@ -578,6 +349,58 @@ void UiLayer::beginFrame() {
             ImGui::EndMenu();
         }
 
+        if (ImGui::BeginMenu("Build")) {
+            const bool building = m_impl->builder.status() == GameBuilder::Status::Building;
+            const bool canBuild = m_impl->project.isOpen() && !m_impl->playMode && !building;
+            if (ImGui::MenuItem("Build Standalone", nullptr, false, canBuild)) {
+                const bool started = m_impl->saveScene() && m_impl->builder.start(m_impl->project.root());
+                (void)started; // Failure details are displayed in Build Status.
+                m_impl->showBuildStatus = true;
+            }
+            if (!m_impl->project.isOpen()) {
+                ImGui::TextDisabled("Open a project to build.");
+            } else if (m_impl->playMode) {
+                ImGui::TextDisabled("Stop Play mode to build.");
+            } else if (building) {
+                ImGui::TextDisabled("Build in progress...");
+            }
+            if (ImGui::MenuItem("Build Status", nullptr, m_impl->showBuildStatus)) {
+                m_impl->showBuildStatus = !m_impl->showBuildStatus;
+            }
+            ImGui::EndMenu();
+        }
+
+        const bool playing = m_impl->playMode;
+        ImGui::BeginDisabled(!playing && !m_impl->project.isOpen());
+        ImGui::PushStyleColor(ImGuiCol_Button, playing
+            ? ImVec4(0.55f, 0.16f, 0.16f, 1.0f)
+            : ImVec4(0.12f, 0.40f, 0.23f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, playing
+            ? ImVec4(0.70f, 0.22f, 0.22f, 1.0f)
+            : ImVec4(0.16f, 0.52f, 0.30f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, playing
+            ? ImVec4(0.44f, 0.12f, 0.12f, 1.0f)
+            : ImVec4(0.09f, 0.32f, 0.18f, 1.0f));
+        // Keep the button within the menu bar's height and stable when toggling.
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 0.0f));
+        const float buttonWidth = ImGui::CalcTextSize("Stop").x + 24.0f;
+        if (ImGui::Button(playing ? "Stop##PlayMode" : "Play##PlayMode", ImVec2(buttonWidth, 0.0f))) {
+            if (playing) {
+                m_impl->stopPlay();
+            } else {
+                m_impl->startPlay();
+            }
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(3);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("%s", playing
+                ? "Stop the game and restore the editor scene"
+                : (m_impl->project.isOpen()
+                    ? "Run enabled entity scripts in the Game view"
+                    : "Open or create a project to play"));
+        }
+        ImGui::EndDisabled();
         if (m_impl->playMode) {
             const float fps = ImGui::GetIO().Framerate;
             char fpsText[32] = {};
@@ -588,6 +411,61 @@ void UiLayer::beginFrame() {
             ImGui::TextUnformatted(fpsText);
         }
         ImGui::EndMenuBar();
+    }
+
+    if (m_impl->showBuildStatus) {
+        ImGui::SetNextWindowSize(ImVec2(680.0f, 440.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Build Status", &m_impl->showBuildStatus)) {
+            const auto& builder = m_impl->builder;
+            if (builder.status() == GameBuilder::Status::Idle) {
+                ImGui::TextUnformatted("Choose Build > Build Standalone to export the open project.");
+            } else {
+                ImGui::TextWrapped("%s", builder.message().c_str());
+                char progressText[64] = {};
+                std::snprintf(progressText, sizeof(progressText), "%.0f%% (build stages)", builder.progress() * 100.0f);
+                ImGui::ProgressBar(builder.progress(), ImVec2(-1.0f, 0.0f), progressText);
+                ImGui::Text("Elapsed: %.0f seconds", builder.elapsedSeconds());
+                if (builder.status() == GameBuilder::Status::Building) {
+                    ImGui::TextDisabled("Stage progress; compilation time varies. Live output appears below.");
+                    if (builder.secondsSinceOutput() >= 10.0) {
+                        ImGui::TextDisabled("Last output %.0f seconds ago", builder.secondsSinceOutput());
+                    }
+                }
+                if (!builder.outputFolder().empty()) {
+                    ImGui::Separator();
+                    ImGui::TextWrapped("Output: %s", builder.outputFolder().string().c_str());
+                    ImGui::TextWrapped("Executable: %s", builder.executablePath().string().c_str());
+                    ImGui::TextWrapped("Log: %s", (builder.outputFolder() / "build.log").string().c_str());
+                }
+                ImGui::Separator();
+                if (ImGui::BeginChild("BuildOutput", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders,
+                                      ImGuiWindowFlags_HorizontalScrollbar)) {
+                    const bool atBottom = ImGui::GetScrollY() >= ImGui::GetScrollMaxY();
+                    if (builder.logOutput().empty()) {
+                        ImGui::TextUnformatted("Waiting for build output...");
+                    } else {
+                        ImGui::TextUnformatted(builder.logOutput().c_str());
+                    }
+                    if (atBottom) {
+                        ImGui::SetScrollHereY(1.0f);
+                    }
+                }
+                ImGui::EndChild();
+            }
+        }
+        ImGui::End();
+    }
+
+    if (!m_impl->sceneError.empty()) {
+        ImGui::Begin("Scene Errors");
+        ImGui::TextWrapped("%s", m_impl->sceneError.c_str());
+        ImGui::End();
+    }
+
+    if (!m_impl->scriptError.empty()) {
+        ImGui::Begin("Lua Errors");
+        ImGui::TextWrapped("%s", m_impl->scriptError.c_str());
+        ImGui::End();
     }
 
     ImGuiID dockspaceId = ImGui::GetID("SatEngineDockSpace");
@@ -622,277 +500,29 @@ void UiLayer::beginFrame() {
 
     ImGui::End();
 
+    ImGui::BeginDisabled(m_impl->playMode);
     if (m_impl->hierarchy) {
-        m_impl->hierarchy->onImGuiRender();
+        m_impl->hierarchy->onImGuiRender(m_impl->playMode);
     }
+    ImGui::EndDisabled();
 
-    if (ImGui::Begin(
-            "Scene",
-            nullptr,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-        const ImVec2 sceneSize = ImGui::GetContentRegionAvail();
-        const int sceneWidth = static_cast<int>(sceneSize.x);
-        const int sceneHeight = static_cast<int>(sceneSize.y);
-        m_impl->sceneViewWidth = sceneWidth;
-        m_impl->sceneViewHeight = sceneHeight;
-        if (sceneWidth >= 1 && sceneHeight >= 1) {
-            m_impl->renderer->resizeSceneView(sceneWidth, sceneHeight);
-            const std::uintptr_t sceneTexture = m_impl->renderer->sceneColorTexture();
-            if (sceneTexture != 0) {
-                ImGui::Image(
-                    ImTextureRef((ImTextureID)sceneTexture),
-                    ImVec2(static_cast<float>(sceneWidth), static_cast<float>(sceneHeight)));
-                const ImVec2 imageMin = ImGui::GetItemRectMin();
-                const ImVec2 imageMax = ImGui::GetItemRectMax();
-
-                // Capture mouse over the scene image so LMB pick / camera work reliably.
-                ImGui::SetCursorScreenPos(imageMin);
-                ImGui::InvisibleButton(
-                    "##SceneViewInput",
-                    ImVec2(imageMax.x - imageMin.x, imageMax.y - imageMin.y));
-                const bool hovered = ImGui::IsItemHovered();
-                const bool leftClicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-                ImGuiIO& io = ImGui::GetIO();
-                auto& cam = m_impl->editorCamera;
-
-                drawSceneOrientationGizmo(
-                    ImGui::GetWindowDrawList(),
-                    imageMin,
-                    imageMax,
-                    cam.yawDegrees,
-                    cam.pitchDegrees);
-
-                if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-                    cam.looking = true;
-                }
-                if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
-                    cam.draggingPan = true;
-                }
-                if (!ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
-                    cam.looking = false;
-                }
-                if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
-                    cam.draggingPan = false;
-                }
-
-                if (cam.looking) {
-                    cam.yawDegrees += io.MouseDelta.x * 0.25f;
-                    cam.pitchDegrees -= io.MouseDelta.y * 0.25f;
-                    if (cam.pitchDegrees > 89.0f) {
-                        cam.pitchDegrees = 89.0f;
-                    }
-                    if (cam.pitchDegrees < -89.0f) {
-                        cam.pitchDegrees = -89.0f;
-                    }
-                }
-
-                const Vec3 forward = cam.forward();
-                const Vec3 right = cam.right();
-                const Vec3 up = cross(forward, right);
-
-                if (cam.draggingPan) {
-                    const float panScale = cam.moveSpeed * 0.002f;
-                    cam.position = cam.position + right * (-io.MouseDelta.x * panScale) +
-                        up * (io.MouseDelta.y * panScale);
-                }
-
-                if (hovered && io.MouseWheel != 0.0f) {
-                    cam.position = cam.position + forward * (io.MouseWheel * cam.moveSpeed * 0.25f);
-                }
-
-                if (hovered) {
-                    Vec3 move{};
-                    if (ImGui::IsKeyDown(ImGuiKey_W)) {
-                        move = move + forward;
-                    }
-                    if (ImGui::IsKeyDown(ImGuiKey_S)) {
-                        move = move - forward;
-                    }
-                    if (ImGui::IsKeyDown(ImGuiKey_A)) {
-                        move = move - right;
-                    }
-                    if (ImGui::IsKeyDown(ImGuiKey_D)) {
-                        move = move + right;
-                    }
-                    if (length(move) > 0.0001f) {
-                        const float dt = io.DeltaTime > 0.0f ? io.DeltaTime : (1.0f / 60.0f);
-                        cam.position = cam.position + normalize(move) * (cam.moveSpeed * dt);
-                    }
-                }
-
-                const float viewW = static_cast<float>(sceneWidth);
-                const float viewH = static_cast<float>(sceneHeight);
-                const Mat4 view =
-                    lookAt(cam.position, cam.position + forward, Vec3{0.0f, 1.0f, 0.0f});
-                const Mat4 projection = perspective(60.0f, viewW / viewH, 0.1f, 1000.0f);
-                const int selectedForIcons =
-                    m_impl->hierarchy ? m_impl->hierarchy->selectedIndex() : -1;
-                drawCameraIcons(
-                    ImGui::GetWindowDrawList(),
-                    imageMin,
-                    view,
-                    projection,
-                    viewW,
-                    viewH,
-                    m_impl->scene,
-                    selectedForIcons,
-                    m_impl->cameraIcon);
-
-                const float mouseX = io.MousePos.x - imageMin.x;
-                const float mouseY = io.MousePos.y - imageMin.y;
-                const Ray mouseRay = unprojectRay(mouseX, mouseY, viewW, viewH, view, projection);
-                const bool cameraBusy = cam.looking || cam.draggingPan;
-
-                if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                    m_impl->gizmoDrag.active = false;
-                }
-
-                if (!cameraBusy && m_impl->hierarchy) {
-                    auto& drag = m_impl->gizmoDrag;
-                    if (drag.active && drag.entityIndex >= 0 && drag.axis >= 0) {
-                        Entity* entity =
-                            m_impl->scene.entity(static_cast<std::size_t>(drag.entityIndex));
-                        if (entity != nullptr) {
-                            const Vec3 axes[3] = {
-                                {1.0f, 0.0f, 0.0f},
-                                {0.0f, 1.0f, 0.0f},
-                                {0.0f, 0.0f, 1.0f},
-                            };
-                            const Vec3 axis = axes[drag.axis];
-                            Vec3 planeNormal = cross(axis, cross(forward, axis));
-                            if (length(planeNormal) < 0.0001f) {
-                                planeNormal = cross(axis, right);
-                            }
-                            planeNormal = normalize(planeNormal);
-                            Vec3 hit{};
-                            if (intersectRayPlane(
-                                    mouseRay, drag.startPosition, planeNormal, hit)) {
-                                const float offset = dot(hit - drag.startPosition, axis);
-                                entity->transform.position =
-                                    drag.startPosition +
-                                    axis * (offset - drag.startAxisOffset);
-                            }
-                        }
-                    } else if (leftClicked) {
-                        const int selected = m_impl->hierarchy->selectedIndex();
-                        int gizmoAxis = -1;
-                        if (selected >= 0) {
-                            Entity* selectedEntity =
-                                m_impl->scene.entity(static_cast<std::size_t>(selected));
-                            if (selectedEntity != nullptr) {
-                                gizmoAxis = hitTranslateGizmoAxis(
-                                    mouseX,
-                                    mouseY,
-                                    selectedEntity->transform.position,
-                                    view,
-                                    projection,
-                                    viewW,
-                                    viewH);
-                            }
-                        }
-
-                        if (gizmoAxis >= 0 && selected >= 0) {
-                            Entity* entity =
-                                m_impl->scene.entity(static_cast<std::size_t>(selected));
-                            if (entity != nullptr) {
-                                const Vec3 axes[3] = {
-                                    {1.0f, 0.0f, 0.0f},
-                                    {0.0f, 1.0f, 0.0f},
-                                    {0.0f, 0.0f, 1.0f},
-                                };
-                                const Vec3 axis = axes[gizmoAxis];
-                                Vec3 planeNormal = cross(axis, cross(forward, axis));
-                                if (length(planeNormal) < 0.0001f) {
-                                    planeNormal = cross(axis, right);
-                                }
-                                planeNormal = normalize(planeNormal);
-                                Vec3 hit{};
-                                drag.active = true;
-                                drag.entityIndex = selected;
-                                drag.axis = gizmoAxis;
-                                drag.startPosition = entity->transform.position;
-                                drag.startAxisOffset = 0.0f;
-                                if (intersectRayPlane(
-                                        mouseRay, drag.startPosition, planeNormal, hit)) {
-                                    drag.startAxisOffset =
-                                        dot(hit - drag.startPosition, axis);
-                                }
-                            }
-                        } else {
-                            int bestEntity = -1;
-                            float bestT = 1.0e30f;
-                            const auto& entities = m_impl->scene.entities();
-                            for (std::size_t i = 0; i < entities.size(); ++i) {
-                                float t = 0.0f;
-                                bool hit = false;
-                                if (entities[i].hasMesh) {
-                                    const Mat4 world =
-                                        matrixFromTransform(entities[i].transform);
-                                    hit = intersectRayUnitCube(mouseRay, world, t);
-                                } else if (entities[i].hasCamera) {
-                                    const Mat4 world =
-                                        cameraPickWorld(entities[i].transform.position);
-                                    hit = intersectRayUnitCube(mouseRay, world, t);
-                                }
-                                if (hit && t < bestT) {
-                                    bestT = t;
-                                    bestEntity = static_cast<int>(i);
-                                }
-                            }
-                            m_impl->hierarchy->setSelectedIndex(bestEntity);
-                        }
-                    }
-                }
-            } else {
-                ImGui::TextUnformatted("Scene view unavailable");
-            }
-        } else {
-            ImGui::TextUnformatted("Scene view unavailable");
+    if (m_impl->viewport) {
+        int selected = m_impl->hierarchy ? m_impl->hierarchy->selectedIndex() : -1;
+        const bool focusGame = m_impl->focusGameView;
+        m_impl->focusGameView = false;
+        m_impl->viewport->onImGuiRender(selected, m_impl->playMode, focusGame);
+        if (m_impl->hierarchy) {
+            m_impl->hierarchy->setSelectedIndex(selected);
         }
-    } else {
-        m_impl->sceneViewWidth = 0;
-        m_impl->sceneViewHeight = 0;
-        m_impl->editorCamera.looking = false;
-        m_impl->editorCamera.draggingPan = false;
-        m_impl->gizmoDrag.active = false;
     }
-    ImGui::End();
 
-    if (ImGui::Begin(
-            "Game",
-            nullptr,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-        const ImVec2 gameSize = ImGui::GetContentRegionAvail();
-        const int gameWidth = static_cast<int>(gameSize.x);
-        const int gameHeight = static_cast<int>(gameSize.y);
-        m_impl->gameViewWidth = gameWidth;
-        m_impl->gameViewHeight = gameHeight;
-        if (m_impl->scene.mainCameraIndex() < 0) {
-            ImGui::TextUnformatted("No camera to render the game view.");
-        } else if (gameWidth >= 1 && gameHeight >= 1) {
-            m_impl->renderer->resizeGameView(gameWidth, gameHeight);
-            const std::uintptr_t gameTexture = m_impl->renderer->gameColorTexture();
-            if (gameTexture != 0) {
-                ImGui::Image(
-                    ImTextureRef((ImTextureID)gameTexture),
-                    ImVec2(static_cast<float>(gameWidth), static_cast<float>(gameHeight)));
-            } else {
-                ImGui::TextUnformatted("Game view unavailable");
-            }
-        } else {
-            ImGui::TextUnformatted("Game view unavailable");
-        }
-    } else {
-        m_impl->gameViewWidth = 0;
-        m_impl->gameViewHeight = 0;
-    }
-    ImGui::End();
-
+    ImGui::BeginDisabled(m_impl->playMode);
     if (m_impl->inspector) {
         const int selected =
             m_impl->hierarchy ? m_impl->hierarchy->selectedIndex() : -1;
         m_impl->inspector->onImGuiRender(selected);
     }
+    ImGui::EndDisabled();
 
     if (m_impl->content) {
         m_impl->content->onImGuiRender();
@@ -914,10 +544,19 @@ void UiLayer::beginFrame() {
             ImGui::BeginDisabled();
         }
         if (ImGui::Button("Create", ImVec2(120.0f, 0.0f))) {
-            if (m_impl->project.create(
+            m_impl->stopPlay();
+            Project created;
+            if (m_impl->saveScene() && created.create(
                     m_impl->newProjectParent, std::string(m_impl->newProjectName))) {
-                m_impl->recent.add(m_impl->project.root());
-                ImGui::CloseCurrentPopup();
+                Scene loaded;
+                if (created.loadScene(loaded, m_impl->sceneError)) {
+                    m_impl->project = std::move(created);
+                    m_impl->scene = std::move(loaded);
+                    m_impl->scriptError.clear();
+                    if (m_impl->hierarchy) { m_impl->hierarchy->setSelectedIndex(-1); }
+                    m_impl->recent.add(m_impl->project.root());
+                    ImGui::CloseCurrentPopup();
+                }
             }
         }
         if (!canCreate) {
@@ -932,53 +571,22 @@ void UiLayer::beginFrame() {
 }
 
 void UiLayer::endFrame() {
-    if (!m_impl->glfwReady || m_impl->renderer == nullptr || !m_impl->renderer->valid()) {
+    if (!valid()) {
         return;
     }
 
     GameViewCamera sceneCamera{};
-    sceneCamera.clearColor[0] = 0.10f;
-    sceneCamera.clearColor[1] = 0.10f;
-    sceneCamera.clearColor[2] = 0.11f;
-    sceneCamera.clearColor[3] = 1.0f;
-    {
-        const auto& cam = m_impl->editorCamera;
-        const Vec3 forward = cam.forward();
-        const Mat4 view = lookAt(cam.position, cam.position + forward, Vec3{0.0f, 1.0f, 0.0f});
-        std::memcpy(sceneCamera.view, view.m, sizeof(sceneCamera.view));
-
-        const float aspect =
-            (m_impl->sceneViewHeight > 0)
-                ? static_cast<float>(m_impl->sceneViewWidth) /
-                      static_cast<float>(m_impl->sceneViewHeight)
-                : 1.0f;
-        const Mat4 projection = perspective(60.0f, aspect, 0.1f, 1000.0f);
-        std::memcpy(sceneCamera.projection, projection.m, sizeof(sceneCamera.projection));
+    if (m_impl->viewport) {
+        m_impl->viewport->fillSceneCamera(sceneCamera);
     }
 
-    GameViewCamera gameCamera{};
-    const int mainCamera = m_impl->scene.mainCameraIndex();
-    if (mainCamera >= 0) {
-        const Entity* entity =
-            m_impl->scene.entity(static_cast<std::size_t>(mainCamera));
-        if (entity != nullptr && entity->hasCamera) {
-            std::memcpy(gameCamera.clearColor, entity->camera.clearColor, sizeof(gameCamera.clearColor));
-            const Mat4 view = viewFromEuler(entity->transform.position, entity->transform.rotation);
-            std::memcpy(gameCamera.view, view.m, sizeof(gameCamera.view));
+    const int gameViewWidth = m_impl->viewport ? m_impl->viewport->gameViewWidth() : 0;
+    const int gameViewHeight = m_impl->viewport ? m_impl->viewport->gameViewHeight() : 0;
+    const int sceneViewWidth = m_impl->viewport ? m_impl->viewport->sceneViewWidth() : 0;
+    const int sceneViewHeight = m_impl->viewport ? m_impl->viewport->sceneViewHeight() : 0;
 
-            const float aspect =
-                (m_impl->gameViewHeight > 0)
-                    ? static_cast<float>(m_impl->gameViewWidth) /
-                          static_cast<float>(m_impl->gameViewHeight)
-                    : 1.0f;
-            const Mat4 projection = perspective(
-                entity->camera.fieldOfView,
-                aspect,
-                entity->camera.nearClip,
-                entity->camera.farClip);
-            std::memcpy(gameCamera.projection, projection.m, sizeof(gameCamera.projection));
-        }
-    }
+    m_impl->gameRenderData.update(m_impl->scene, gameViewWidth, gameViewHeight);
+    const auto& gameCamera = m_impl->gameRenderData.camera();
 
     std::vector<MeshInstance> meshInstances;
     std::vector<CameraFrustumInstance> frustumInstances;
@@ -986,9 +594,8 @@ void UiLayer::endFrame() {
     const int selectedEntity =
         m_impl->hierarchy ? m_impl->hierarchy->selectedIndex() : -1;
     const float sceneAspect =
-        (m_impl->sceneViewHeight > 0)
-            ? static_cast<float>(m_impl->sceneViewWidth) /
-                  static_cast<float>(m_impl->sceneViewHeight)
+        (sceneViewHeight > 0)
+            ? static_cast<float>(sceneViewWidth) / static_cast<float>(sceneViewHeight)
             : 1.0f;
     const auto& entities = m_impl->scene.entities();
     for (std::size_t i = 0; i < entities.size(); ++i) {
@@ -1024,6 +631,7 @@ void UiLayer::endFrame() {
     sceneDraw.selectedMesh = selectedMesh;
     sceneDraw.frustums = frustumInstances.empty() ? nullptr : frustumInstances.data();
     sceneDraw.frustumCount = static_cast<int>(frustumInstances.size());
+    sceneDraw.drawGrid = true;
     sceneDraw.drawEditorOverlay = true;
     if (selectedEntity >= 0) {
         const Entity* selected = m_impl->scene.entity(static_cast<std::size_t>(selectedEntity));
@@ -1033,17 +641,13 @@ void UiLayer::endFrame() {
         }
     }
 
-    SceneDrawList gameDraw{};
-    gameDraw.meshes = sceneDraw.meshes;
-    gameDraw.meshCount = sceneDraw.meshCount;
-    gameDraw.drawEditorOverlay = false;
-
     m_impl->renderer->renderSceneView(sceneCamera, sceneDraw);
-    if (mainCamera >= 0) {
-        m_impl->renderer->renderGameView(gameCamera, gameDraw);
+    if (m_impl->gameRenderData.hasCamera()) {
+        m_impl->renderer->renderGameView(gameCamera, m_impl->gameRenderData.drawList());
     }
     ImGui::Render();
-    m_impl->renderer->drawImGui();
+    m_impl->renderer->bindWindowTarget();
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
     m_impl->renderer->present();
 }
 

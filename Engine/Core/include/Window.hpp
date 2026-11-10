@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Input.hpp"
+
 #include <memory>
 
 namespace sat {
@@ -14,6 +16,8 @@ public:
 
     [[nodiscard]] bool shouldClose() const;
     void pollEvents();
+    [[nodiscard]] const Input& input() const;
+    void setIcon(const char* path);
     [[nodiscard]] void* nativeHandle() const;
 
 private:

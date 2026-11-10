@@ -1,7 +1,5 @@
 #include "Window.hpp"
 
-#include "EnginePaths.hpp"
-
 #include <GLFW/glfw3.h>
 #if defined(_WIN32)
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -19,6 +17,7 @@ namespace sat {
 
 struct Window::Impl {
     GLFWwindow* window = nullptr;
+    Input input;
 };
 
 #if defined(_WIN32)
@@ -47,31 +46,20 @@ static void enableDarkTitleBar(GLFWwindow* window) {
 }
 #endif
 
-static void setWindowIcon(GLFWwindow* window) {
-    const char* paths[] = {
-        SAT_ENGINE_ASSETS_DIR "/SatEngine_ic.png",
-        "SatEngine_ic.png",
-    };
-
-    for (const char* path : paths) {
-        int width = 0;
-        int height = 0;
-        int channels = 0;
-        unsigned char* pixels = stbi_load(path, &width, &height, &channels, 4);
-        if (pixels == nullptr) {
-            continue;
-        }
-
-        GLFWimage image{};
-        image.width = width;
-        image.height = height;
-        image.pixels = pixels;
-        glfwSetWindowIcon(window, 1, &image);
-        stbi_image_free(pixels);
+void Window::setIcon(const char* path) {
+    if (m_impl->window == nullptr || path == nullptr) {
         return;
     }
-
-    std::cerr << "Failed to load window icon: SatEngine_ic.png\n";
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    unsigned char* pixels = stbi_load(path, &width, &height, &channels, 4);
+    if (pixels == nullptr) {
+        return;
+    }
+    GLFWimage image{width, height, pixels};
+    glfwSetWindowIcon(m_impl->window, 1, &image);
+    stbi_image_free(pixels);
 }
 
 Window::Window(int width, int height, const char* title)
@@ -90,10 +78,29 @@ Window::Window(int width, int height, const char* title)
         return;
     }
 
-    setWindowIcon(m_impl->window);
 #if defined(_WIN32)
     enableDarkTitleBar(m_impl->window);
 #endif
+
+    glfwSetWindowUserPointer(m_impl->window, m_impl.get());
+    glfwSetKeyCallback(m_impl->window, [](GLFWwindow* window, int key, int, int action, int) {
+        if (action != GLFW_REPEAT) {
+            static_cast<Impl*>(glfwGetWindowUserPointer(window))->input.setKey(static_cast<Key>(key), action == GLFW_PRESS);
+        }
+    });
+    glfwSetMouseButtonCallback(m_impl->window, [](GLFWwindow* window, int button, int action, int) {
+        static_cast<Impl*>(glfwGetWindowUserPointer(window))->input.setMouseButton(static_cast<MouseButton>(button), action == GLFW_PRESS);
+    });
+    glfwSetCursorPosCallback(m_impl->window, [](GLFWwindow* window, double x, double y) {
+        static_cast<Impl*>(glfwGetWindowUserPointer(window))->input.setCursorPosition(x, y);
+    });
+    glfwSetWindowFocusCallback(m_impl->window, [](GLFWwindow* window, int focused) {
+        if (!focused) { static_cast<Impl*>(glfwGetWindowUserPointer(window))->input.releaseAll(); }
+    });
+    double x = 0.0;
+    double y = 0.0;
+    glfwGetCursorPos(m_impl->window, &x, &y);
+    m_impl->input.setCursorPosition(x, y);
 
     glfwShowWindow(m_impl->window);
     glfwFocusWindow(m_impl->window);
@@ -111,8 +118,11 @@ bool Window::shouldClose() const {
 }
 
 void Window::pollEvents() {
+    m_impl->input.beginFrame();
     glfwPollEvents();
 }
+
+const Input& Window::input() const { return m_impl->input; }
 
 void* Window::nativeHandle() const {
     return m_impl->window;

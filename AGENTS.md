@@ -7,6 +7,8 @@ globs: "**/*.{hpp,h,cpp,cc,cxx}"
 
 Target C++20. Match existing SatEngine style. Keep APIs small, explicit, and const-correct. Prefer clear code and enforceable rules over unnecessary abstraction.
 
+IMPORTANT: Make the code as optimize as possible. As performance as possible.
+
 ## Naming
 
 - Namespace: `sat`.
@@ -147,3 +149,12 @@ When adding or moving any engine/game source, update the matching `CMakeLists.tx
 2. If you add a new **public** `include/` directory, add it to `target_include_directories(... PUBLIC ...)`.
 3. If you add a new `src/module/` tree (or need `"module/Foo.hpp"` includes), ensure the parent `src/` is on `target_include_directories(... PRIVATE ...)` (Renderer already has `Renderer/src`).
 4. Do not rely on globbing — list sources explicitly (project convention).
+
+## Module folder (`src/module/`)
+
+Use `Engine/<Area>/src/module/` for focused implementation units that are **not** public API (e.g. `MeshPass`, `SelectionOutlinePass`, `TranslateGizmoPass`).
+
+- Keep each module’s `.hpp` next to its `.cpp` under `src/module/` — do **not** put these headers in `include/`
+- Third-party / graphics API types (D3D11, etc.) may appear only in `src/` and `src/module/`
+- The area facade (e.g. `Renderer`) owns orchestration and includes modules as `"module/Foo.hpp"`
+- Other engine areas follow the same pattern when they grow internal multi-file subsystems

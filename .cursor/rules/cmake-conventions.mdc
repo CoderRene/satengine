@@ -1,5 +1,5 @@
 ---
-description: Modern CMake conventions for SatEngine library and Game targets
+description: Modern CMake conventions for SatEngine library and GamePlayer targets
 globs: "**/CMakeLists.txt"
 alwaysApply: false
 ---
@@ -10,8 +10,8 @@ Root project: C++20, extensions off, MSVC `/W4 /permissive-`, outputs under `bui
 
 ## Targets (modern CMake)
 
-- `SatEngine` — static library under `Engine/`; public includes from `Engine/*/include`
-- `Game` — executable that links `SatEngine` privately
+- `SatRuntime` / `SatEditor` — libraries under `Engine/`; public includes from `Engine/*/include`
+- `GamePlayer` — standalone executable that links `SatRuntime` privately
 - Use target-scoped commands only — no global `include_directories` / `link_libraries` / `add_definitions`
 - `PUBLIC` = part of the consumer API; `PRIVATE` = implementation-only; `INTERFACE` = header-only deps
 - Prefer `PRIVATE` for third-party libs hidden behind wrappers (e.g. GLFW once fully wrapped)

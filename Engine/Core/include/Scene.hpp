@@ -2,7 +2,9 @@
 
 #include "Math.hpp"
 
+#include <cstddef>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace sat {
@@ -30,6 +32,14 @@ struct MeshComponent {
     Primitive primitive = Primitive::Cube;
 };
 
+// Paths are relative to the project's Scripts folder. Disabled components do not run.
+struct ScriptComponent {
+    std::string path;
+    bool enabled = true;
+};
+
+[[nodiscard]] bool isValidScriptPath(std::string_view path);
+
 struct Entity {
     std::string name;
     Transform transform;
@@ -37,6 +47,7 @@ struct Entity {
     CameraComponent camera;
     bool hasMesh = false;
     MeshComponent mesh;
+    std::vector<ScriptComponent> scripts;
 };
 
 class Scene {
@@ -49,6 +60,9 @@ public:
     [[nodiscard]] int mainCameraIndex() const;
 
     Entity& createEntity(std::string name);
+    void addEmpty();
+    void clear();
+    [[nodiscard]] bool attachScript(std::size_t index, std::string path);
     void addCamera();
     void addCube();
     [[nodiscard]] bool remove(std::size_t index);
@@ -61,6 +75,7 @@ private:
     std::vector<Entity> m_entities;
     int m_cameraCount = 0;
     int m_cubeCount = 0;
+    int m_emptyCount = 0;
 };
 
 } // namespace sat

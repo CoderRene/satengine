@@ -33,6 +33,8 @@ struct SceneDrawList {
     int selectedMesh = -1;
     const CameraFrustumInstance* frustums = nullptr;
     int frustumCount = 0;
+    // Editor previews can show a reference grid without enabling gizmos/frustums.
+    bool drawGrid = false;
     bool drawEditorOverlay = false;
     bool showTranslateGizmo = false;
     Vec3 translateGizmoOrigin{};

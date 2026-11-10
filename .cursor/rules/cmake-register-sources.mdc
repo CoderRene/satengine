@@ -22,7 +22,7 @@ When adding or moving any engine/game source, update the matching `CMakeLists.tx
 | `Engine/**/src/module/*.cpp` | Same — list explicitly (e.g. `Renderer/src/module/MeshPass.cpp`) |
 | `Engine/**/include/` (new public dir) | `Engine/CMakeLists.txt` → `target_include_directories(SatEngine PUBLIC ...)` |
 | `Engine/**/src/` (for `module/` includes) | `target_include_directories(SatEngine PRIVATE ...)` — not PUBLIC |
-| `Game/src/*.cpp` | `Game/CMakeLists.txt` → `add_executable(Game ...)` |
+| `GamePlayer/src/*.cpp` | `GamePlayer/CMakeLists.txt` → `add_executable(GamePlayer ...)` |
 
 ## Example
 

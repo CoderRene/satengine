@@ -6,9 +6,6 @@
 #include "module/SelectionOutlinePass.hpp"
 #include "module/TranslateGizmoPass.hpp"
 
-#include <imgui.h>
-#include <imgui_impl_dx11.h>
-
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -62,7 +59,6 @@ struct Renderer::Impl {
     int swapHeight = 0;
     OffscreenView game;
     OffscreenView scene;
-    bool imguiReady = false;
 
     ID3D11VertexShader* lineVs = nullptr;
     ID3D11PixelShader* linePs = nullptr;
@@ -632,7 +628,7 @@ void Renderer::renderOffscreenView(
     std::memcpy(projMat.m, camera.projection, sizeof(projMat.m));
     const Mat4 viewProj = projMat * viewMat;
 
-    if (ensureDebugLines()) {
+    if (drawList.drawGrid && ensureDebugLines()) {
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (SUCCEEDED(
                 m_impl->context->Map(m_impl->lineCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -657,8 +653,8 @@ void Renderer::renderOffscreenView(
         m_impl->meshPass.draw(m_impl->context, viewProj, drawList);
     }
 
-    if (drawList.selectedMesh >= 0 && drawList.selectedMesh < drawList.meshCount &&
-        drawList.meshes != nullptr) {
+    if (drawList.drawEditorOverlay && drawList.selectedMesh >= 0 &&
+        drawList.selectedMesh < drawList.meshCount && drawList.meshes != nullptr) {
         const MeshInstance& selected = drawList.meshes[drawList.selectedMesh];
         const GpuMesh* meshGeometry = m_impl->meshPass.geometry(selected.primitive);
         if (meshGeometry != nullptr && m_impl->outlinePass.ensure(m_impl->device)) {
@@ -679,7 +675,6 @@ void Renderer::renderOffscreenView(
 }
 
 Renderer::~Renderer() {
-    shutdownImGui();
     if (m_impl->context != nullptr) {
         // Drop context refs to RTVs/SRVs/shaders/buffers before Release.
         m_impl->context->ClearState();
@@ -700,16 +695,6 @@ Renderer::~Renderer() {
 
 bool Renderer::valid() const {
     return m_impl->device != nullptr && m_impl->swapChain != nullptr && m_impl->backBuffer != nullptr;
-}
-
-void Renderer::shutdownImGui() {
-    if (!m_impl->imguiReady) {
-        return;
-    }
-    if (ImGui::GetCurrentContext() != nullptr) {
-        ImGui_ImplDX11_Shutdown();
-    }
-    m_impl->imguiReady = false;
 }
 
 void Renderer::newFrame() {
@@ -747,20 +732,6 @@ void Renderer::newFrame() {
             m_impl->swapHeight = height;
         }
     }
-
-    if (!m_impl->imguiReady) {
-        if (ImGui::GetCurrentContext() == nullptr) {
-            std::cerr << "Failed to start UI: Direct3D 11 backend has no ImGui context\n";
-            return;
-        }
-        if (!ImGui_ImplDX11_Init(m_impl->device, m_impl->context)) {
-            std::cerr << "Failed to start UI: Direct3D 11 backend\n";
-            return;
-        }
-        m_impl->imguiReady = true;
-    }
-
-    ImGui_ImplDX11_NewFrame();
 }
 
 void Renderer::resizeGameView(int width, int height) {
@@ -840,30 +811,49 @@ void Renderer::destroyTexture(std::uintptr_t texture) {
     view->Release();
 }
 
-void Renderer::drawImGui() {
+void* Renderer::nativeDevice() const {
+    return m_impl->device;
+}
+
+void* Renderer::nativeContext() const {
+    return m_impl->context;
+}
+
+void Renderer::bindWindowTarget() {
     if (!valid()) {
         return;
     }
-
     m_impl->context->OMSetRenderTargets(1, &m_impl->backBuffer, nullptr);
     const float clearColor[4] = {0.10f, 0.10f, 0.11f, 1.0f};
     m_impl->context->ClearRenderTargetView(m_impl->backBuffer, clearColor);
+}
 
-    if (!m_impl->imguiReady || ImGui::GetCurrentContext() == nullptr) {
-        return;
+bool Renderer::renderWindow(const GameViewCamera& camera, const SceneDrawList& drawList) {
+    if (!valid()) {
+        return false;
     }
-    ImDrawData* drawData = ImGui::GetDrawData();
-    if (drawData == nullptr) {
-        return;
+    // Reuse the scene render path and copy its output to the swap chain without UI.
+    resizeGameView(m_impl->swapWidth, m_impl->swapHeight);
+    if (m_impl->game.color == nullptr) {
+        return false;
     }
-    ImGui_ImplDX11_RenderDrawData(drawData);
+    renderGameView(camera, drawList);
+    m_impl->context->OMSetRenderTargets(0, nullptr, nullptr);
+    ID3D11Texture2D* buffer = nullptr;
+    if (FAILED(m_impl->swapChain->GetBuffer(0, IID_PPV_ARGS(&buffer)))) {
+        std::cerr << "Failed to get window target for game presentation\n";
+        return false;
+    }
+    m_impl->context->CopyResource(buffer, m_impl->game.color);
+    buffer->Release();
+    return true;
 }
 
 void Renderer::present() {
     if (m_impl->swapChain == nullptr) {
         return;
     }
-    // Sync interval 0: editor FPS is not capped by the monitor refresh rate.
+    // Sync interval 0: presentation is not capped by the monitor refresh rate.
     const UINT flags = m_impl->allowTearing ? DXGI_PRESENT_ALLOW_TEARING : 0u;
     m_impl->swapChain->Present(0, flags);
 }

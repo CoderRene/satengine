@@ -5,10 +5,11 @@
 namespace sat {
 
 class Scene;
+class Project;
 
 class InspectorPanel {
 public:
-    explicit InspectorPanel(Scene& scene);
+    InspectorPanel(Scene& scene, Project& project);
     ~InspectorPanel();
 
     InspectorPanel(const InspectorPanel&) = delete;
