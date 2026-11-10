@@ -405,6 +405,11 @@ void UiLayer::beginFrame() {
         // Keep the button within the menu bar's height and stable when toggling.
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 0.0f));
         const float buttonWidth = ImGui::CalcTextSize("Stop").x + 24.0f;
+        // Center on the host window, keeping clear of the menus at narrow widths.
+        const float centeredX = (ImGui::GetWindowWidth() - buttonWidth) * 0.5f;
+        if (centeredX > ImGui::GetCursorPosX()) {
+            ImGui::SetCursorPosX(centeredX);
+        }
         if (ImGui::Button(playing ? "Stop##PlayMode" : "Play##PlayMode", ImVec2(buttonWidth, 0.0f))) {
             if (playing) {
                 m_impl->stopPlay();
