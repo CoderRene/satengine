@@ -50,6 +50,7 @@ struct LuaRuntime::Impl {
     std::string m_error;
     std::string m_context;
     std::vector<std::unique_ptr<LuaRuntime>> m_instances;
+    std::string m_scriptPath;
 
     void close() {
         m_instances.clear();
@@ -209,6 +210,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
         }
         auto instance = std::make_unique<LuaRuntime>(impl.m_scene, impl.m_input);
         instance->m_impl->m_context = "Entity " + attachment.entityName + " [Scripts/" + attachment.path + "]";
+        instance->m_impl->m_scriptPath = attachment.path;
         if (!instance->startSource(source, "@Scripts/" + attachment.path, modulePath,
                                    scripts, embedded, attachment.ownerId)) {
             impl.fail(instance->error());
@@ -285,7 +287,20 @@ bool LuaRuntime::update(float deltaSeconds) {
         return false;
     }
     for (const auto& instance : impl.m_instances) {
-        if (instance->running() && !instance->update(deltaSeconds)) {
+        if (!instance->running()) {
+            continue;
+        }
+        const Entity* owner = impl.m_scene.entityById(instance->m_impl->m_ownerId);
+        if (owner == nullptr) {
+            continue; // retireDestroyed handles stop
+        }
+        const auto& path = instance->m_impl->m_scriptPath;
+        const auto script = std::find_if(owner->scripts.begin(), owner->scripts.end(),
+            [&](const ScriptComponent& component) { return component.path == path; });
+        if (script == owner->scripts.end() || !script->enabled) {
+            continue;
+        }
+        if (!instance->update(deltaSeconds)) {
             return impl.fail(instance->error());
         }
         if (!impl.retireDestroyed()) {

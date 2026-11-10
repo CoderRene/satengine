@@ -189,6 +189,69 @@ int setMainCamera(lua_State* state) {
     return 0;
 }
 
+template<bool Entity::* flag>
+int hasComponent(lua_State* state) {
+    lua_pushboolean(state, checkedEntity(state).*flag);
+    return 1;
+}
+
+template<bool Entity::* flag, auto Entity::* component>
+int addComponent(lua_State* state) {
+    Entity& entity = checkedEntity(state);
+    if (entity.*flag) {
+        lua_pushboolean(state, false);
+        return 1;
+    }
+    entity.*component = {};
+    entity.*flag = true;
+    lua_pushboolean(state, true);
+    return 1;
+}
+
+template<bool Entity::* flag, auto Entity::* component>
+int removeComponent(lua_State* state) {
+    Entity& entity = checkedEntity(state);
+    if (!(entity.*flag)) {
+        lua_pushboolean(state, false);
+        return 1;
+    }
+    entity.*flag = false;
+    entity.*component = {};
+    lua_pushboolean(state, true);
+    return 1;
+}
+
+ScriptComponent* findScript(Entity& entity, std::string_view path) {
+    for (auto& script : entity.scripts) {
+        if (script.path == path) {
+            return &script;
+        }
+    }
+    return nullptr;
+}
+
+int isScriptEnabled(lua_State* state) {
+    Entity& entity = checkedEntity(state);
+    const char* path = luaL_checkstring(state, 2);
+    const ScriptComponent* script = findScript(entity, path);
+    lua_pushboolean(state, script != nullptr && script->enabled);
+    return 1;
+}
+
+int setScriptEnabled(lua_State* state) {
+    Entity& entity = checkedEntity(state);
+    const char* path = luaL_checkstring(state, 2);
+    luaL_checktype(state, 3, LUA_TBOOLEAN);
+    ScriptComponent* script = findScript(entity, path);
+    if (script == nullptr) {
+        lua_pushboolean(state, false);
+        return 1;
+    }
+    script->enabled = lua_toboolean(state, 3) != 0;
+    lua_pushboolean(state, true);
+    return 1;
+}
+
 } // namespace
 
 void registerSceneBindings(lua_State* state, Scene& scene) {
@@ -216,6 +279,14 @@ void registerSceneBindings(lua_State* state, Scene& scene) {
         {"setCameraClipPlanes", guarded<setCameraClipPlanes>},
         {"getCameraClearColor", guarded<getCameraClearColor>},
         {"setCameraClearColor", guarded<setCameraClearColor>},
+        {"hasMesh", guarded<hasComponent<&Entity::hasMesh>>},
+        {"hasCamera", guarded<hasComponent<&Entity::hasCamera>>},
+        {"addMesh", guarded<addComponent<&Entity::hasMesh, &Entity::mesh>>},
+        {"removeMesh", guarded<removeComponent<&Entity::hasMesh, &Entity::mesh>>},
+        {"addCamera", guarded<addComponent<&Entity::hasCamera, &Entity::camera>>},
+        {"removeCamera", guarded<removeComponent<&Entity::hasCamera, &Entity::camera>>},
+        {"isScriptEnabled", guarded<isScriptEnabled>},
+        {"setScriptEnabled", guarded<setScriptEnabled>},
         {nullptr, nullptr}
     };
     lua_pushlightuserdata(state, &scene);

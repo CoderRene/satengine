@@ -69,6 +69,11 @@ embedded bundle without filesystem fallback.
 | `sat.getCameraFov(id)` / `sat.setCameraFov(id, degrees)` | Read/write vertical FOV in degrees, strictly between 0 and 180 |
 | `sat.getCameraClipPlanes(id)` / `sat.setCameraClipPlanes(id, near, far)` | Read two numbers / atomically set positive near and far greater than near |
 | `sat.getCameraClearColor(id)` / `sat.setCameraClearColor(id, r, g, b, a)` | Read/write four finite RGBA floats |
+| `sat.hasMesh(id)` / `sat.hasCamera(id)` | Return whether the live entity has that component |
+| `sat.addMesh(id)` / `sat.addCamera(id)` | Add the component if missing; return true on add, false if already present |
+| `sat.removeMesh(id)` / `sat.removeCamera(id)` | Remove the component if present; return true on remove, false if absent |
+| `sat.isScriptEnabled(id, path)` | Return whether that attached script path is enabled (false if not attached) |
+| `sat.setScriptEnabled(id, path, enabled)` | Enable/disable an attached script; return true if found, false if not attached |
 
 Transforms use the engine's left-handed coordinates (+Y up, +Z forward); scale
 is dimensionless. Entity IDs are opaque positive Lua integers, not array indices.
@@ -83,10 +88,14 @@ the authored snapshot, and runtime-created entities disappear.
 creating or destroying entities. Storage/enumeration order may change after a
 deletion; duplicate names are allowed, so keep IDs instead of relying on names
 or list positions. The array itself does not keep entities alive. `getName`,
-transform functions and `setMainCamera` reject stale/invalid IDs with Lua errors.
-`destroyEntity` and `isEntityValid` return false for invalid integer IDs; noninteger
-arguments produce Lua errors. Nonfinite numbers and invalid callbacks also
-produce Lua errors. Scripts cannot attach components at runtime.
+transform functions, component queries/mutations and `setMainCamera` reject
+stale/invalid IDs with Lua errors. `destroyEntity` and `isEntityValid` return
+false for invalid integer IDs; noninteger arguments produce Lua errors.
+Nonfinite numbers and invalid callbacks also produce Lua errors. Scripts can
+add/remove mesh and camera at runtime. Disabling a script skips its `onUpdate`
+while keeping its VM state; re-enabling resumes it. Script paths are relative
+to `Scripts/` (for example `target.lua`). Newly attached scripts during Play
+still do not start until the next Play session.
 
 ```lua
 local projectile = sat.createCube("Projectile")
@@ -137,12 +146,20 @@ conversion before changing any field; errors leave the previous settings intact.
 Near/far distances use scene units. RGBA values are not implicitly clamped,
 matching scene-file validation; use [0, 1] for ordinary display colors.
 
-`createCamera` does not select a main camera. Use `setMainCamera` to switch;
-`getMainCamera` returns nil when no live camera is marked main, including after
-that entity is destroyed. Property reads/writes use direct component access
-through stable-ID lookup and create no Lua tables. Main-camera queries use the
-scene's existing linear scan. Changes feed the next render-data update and are
-included when the host saves the scene; editor Stop restores its Play snapshot.
+`createCamera` and `addCamera` do not select a main camera. Use `setMainCamera`
+to switch; `getMainCamera` returns nil when no live camera is marked main,
+including after that camera is removed or its entity is destroyed. Property
+reads/writes use direct component access through stable-ID lookup and create no
+Lua tables. Main-camera queries use the scene's existing linear scan. Changes
+feed the next render-data update and are included when the host saves the scene;
+editor Stop restores its Play snapshot.
+
+```lua
+if not sat.hasMesh(self.entity) then
+    sat.addMesh(self.entity)
+end
+sat.setScriptEnabled(sat.findEntity("Target"), "target.lua", false)
+```
 
 ## Saving and building
 

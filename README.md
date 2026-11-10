@@ -104,8 +104,10 @@ Editor and game use the same `SceneRenderData` camera/mesh extraction code.
 
 Entities support attached Lua script components with `onStart`, `onUpdate(deltaSeconds)`
 and `onStop` callbacks. Add an empty entity in Hierarchy, then use Inspector >
-Add Component to add mesh, camera and Lua script components. Unattached files
-never run automatically. Scenes and attachments are saved in `Scene.sat`. Click Play/Stop in the editor, or run
+Add Component to add mesh, camera and Lua script components. At runtime, scripts can
+also add/remove mesh and camera, query `hasMesh` / `hasCamera`, and enable/disable
+attached scripts. Unattached files never run automatically. Scenes and attachments
+are saved in `Scene.sat`. Click Play/Stop in the editor, or run
 `<project-folder-name>.exe`. Try `Examples/LuaCube`. See
 [Lua scripting](docs/LuaScripting.md) for the API and lifecycle.
 
