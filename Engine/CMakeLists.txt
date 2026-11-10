@@ -75,6 +75,12 @@ target_compile_features(SatInput PUBLIC cxx_std_20)
 add_library(SatScripting STATIC
     Core/src/LuaRuntime.cpp
     Core/src/Project.cpp
+    Core/src/module/LuaRuntimeModules/LuaSceneBindings.cpp
+    Core/src/module/LuaRuntimeModules/LuaInputBindings.cpp
+    Core/src/module/LuaRuntimeModules/LuaPackageConfig.cpp
+)
+target_include_directories(SatScripting PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/Core/src"
 )
 target_link_libraries(SatScripting PUBLIC SatScene SatInput PRIVATE SatLua)
 target_compile_features(SatScripting PUBLIC cxx_std_20)

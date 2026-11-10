@@ -65,6 +65,10 @@ embedded bundle without filesystem fallback.
 | `sat.getRotation(id)` / `sat.setRotation(id, x, y, z)` | Read/write Euler rotation in degrees |
 | `sat.getScale(id)` / `sat.setScale(id, x, y, z)` | Read/write scale |
 | `sat.setMainCamera(id)` | Select an entity with a camera as the main camera |
+| `sat.getMainCamera()` | Return the stable main-camera entity ID, or nil |
+| `sat.getCameraFov(id)` / `sat.setCameraFov(id, degrees)` | Read/write vertical FOV in degrees, strictly between 0 and 180 |
+| `sat.getCameraClipPlanes(id)` / `sat.setCameraClipPlanes(id, near, far)` | Read two numbers / atomically set positive near and far greater than near |
+| `sat.getCameraClearColor(id)` / `sat.setCameraClearColor(id, r, g, b, a)` | Read/write four finite RGBA floats |
 
 Transforms use the engine's left-handed coordinates (+Y up, +Z forward); scale
 is dimensionless. Entity IDs are opaque positive Lua integers, not array indices.
@@ -114,6 +118,31 @@ slot. `entity(index)` remains a temporary editor/serialization index API;
 `entityIndex(id)` resolves a live handle to its current optional index. Borrowed
 entity references/pointers and indices must be reacquired after structural scene
 changes. All scene/runtime operations run on the window thread.
+
+## Camera scripting
+
+```lua
+local camera = sat.getMainCamera()
+if camera then
+    sat.setCameraFov(camera, 75)
+    sat.setCameraClipPlanes(camera, 0.1, 2000)
+    sat.setCameraClearColor(camera, 0.08, 0.12, 0.2, 1)
+end
+```
+
+Camera property functions require a live entity with a Camera component.
+Invalid handles, missing cameras, nonfinite/out-of-float-range numbers and invalid
+projection ranges produce Lua errors. Setters validate every argument after float
+conversion before changing any field; errors leave the previous settings intact.
+Near/far distances use scene units. RGBA values are not implicitly clamped,
+matching scene-file validation; use [0, 1] for ordinary display colors.
+
+`createCamera` does not select a main camera. Use `setMainCamera` to switch;
+`getMainCamera` returns nil when no live camera is marked main, including after
+that entity is destroyed. Property reads/writes use direct component access
+through stable-ID lookup and create no Lua tables. Main-camera queries use the
+scene's existing linear scan. Changes feed the next render-data update and are
+included when the host saves the scene; editor Stop restores its Play snapshot.
 
 ## Saving and building
 
