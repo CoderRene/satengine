@@ -26,6 +26,10 @@ target_sources(Editor PRIVATE "${_sat_relink_stub}")
 
 # Keep runtime fonts/icons next to the executable for packaged / Debug-folder runs.
 add_custom_command(TARGET Editor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:Editor>/LuaDefs"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${PROJECT_SOURCE_DIR}/Engine/Scripting/LuaDefs"
+        "$<TARGET_FILE_DIR:Editor>/LuaDefs"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/Fonts"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/Icons"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -43,7 +47,7 @@ add_custom_command(TARGET Editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${PROJECT_SOURCE_DIR}/Engine/Assets/Icons/return_ic.png"
         "$<TARGET_FILE_DIR:Editor>/Icons/return_ic.png"
-    COMMENT "Copy engine fonts and icons next to Editor"
+    COMMENT "Copy engine fonts, icons, and LuaDefs next to Editor"
     VERBATIM
 )
 
@@ -52,3 +56,7 @@ set_target_properties(Editor PROPERTIES
     VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:Editor>"
     VS_GLOBAL_DisableFastUpToDateCheck true
 )
+
+if(TARGET SatLuaDefs)
+    add_dependencies(Editor SatLuaDefs)
+endif()

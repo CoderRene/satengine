@@ -16,6 +16,10 @@
 #include "SceneRenderData.hpp"
 #include "ViewportPanel.hpp"
 #include "Window.hpp"
+#include "ScriptLog.hpp"
+#include "LuaLogPanel.hpp"
+#include "EditorLuaDefs.hpp"
+#include "LuaToolingSync.hpp"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -35,7 +39,8 @@
 namespace sat {
 
 struct UiLayer::Impl {
-    Impl(Scene& scene, Project& project, const Input& input) : project(project), scene(scene), scripts(scene, &input) {}
+    Impl(Scene& scene, Project& project, const Input& input)
+    : project(project), scene(scene), scripts(scene, &input, &scriptLog) {}
     GLFWwindow* window = nullptr;
     Renderer* renderer = nullptr;
     bool glfwReady = false;
@@ -48,12 +53,14 @@ struct UiLayer::Impl {
     std::unique_ptr<InspectorPanel> inspector;
     std::unique_ptr<ContentPanel> content;
     std::unique_ptr<ViewportPanel> viewport;
+    std::unique_ptr<LuaLogPanel> luaLog;
 
-    LuaRuntime scripts{scene};
+    ScriptLog scriptLog;
+    LuaRuntime scripts;
     Scene editScene;
     bool playMode = false;
     bool focusGameView = false;
-    std::string scriptError;
+    bool focusLuaLog = false;
     std::string sceneError;
 
     bool saveScene() {
@@ -65,7 +72,10 @@ struct UiLayer::Impl {
             return;
         }
         scripts.stop();
-        scriptError = scripts.error();
+        if (!scripts.error().empty()) {
+            scriptLog.error(scripts.error());
+            focusLuaLog = true;
+        }
         scene = std::move(editScene);
         playMode = false;
         focusGameView = false;
@@ -85,7 +95,7 @@ struct UiLayer::Impl {
             return;
         }
         editScene = scene;
-        scriptError.clear();
+        scriptLog.clear();
         playMode = true;
         if (viewport) {
             viewport->resetInteraction();
@@ -121,11 +131,21 @@ struct UiLayer::Impl {
         }
         project = std::move(opened);
         scene = std::move(loaded);
-        scriptError.clear();
         if (hierarchy) { hierarchy->setSelectedIndex(-1); }
         if (viewport) { viewport->resetInteraction(); }
         recent.add(project.root());
+        if (!syncLuaToolingFor(project)) {
+            std::cerr << "Warning: failed to sync LuaDefs into the project (Cursor linting may not work)\n";
+        }
         return true;
+    }
+
+    bool syncLuaToolingFor(const Project& opened) const {
+        const auto defs = editorLuaDefsDirectory();
+        if (defs.empty()) {
+            return false;
+        }
+        return syncProjectLuaTooling(opened.root(), defs);
     }
 };
 
@@ -219,6 +239,7 @@ UiLayer::UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& proj
     m_impl->inspector = std::make_unique<InspectorPanel>(m_impl->scene, m_impl->project);
     m_impl->content = std::make_unique<ContentPanel>(m_impl->project, renderer);
     m_impl->viewport = std::make_unique<ViewportPanel>(m_impl->scene, renderer);
+    m_impl->luaLog = std::make_unique<LuaLogPanel>(m_impl->scriptLog);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -462,12 +483,6 @@ void UiLayer::beginFrame() {
         ImGui::End();
     }
 
-    if (!m_impl->scriptError.empty()) {
-        ImGui::Begin("Lua Errors");
-        ImGui::TextWrapped("%s", m_impl->scriptError.c_str());
-        ImGui::End();
-    }
-
     ImGuiID dockspaceId = ImGui::GetID("SatEngineDockSpace");
     ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f));
 
@@ -494,6 +509,7 @@ void UiLayer::beginFrame() {
             ImGui::DockBuilderDockWindow("Scene", dockMain);
             ImGui::DockBuilderDockWindow("Game", dockMain);
             ImGui::DockBuilderDockWindow("Content", dockBottom);
+            ImGui::DockBuilderDockWindow("Lua Log", dockBottom);
             ImGui::DockBuilderFinish(dockspaceId);
         }
     }
@@ -528,6 +544,12 @@ void UiLayer::beginFrame() {
         m_impl->content->onImGuiRender();
     }
 
+    if (m_impl->luaLog) {
+        const bool focusLog = m_impl->focusLuaLog;
+        m_impl->focusLuaLog = false;
+        m_impl->luaLog->onImGuiRender(focusLog);
+    }
+
     if (m_impl->openNewProjectModal) {
         ImGui::OpenPopup("New Project");
         m_impl->openNewProjectModal = false;
@@ -552,9 +574,11 @@ void UiLayer::beginFrame() {
                 if (created.loadScene(loaded, m_impl->sceneError)) {
                     m_impl->project = std::move(created);
                     m_impl->scene = std::move(loaded);
-                    m_impl->scriptError.clear();
                     if (m_impl->hierarchy) { m_impl->hierarchy->setSelectedIndex(-1); }
                     m_impl->recent.add(m_impl->project.root());
+                    if (!m_impl->syncLuaToolingFor(m_impl->project)) {
+                        std::cerr << "Warning: failed to sync LuaDefs into the project (Cursor linting may not work)\n";
+                    }
                     ImGui::CloseCurrentPopup();
                 }
             }

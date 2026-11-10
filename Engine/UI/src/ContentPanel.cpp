@@ -3,6 +3,7 @@
 #include "EnginePaths.hpp"
 #include "Project.hpp"
 #include "Renderer.hpp"
+#include "OpenLuaFile.hpp"
 
 #include <imgui.h>
 
@@ -57,6 +58,23 @@ void destroyIconTexture(Renderer& renderer, std::uintptr_t& texture) {
         renderer.destroyTexture(texture);
         texture = 0;
     }
+}
+
+bool isLuaFile(const fs::path& name) {
+    return name.extension() == ".lua";
+}
+
+bool isToolingEntry(const fs::path& name) {
+    const std::string fileName = name.filename().string();
+    return fileName == "LuaDefs" || fileName == ".satengine" || fileName == ".vscode" ||
+           fileName == ".luarc.json" || fileName == "SatEngine.code-workspace" ||
+           fileName == "selene.toml" || fileName == "satengine.yml";
+}
+
+void openLuaInCursor(Project& project, const fs::path& relativeDir, const fs::path& fileName) {
+    const fs::path absolute = project.root() / relativeDir / fileName;
+    const bool opened = openInCursor(project.root(), absolute);
+    (void)opened; // Failure is logged inside openInCursor.
 }
 
 } // namespace
@@ -149,12 +167,16 @@ void ContentPanel::drawFolderList() {
         if (ec) {
             break;
         }
+        const fs::path fileName = entry.path().filename();
+        if (isToolingEntry(fileName)) {
+            continue;
+        }
         std::error_code typeEc;
         const bool isDir = entry.is_directory(typeEc);
         if (typeEc) {
             continue;
         }
-        entries.push_back({entry.path().filename(), isDir});
+        entries.push_back({fileName, isDir});
     }
 
     std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
@@ -202,6 +224,11 @@ void ContentPanel::drawFolderList() {
                 ImGui::IsItemHovered() &&
                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 navigateInto(entry.name);
+            }
+            if (!entry.isDirectory && isLuaFile(entry.name) &&
+                ImGui::IsItemHovered() &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                openLuaInCursor(*m_project, m_relative, entry.name);
             }
 
             ImGui::PopID();
@@ -280,9 +307,12 @@ void ContentPanel::drawFolderList() {
             if (isParent && pressed) {
                 navigateUp();
             } else if (!isParent && hovered &&
-                       ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 navigateInto(entry.name);
             }
+        } else if (isLuaFile(entry.name) && hovered &&
+            ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+            openLuaInCursor(*m_project, m_relative, entry.name);
         }
 
         ImGui::EndGroup();

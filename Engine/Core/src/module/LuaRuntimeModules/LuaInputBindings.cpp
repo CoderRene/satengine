@@ -94,12 +94,19 @@ void pushNamedCodes(lua_State* state, const NamedCode* codes, std::size_t count)
 void registerInputBindings(lua_State* state, const Input* input) {
     lua_newtable(state);
     const luaL_Reg inputBindings[] = {
+        // @lua fun sat.input.keyPressed(key: integer): boolean
         {"keyPressed", keyPressed},
+        // @lua fun sat.input.keyHeld(key: integer): boolean
         {"keyHeld", keyHeld},
+        // @lua fun sat.input.keyReleased(key: integer): boolean
         {"keyReleased", keyReleased},
+        // @lua fun sat.input.mousePressed(button: integer): boolean
         {"mousePressed", mousePressed},
+        // @lua fun sat.input.mouseHeld(button: integer): boolean
         {"mouseHeld", mouseHeld},
+        // @lua fun sat.input.mouseReleased(button: integer): boolean
         {"mouseReleased", mouseReleased},
+        // @lua fun sat.input.cursorPosition(): x: number, y: number
         {"cursorPosition", cursorPosition},
         {nullptr, nullptr}
     };
@@ -107,6 +114,7 @@ void registerInputBindings(lua_State* state, const Input* input) {
     luaL_setfuncs(state, inputBindings, 1);
     lua_setfield(state, -2, "input");
 
+    // @lua enum sat.Key
     constexpr NamedCode kKeys[] = {
         {"Space", static_cast<int>(Key::Space)},
         {"Apostrophe", static_cast<int>(Key::Apostrophe)},
@@ -232,6 +240,7 @@ void registerInputBindings(lua_State* state, const Input* input) {
     pushNamedCodes(state, kKeys, sizeof(kKeys) / sizeof(kKeys[0]));
     lua_setfield(state, -2, "Key");
 
+    // @lua enum sat.MouseButton
     constexpr NamedCode kMouseButtons[] = {
         {"Left", static_cast<int>(MouseButton::Left)},
         {"Right", static_cast<int>(MouseButton::Right)},

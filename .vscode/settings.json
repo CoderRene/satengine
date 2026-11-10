@@ -12,5 +12,11 @@
   ],
   "dotrush.roslyn.projectOrSolutionFiles": [
     "d:\\Software Projects\\GameEngine Project\\SatEngine\\build\\SatEngine.sln"
-  ]
+  ],
+  "Lua.runtime.version": "Lua 5.4",
+  "Lua.workspace.library": [
+    "${workspaceFolder}/Engine/Scripting/LuaDefs"
+  ],
+  "Lua.workspace.checkThirdParty": false,
+  "selene.configPath": "${workspaceFolder}/selene.toml"
 }

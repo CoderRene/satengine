@@ -17,3 +17,5 @@ CompileFlags:
     - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/lua-src/src"
     - -Ibuild/Game/SatGameScripts
     - "-ID:/Software Projects/GameEngine Project/SatEngine/build/Game/SatGameScripts"
+    - -IEngine/Platform/include
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Platform/include"

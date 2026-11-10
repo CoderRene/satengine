@@ -3,7 +3,9 @@
 #include "module/LuaRuntimeModules/LuaInputBindings.hpp"
 #include "module/LuaRuntimeModules/LuaPackageConfig.hpp"
 #include "module/LuaRuntimeModules/LuaSceneBindings.hpp"
+#include "module/LuaRuntimeModules/LuaLogBindings.hpp"
 
+#include "ScriptLog.hpp"
 #include "Scene.hpp"
 #include "Input.hpp"
 
@@ -33,7 +35,8 @@ void instructionLimit(lua_State* state, lua_Debug*) {
 } // namespace
 
 struct LuaRuntime::Impl {
-    explicit Impl(Scene& scene, const Input* input) : m_scene(scene), m_input(input) {}
+    explicit Impl(Scene& scene, const Input* input, ScriptLog* log)
+    : m_scene(scene), m_input(input), m_log(log) {}
     ~Impl() { close(); }
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
@@ -42,6 +45,7 @@ struct LuaRuntime::Impl {
 
     Scene& m_scene;
     const Input* m_input;
+    ScriptLog* m_log = nullptr;
     lua_State* m_state = nullptr;
     bool m_running = false;
     bool m_started = false;
@@ -125,7 +129,8 @@ struct LuaRuntime::Impl {
     }
 };
 
-LuaRuntime::LuaRuntime(Scene& scene, const Input* input) : m_impl(std::make_unique<Impl>(scene, input)) {}
+LuaRuntime::LuaRuntime(Scene& scene, const Input* input, ScriptLog* log)
+    : m_impl(std::make_unique<Impl>(scene, input, log)) {}
 LuaRuntime::~LuaRuntime() = default;
 
 bool LuaRuntime::start(const std::filesystem::path& projectRoot) {
@@ -208,7 +213,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
             }
             source = ownedSource;
         }
-        auto instance = std::make_unique<LuaRuntime>(impl.m_scene, impl.m_input);
+        auto instance = std::make_unique<LuaRuntime>(impl.m_scene, impl.m_input, impl.m_log);
         instance->m_impl->m_context = "Entity " + attachment.entityName + " [Scripts/" + attachment.path + "]";
         instance->m_impl->m_scriptPath = attachment.path;
         if (!instance->startSource(source, "@Scripts/" + attachment.path, modulePath,
@@ -250,6 +255,7 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
     lua_newtable(state);
     lua::registerSceneBindings(state, impl.m_scene);
     lua::registerInputBindings(state, impl.m_input);
+    lua::registerLogBindings(state, impl.m_log);
     lua_setglobal(state, "sat");
 
     lua_newtable(state);

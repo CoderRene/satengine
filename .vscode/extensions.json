@@ -1,6 +1,8 @@
 {
   "recommendations": [
     "anysphere.cpptools",
-    "vadimcn.vscode-lldb"
+    "vadimcn.vscode-lldb",
+    "sumneko.lua",
+    "Kampfkarren.selene-vscode"
   ]
 }

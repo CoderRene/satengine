@@ -68,22 +68,53 @@ if(UNIX)
     target_link_libraries(SatLua PUBLIC m)
 endif()
 
-add_library(SatInput STATIC Core/src/Input.cpp)
+add_library(SatInput STATIC Core/src/Input.cpp
+    Core/include/ScriptLog.hpp)
 target_include_directories(SatInput PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Core/include")
 target_compile_features(SatInput PUBLIC cxx_std_20)
 
 add_library(SatScripting STATIC
     Core/src/LuaRuntime.cpp
     Core/src/Project.cpp
+    Core/src/LuaToolingSync.cpp
     Core/src/module/LuaRuntimeModules/LuaSceneBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaInputBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaPackageConfig.cpp
+    Core/src/ScriptLog.cpp
+    Core/src/module/LuaRuntimeModules/LuaLogBindings.hpp
+    Core/src/module/LuaRuntimeModules/LuaLogBindings.cpp
 )
 target_include_directories(SatScripting PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/src"
 )
 target_link_libraries(SatScripting PUBLIC SatScene SatInput PRIVATE SatLua)
 target_compile_features(SatScripting PUBLIC cxx_std_20)
+
+# Optional EmmyLua stub regen from // @lua metadata (not required to build/link).
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    set(SAT_LUA_DEF_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaSceneBindings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaInputBindings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaLogBindings.cpp"
+    )
+    set(SAT_LUA_DEF_OUTPUT
+        "${CMAKE_CURRENT_SOURCE_DIR}/Scripting/LuaDefs/sat.lua"
+    )
+    add_custom_target(SatLuaDefs
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/scripts/generate_lua_defs.py"
+        DEPENDS
+            "${CMAKE_SOURCE_DIR}/scripts/generate_lua_defs.py"
+            ${SAT_LUA_DEF_SOURCES}
+        BYPRODUCTS "${SAT_LUA_DEF_OUTPUT}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Generating EmmyLua stubs (Engine/Scripting/LuaDefs/sat.lua)"
+        VERBATIM
+    )
+else()
+    message(STATUS "Python3 not found; skip SatLuaDefs stub generation target")
+endif()
 
 if(NOT SAT_BUILD_GAME_PLAYER AND NOT SAT_BUILD_EDITOR)
     return()
@@ -138,6 +169,8 @@ endif()
 add_library(SatEditor STATIC
     Core/src/RecentProjects.cpp
     Platform/src/FileDialog.cpp
+    Platform/src/OpenLuaFile.cpp
+    Platform/src/EditorLuaDefs.cpp
     Platform/src/GameBuilder.cpp
     UI/src/UiLayer.cpp
     UI/src/HierarchyPanel.cpp
@@ -150,6 +183,8 @@ add_library(SatEditor STATIC
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
+    UI/include/LuaLogPanel.hpp
+    UI/src/LuaLogPanel.cpp
 )
 target_include_directories(SatEditor PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/UI/include"
@@ -165,6 +200,8 @@ set(SAT_ENGINE_ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Assets")
 file(TO_CMAKE_PATH "${SAT_ENGINE_ASSETS_DIR}" SAT_ENGINE_ASSETS_DIR)
 set(SAT_ENGINE_SOURCE_DIR "${PROJECT_SOURCE_DIR}")
 file(TO_CMAKE_PATH "${SAT_ENGINE_SOURCE_DIR}" SAT_ENGINE_SOURCE_DIR)
+set(SAT_LUA_DEFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Scripting/LuaDefs")
+file(TO_CMAKE_PATH "${SAT_LUA_DEFS_DIR}" SAT_LUA_DEFS_DIR)
 configure_file(Core/include/EnginePaths.hpp.in generated/EnginePaths.hpp @ONLY)
 target_link_libraries(SatEditor PUBLIC SatRuntime)
-target_link_libraries(SatEditor PRIVATE d3d11 ole32 uuid)
+target_link_libraries(SatEditor PRIVATE d3d11 ole32 uuid shell32)

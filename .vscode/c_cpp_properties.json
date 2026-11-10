@@ -18,7 +18,8 @@
         "${workspaceFolder}/build/_deps/imgui-src",
         "${workspaceFolder}/build/_deps/imgui-src/backends",
         "${workspaceFolder}/build/_deps/lua-src/src",
-        "${workspaceFolder}/build/GamePlayer/SatGameScripts"
+        "${workspaceFolder}/build/GamePlayer/SatGameScripts",
+        "${workspaceFolder}/Engine/Platform/include"
       ],
       "defines": [
         "_DEBUG",

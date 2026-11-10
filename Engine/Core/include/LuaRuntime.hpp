@@ -11,6 +11,7 @@
 namespace sat {
 class Scene;
 class Input;
+class ScriptLog;
 
 // Script names are relative to Scripts/, using '/' separators (e.g. main.lua).
 struct LuaScriptSource {
@@ -23,7 +24,7 @@ struct LuaScriptSource {
 // Entity IDs are opaque positive integers; retain them instead of scene indices.
 class LuaRuntime {
 public:
-    explicit LuaRuntime(Scene& scene, const Input* input = nullptr);
+explicit LuaRuntime(Scene& scene, const Input* input = nullptr, ScriptLog* log = nullptr);
     // Borrowed input must outlive the runtime; null supplies an idle input state.
     ~LuaRuntime();
     LuaRuntime(const LuaRuntime&) = delete;

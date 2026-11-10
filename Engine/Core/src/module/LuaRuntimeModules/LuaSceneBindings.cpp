@@ -274,36 +274,67 @@ int setScriptEnabled(lua_State* state) {
 
 void registerSceneBindings(lua_State* state, Scene& scene) {
     const luaL_Reg bindings[] = {
+        // @lua fun sat.createEntity(name: string): EntityId
         {"createEntity", guarded<createEntity>},
+        // @lua fun sat.createCube(name: string): EntityId
         {"createCube", guarded<createCube>},
+        // @lua fun sat.createCamera(name: string): EntityId
         {"createCamera", guarded<createCamera>},
+        // @lua fun sat.findEntity(name: string): EntityId|nil
         {"findEntity", guarded<findEntity>},
+        // @lua fun sat.destroyEntity(entity: EntityId): boolean
         {"destroyEntity", guarded<destroyEntity>},
+        // @lua fun sat.isEntityValid(entity: EntityId): boolean
         {"isEntityValid", guarded<isEntityValid>},
+        // @lua fun sat.getName(entity: EntityId): string
         {"getName", guarded<getName>},
+        // @lua fun sat.getEntities(): EntityId[]
         {"getEntities", guarded<getEntities>},
+        // @lua fun sat.getEntityCount(): integer
         {"getEntityCount", guarded<getEntityCount>},
+        // @lua fun sat.getPosition(entity: EntityId): x: number, y: number, z: number
         {"getPosition", guarded<getPosition>},
+        // @lua fun sat.setPosition(entity: EntityId, x: number, y: number, z: number)
         {"setPosition", guarded<setPosition>},
+        // @lua fun sat.getRotation(entity: EntityId): x: number, y: number, z: number
         {"getRotation", guarded<getVector<&Transform::rotation>>},
+        // @lua fun sat.setRotation(entity: EntityId, x: number, y: number, z: number)
         {"setRotation", guarded<setVector<&Transform::rotation>>},
+        // @lua fun sat.getScale(entity: EntityId): x: number, y: number, z: number
         {"getScale", guarded<getVector<&Transform::scale>>},
+        // @lua fun sat.setScale(entity: EntityId, x: number, y: number, z: number)
         {"setScale", guarded<setVector<&Transform::scale>>},
+        // @lua fun sat.setMainCamera(entity: EntityId)
         {"setMainCamera", guarded<setMainCamera>},
+        // @lua fun sat.getMainCamera(): EntityId|nil
         {"getMainCamera", guarded<getMainCamera>},
+        // @lua fun sat.getCameraFov(entity: EntityId): number
         {"getCameraFov", guarded<getCameraFov>},
+        // @lua fun sat.setCameraFov(entity: EntityId, fov: number)
         {"setCameraFov", guarded<setCameraFov>},
+        // @lua fun sat.getCameraClipPlanes(entity: EntityId): nearClip: number, farClip: number
         {"getCameraClipPlanes", guarded<getCameraClipPlanes>},
+        // @lua fun sat.setCameraClipPlanes(entity: EntityId, nearClip: number, farClip: number)
         {"setCameraClipPlanes", guarded<setCameraClipPlanes>},
+        // @lua fun sat.getCameraClearColor(entity: EntityId): r: number, g: number, b: number, a: number
         {"getCameraClearColor", guarded<getCameraClearColor>},
+        // @lua fun sat.setCameraClearColor(entity: EntityId, r: number, g: number, b: number, a: number)
         {"setCameraClearColor", guarded<setCameraClearColor>},
+        // @lua fun sat.hasMesh(entity: EntityId): boolean
         {"hasMesh", guarded<hasComponent<&Entity::hasMesh>>},
+        // @lua fun sat.hasCamera(entity: EntityId): boolean
         {"hasCamera", guarded<hasComponent<&Entity::hasCamera>>},
+        // @lua fun sat.addMesh(entity: EntityId): boolean
         {"addMesh", guarded<addComponent<&Entity::hasMesh, &Entity::mesh>>},
+        // @lua fun sat.removeMesh(entity: EntityId): boolean
         {"removeMesh", guarded<removeComponent<&Entity::hasMesh, &Entity::mesh>>},
+        // @lua fun sat.addCamera(entity: EntityId): boolean
         {"addCamera", guarded<addComponent<&Entity::hasCamera, &Entity::camera>>},
+        // @lua fun sat.removeCamera(entity: EntityId): boolean
         {"removeCamera", guarded<removeComponent<&Entity::hasCamera, &Entity::camera>>},
+        // @lua fun sat.isScriptEnabled(entity: EntityId, path: string): boolean
         {"isScriptEnabled", guarded<isScriptEnabled>},
+        // @lua fun sat.setScriptEnabled(entity: EntityId, path: string, enabled: boolean): boolean
         {"setScriptEnabled", guarded<setScriptEnabled>},
         {nullptr, nullptr}
     };

@@ -3,3 +3,4 @@
 // Editor-only paths generated in the build directory by CMake.
 #define SAT_ENGINE_ASSETS_DIR "@SAT_ENGINE_ASSETS_DIR@"
 #define SAT_ENGINE_SOURCE_DIR "@SAT_ENGINE_SOURCE_DIR@"
+#define SAT_LUA_DEFS_DIR "@SAT_LUA_DEFS_DIR@"
