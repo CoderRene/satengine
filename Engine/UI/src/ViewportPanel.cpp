@@ -191,6 +191,8 @@ int hitTranslateGizmoAxis(
     const Mat4& projection,
     float viewWidth,
     float viewHeight) {
+    const float scale = translateGizmoScale(origin, view, projection, viewHeight);
+    if (scale <= 0.0f) { return -1; }
     constexpr float kHitPixels = 12.0f;
     const Vec3 axes[3] = {
         {1.0f, 0.0f, 0.0f},
@@ -198,17 +200,15 @@ int hitTranslateGizmoAxis(
         {0.0f, 0.0f, 1.0f},
     };
 
+    float x0 = 0.0f;
+    float y0 = 0.0f;
+    if (!projectWorldToScreen(origin, view, projection, viewWidth, viewHeight, x0, y0)) { return -1; }
     int bestAxis = -1;
     float bestDist = kHitPixels;
     for (int i = 0; i < 3; ++i) {
-        float x0 = 0.0f;
-        float y0 = 0.0f;
         float x1 = 0.0f;
         float y1 = 0.0f;
-        if (!projectWorldToScreen(origin, view, projection, viewWidth, viewHeight, x0, y0)) {
-            continue;
-        }
-        const Vec3 tip = origin + axes[i] * kTranslateGizmoAxisLength;
+        const Vec3 tip = origin + axes[i] * (kTranslateGizmoAxisLength * scale);
         if (!projectWorldToScreen(tip, view, projection, viewWidth, viewHeight, x1, y1)) {
             continue;
         }

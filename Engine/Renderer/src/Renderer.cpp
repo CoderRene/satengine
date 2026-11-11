@@ -672,7 +672,11 @@ void Renderer::renderOffscreenView(
 
     if (drawList.drawEditorOverlay && drawList.showTranslateGizmo &&
         m_impl->gizmoPass.ensure(m_impl->device)) {
-        m_impl->gizmoPass.draw(m_impl->context, viewProj, drawList.translateGizmoOrigin);
+        const float scale = translateGizmoScale(drawList.translateGizmoOrigin, viewMat, projMat,
+            static_cast<float>(view.height));
+        if (scale > 0.0f) {
+            m_impl->gizmoPass.draw(m_impl->context, viewProj, drawList.translateGizmoOrigin, scale);
+        }
     }
 }
 

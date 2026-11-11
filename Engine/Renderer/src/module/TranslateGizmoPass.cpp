@@ -323,12 +323,18 @@ bool TranslateGizmoPass::ensure(ID3D11Device* device) {
 void TranslateGizmoPass::draw(
     ID3D11DeviceContext* context,
     const Mat4& viewProj,
-    const Vec3& origin) const {
-    if (m_impl == nullptr || !m_impl->ready || context == nullptr) {
+    const Vec3& origin,
+    float worldScale) const {
+    if (m_impl == nullptr || !m_impl->ready || context == nullptr ||
+        !std::isfinite(worldScale) || worldScale <= 0.0f) {
         return;
     }
 
-    const Mat4 translated = viewProj * translationMatrix(origin);
+    Mat4 translated = viewProj * translationMatrix(origin);
+    // Post-multiply uniform scale without rebuilding geometry or moving origin.
+    for (int column = 0; column < 3; ++column) {
+        for (int row = 0; row < 4; ++row) { translated.m[column * 4 + row] *= worldScale; }
+    }
 
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(m_impl->frameCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {

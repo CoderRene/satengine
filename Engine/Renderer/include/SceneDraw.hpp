@@ -7,6 +7,13 @@
 namespace sat {
 
 inline constexpr float kTranslateGizmoAxisLength = 1.25f;
+inline constexpr float kTranslateGizmoAxisPixels = 96.0f;
+
+// Uniform world scale for the immutable gizmo mesh. Uses viewport-local pixels,
+// column-major LH view/projection and D3D clip Z [0,W]. Returns zero for invalid
+// or depth-clipped origins. Shared by rendering and picking; ignores entity scale.
+[[nodiscard]] float translateGizmoScale(const Vec3& origin, const Mat4& view,
+    const Mat4& projection, float viewportHeight);
 inline constexpr float kCameraPickSize = 0.7f;
 
 enum class MeshPrimitive : unsigned char {

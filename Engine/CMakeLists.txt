@@ -14,6 +14,7 @@ add_library(SatScene STATIC
     Core/src/Scene.cpp
     Core/src/SceneFile.cpp
     Renderer/src/SceneRenderData.cpp
+    Renderer/src/SceneDraw.cpp
 )
 target_include_directories(SatScene PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/include"

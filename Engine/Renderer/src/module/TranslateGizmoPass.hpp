@@ -20,7 +20,8 @@ public:
     void draw(
         ID3D11DeviceContext* context,
         const Mat4& viewProj,
-        const Vec3& origin) const;
+        const Vec3& origin,
+        float worldScale) const;
 
 private:
     struct Impl;
