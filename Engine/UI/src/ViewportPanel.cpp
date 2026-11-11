@@ -5,6 +5,7 @@
 #include "Renderer.hpp"
 #include "Scene.hpp"
 #include "SceneDraw.hpp"
+#include "TransformGizmo.hpp"
 
 #include <imgui.h>
 
@@ -111,25 +112,6 @@ Mat4 cameraPickWorld(const Vec3& position) {
         scalingMatrix(Vec3{kCameraPickSize, kCameraPickSize, kCameraPickSize});
 }
 
-float distancePointToSegment2D(
-    float px, float py, float ax, float ay, float bx, float by) {
-    const float abx = bx - ax;
-    const float aby = by - ay;
-    const float apx = px - ax;
-    const float apy = py - ay;
-    const float abLenSq = abx * abx + aby * aby;
-    float t = 0.0f;
-    if (abLenSq > 0.000001f) {
-        t = (apx * abx + apy * aby) / abLenSq;
-        t = std::clamp(t, 0.0f, 1.0f);
-    }
-    const float cx = ax + abx * t;
-    const float cy = ay + aby * t;
-    const float dx = px - cx;
-    const float dy = py - cy;
-    return std::sqrt(dx * dx + dy * dy);
-}
-
 bool intersectRayBounds(const Ray& worldRay, const Mat4& world, float& outT,
     const Vec3& minimum = {-0.5f, -0.5f, -0.5f}, const Vec3& maximum = {0.5f, 0.5f, 0.5f}) {
     const Mat4 invWorld = inverse(world);
@@ -167,58 +149,6 @@ bool intersectRayBounds(const Ray& worldRay, const Mat4& world, float& outT,
     }
     outT = tMin;
     return true;
-}
-
-bool intersectRayPlane(
-    const Ray& ray, const Vec3& planePoint, const Vec3& planeNormal, Vec3& outHit) {
-    const float denom = dot(planeNormal, ray.direction);
-    if (std::fabs(denom) < 0.000001f) {
-        return false;
-    }
-    const float t = dot(planePoint - ray.origin, planeNormal) / denom;
-    if (t < 0.0f) {
-        return false;
-    }
-    outHit = ray.origin + ray.direction * t;
-    return true;
-}
-
-int hitTranslateGizmoAxis(
-    float mouseX,
-    float mouseY,
-    const Vec3& origin,
-    const Mat4& view,
-    const Mat4& projection,
-    float viewWidth,
-    float viewHeight) {
-    const float scale = translateGizmoScale(origin, view, projection, viewHeight);
-    if (scale <= 0.0f) { return -1; }
-    constexpr float kHitPixels = 12.0f;
-    const Vec3 axes[3] = {
-        {1.0f, 0.0f, 0.0f},
-        {0.0f, 1.0f, 0.0f},
-        {0.0f, 0.0f, 1.0f},
-    };
-
-    float x0 = 0.0f;
-    float y0 = 0.0f;
-    if (!projectWorldToScreen(origin, view, projection, viewWidth, viewHeight, x0, y0)) { return -1; }
-    int bestAxis = -1;
-    float bestDist = kHitPixels;
-    for (int i = 0; i < 3; ++i) {
-        float x1 = 0.0f;
-        float y1 = 0.0f;
-        const Vec3 tip = origin + axes[i] * (kTranslateGizmoAxisLength * scale);
-        if (!projectWorldToScreen(tip, view, projection, viewWidth, viewHeight, x1, y1)) {
-            continue;
-        }
-        const float dist = distancePointToSegment2D(mouseX, mouseY, x0, y0, x1, y1);
-        if (dist < bestDist) {
-            bestDist = dist;
-            bestAxis = i;
-        }
-    }
-    return bestAxis;
 }
 
 void drawSceneOrientationGizmo(
@@ -305,6 +235,7 @@ struct ViewportPanel::Impl {
     Scene* scene = nullptr;
     Renderer* renderer = nullptr;
     bool selectionActivated = false;
+    TransformTool tool = TransformTool::Move;
     int gameViewWidth = 0;
     int gameViewHeight = 0;
     int sceneViewWidth = 0;
@@ -335,19 +266,60 @@ struct ViewportPanel::Impl {
         }
     } editorCamera;
 
-    struct GizmoDrag {
-        bool active = false;
-        int entityIndex = -1;
-        int axis = -1;
-        DVec3 startPosition{};
-        float startAxisOffset = 0.0f;
-    } gizmoDrag;
+    TransformGizmoDrag gizmoDrag;
+    TransformSpace moveSpace = TransformSpace::Global;
+    TransformSpace rotateSpace = TransformSpace::Local;
+    GizmoHit hoveredHandle;
+    EntityId hoveredOwner = kInvalidEntityId;
+
+    TransformSpace space() const {
+        return tool == TransformTool::Move ? moveSpace : tool == TransformTool::Rotate ? rotateSpace : TransformSpace::Local;
+    }
+    TransformGizmoInstance gizmo(const Entity& entity) const {
+        TransformGizmoInstance result;
+        result.tool = tool;
+        result.origin = toVec3(entity.transform.position);
+        result.basis = transformGizmoBasis(tool, space(), entity.transform.rotation);
+        if (gizmoDrag.active() && gizmoDrag.owner() == entity.id()) {
+            result.highlightedHandle = gizmoDrag.handle(); result.dragging = true;
+        } else if (hoveredOwner == entity.id()) { result.highlightedHandle = hoveredHandle.handle; }
+        return result;
+    }
+    void cancelDrag() { (void)gizmoDrag.cancel(*scene); }
 
     void drawScenePanel(int& selectedIndex, bool playMode) {
         if (ImGui::Begin(
                 "Scene",
                 nullptr,
                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+            const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().AppFocusLost;
+            if (!focused) { editorCamera.looking = false; editorCamera.draggingPan = false; }
+            const Entity* selected = selectedIndex >= 0 ? scene->entity(static_cast<std::size_t>(selectedIndex)) : nullptr;
+            if (gizmoDrag.active() && (playMode || !selected || selected->id() != gizmoDrag.owner() ||
+                !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || ImGui::GetIO().AppFocusLost)) { cancelDrag(); }
+            hoveredHandle = {}; hoveredOwner = kInvalidEntityId;
+            ImGui::BeginDisabled(playMode || gizmoDrag.active());
+            const TransformTool tools[3] = {TransformTool::Move, TransformTool::Rotate, TransformTool::Scale};
+            const char* labels[3] = {"Move (W)", "Rotate (R)", "Scale (T)"};
+            for (int i = 0; i < 3; ++i) {
+                if (i != 0) { ImGui::SameLine(); }
+                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(tool == tools[i] ? ImGuiCol_ButtonActive : ImGuiCol_Button));
+                if (ImGui::Button(labels[i])) { tool = tools[i]; }
+                ImGui::PopStyleColor();
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100);
+            int coordinateSpace = space() == TransformSpace::Global ? 0 : 1;
+            ImGui::BeginDisabled(tool == TransformTool::Scale);
+            if (ImGui::Combo("##TransformSpace", &coordinateSpace, "Global\0Local\0")) {
+                auto& preference = tool == TransformTool::Move ? moveSpace : rotateSpace;
+                preference = coordinateSpace == 0 ? TransformSpace::Global : TransformSpace::Local;
+            }
+            ImGui::EndDisabled();
+            if (tool == TransformTool::Scale && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("Scale uses local axes; the center handle scales uniformly.");
+            }
+            ImGui::EndDisabled();
             const ImVec2 sceneSize = ImGui::GetContentRegionAvail();
             const int sceneWidth = static_cast<int>(sceneSize.x);
             const int sceneHeight = static_cast<int>(sceneSize.y);
@@ -380,10 +352,10 @@ struct ViewportPanel::Impl {
                         cam.yawDegrees,
                         cam.pitchDegrees);
 
-                    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    if (hovered && !gizmoDrag.active() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                         cam.looking = true;
                     }
-                    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+                    if (hovered && !gizmoDrag.active() && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
                         cam.draggingPan = true;
                     }
                     if (!ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
@@ -414,11 +386,18 @@ struct ViewportPanel::Impl {
                             up * (io.MouseDelta.y * panScale);
                     }
 
-                    if (hovered && io.MouseWheel != 0.0f) {
+                    if (hovered && !gizmoDrag.active() && io.MouseWheel != 0.0f) {
                         cam.position = cam.position + forward * (io.MouseWheel * cam.moveSpeed * 0.25f);
                     }
 
-                    if (hovered) {
+                    if (hovered && !playMode && !cam.looking && !cam.draggingPan && !gizmoDrag.active() && !io.WantTextInput &&
+                        !io.KeyCtrl && !io.KeyAlt && !io.KeySuper && !io.KeyShift &&
+                        ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive()) {
+                        if (ImGui::IsKeyPressed(ImGuiKey_W, false)) { tool = TransformTool::Move; }
+                        if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { tool = TransformTool::Rotate; }
+                        if (ImGui::IsKeyPressed(ImGuiKey_T, false)) { tool = TransformTool::Scale; }
+                    }
+                    if (hovered && cam.looking && !gizmoDrag.active() && !io.WantTextInput) {
                         Vec3 move{};
                         if (ImGui::IsKeyDown(ImGuiKey_W)) {
                             move = move + forward;
@@ -459,90 +438,26 @@ struct ViewportPanel::Impl {
                     const Ray mouseRay = unprojectRay(mouseX, mouseY, viewW, viewH, view, projection);
                     const bool cameraBusy = cam.looking || cam.draggingPan;
 
-                    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                        gizmoDrag.active = false;
+                    const bool sceneFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.AppFocusLost;
+                    const Entity* selectedEntity = selectedIndex >= 0 ? scene->entity(static_cast<std::size_t>(selectedIndex)) : nullptr;
+                    if (gizmoDrag.active()) {
+                        if (playMode || !sceneFocused || !selectedEntity || selectedEntity->id() != gizmoDrag.owner() ||
+                            !gizmoDrag.viewportMatches(viewW, viewH) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                            cancelDrag();
+                        } else {
+                            (void)gizmoDrag.update(*scene, mouseX, mouseY);
+                            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) { gizmoDrag.finish(); }
+                        }
                     }
-
-                    if (!playMode && !cameraBusy) {
-                        auto& drag = gizmoDrag;
-                        if (drag.active && drag.entityIndex >= 0 && drag.axis >= 0) {
-                            Entity* entity =
-                                scene->entity(static_cast<std::size_t>(drag.entityIndex));
-                            if (entity != nullptr) {
-                                const Vec3 axes[3] = {
-                                    {1.0f, 0.0f, 0.0f},
-                                    {0.0f, 1.0f, 0.0f},
-                                    {0.0f, 0.0f, 1.0f},
-                                };
-                                const Vec3 axis = axes[drag.axis];
-                                Vec3 planeNormal = cross(axis, cross(forward, axis));
-                                if (length(planeNormal) < 0.0001f) {
-                                    planeNormal = cross(axis, right);
-                                }
-                                planeNormal = normalize(planeNormal);
-                                const Vec3 startPos = toVec3(drag.startPosition);
-                                Vec3 hit{};
-                                if (intersectRayPlane(mouseRay, startPos, planeNormal, hit)) {
-                                    const float offset = dot(hit - startPos, axis);
-                                    const double delta =
-                                        static_cast<double>(offset - drag.startAxisOffset);
-                                    const DVec3 position = drag.startPosition +
-                                        DVec3{
-                                            static_cast<double>(axis.x) * delta,
-                                            static_cast<double>(axis.y) * delta,
-                                            static_cast<double>(axis.z) * delta,
-                                        };
-                                    if (position.x != entity->transform.position.x ||
-                                        position.y != entity->transform.position.y ||
-                                        position.z != entity->transform.position.z) {
-                                        entity->transform.position = position;
-                                        scene->markEdited();
-                                    }
-                                }
-                            }
-                        } else if (leftClicked) {
-                            int gizmoAxis = -1;
-                            if (selectedIndex >= 0) {
-                                Entity* selectedEntity =
-                                    scene->entity(static_cast<std::size_t>(selectedIndex));
-                                if (selectedEntity != nullptr) {
-                                    gizmoAxis = hitTranslateGizmoAxis(
-                                        mouseX,
-                                        mouseY,
-                                        toVec3(selectedEntity->transform.position),
-                                        view,
-                                        projection,
-                                        viewW,
-                                        viewH);
-                                }
-                            }
-
-                            if (gizmoAxis >= 0 && selectedIndex >= 0) {
-                                Entity* entity =
-                                    scene->entity(static_cast<std::size_t>(selectedIndex));
-                                if (entity != nullptr) {
-                                    const Vec3 axes[3] = {
-                                        {1.0f, 0.0f, 0.0f},
-                                        {0.0f, 1.0f, 0.0f},
-                                        {0.0f, 0.0f, 1.0f},
-                                    };
-                                    const Vec3 axis = axes[gizmoAxis];
-                                    Vec3 planeNormal = cross(axis, cross(forward, axis));
-                                    if (length(planeNormal) < 0.0001f) {
-                                        planeNormal = cross(axis, right);
-                                    }
-                                    planeNormal = normalize(planeNormal);
-                                    Vec3 hit{};
-                                    drag.active = true;
-                                    drag.entityIndex = selectedIndex;
-                                    drag.axis = gizmoAxis;
-                                    drag.startPosition = entity->transform.position;
-                                    drag.startAxisOffset = 0.0f;
-                                    const Vec3 startPos = toVec3(drag.startPosition);
-                                    if (intersectRayPlane(mouseRay, startPos, planeNormal, hit)) {
-                                        drag.startAxisOffset = dot(hit - startPos, axis);
-                                    }
-                                }
+                    if (!playMode && !cameraBusy && sceneFocused) {
+                        if (selectedEntity && hovered) {
+                            hoveredOwner = selectedEntity->id();
+                            hoveredHandle = pickTransformGizmo(gizmo(*selectedEntity), view, projection, viewW, viewH, mouseX, mouseY);
+                        }
+                        if (!gizmoDrag.active() && leftClicked) {
+                            if (selectedEntity && hoveredHandle.handle >= 0) {
+                                (void)gizmoDrag.begin(selectedEntity->id(), selectedEntity->transform, tool, space(), hoveredHandle,
+                                    view, projection, viewW, viewH, mouseX, mouseY);
                             } else {
                                 int bestEntity = -1;
                                 float bestT = 1.0e30f;
@@ -575,9 +490,13 @@ struct ViewportPanel::Impl {
                         }
                     }
                 } else {
+                    cancelDrag();
+                    editorCamera.looking = false; editorCamera.draggingPan = false;
                     ImGui::TextUnformatted("Scene view unavailable");
                 }
             } else {
+                cancelDrag();
+                editorCamera.looking = false; editorCamera.draggingPan = false;
                 ImGui::TextUnformatted("Scene view unavailable");
             }
         } else {
@@ -585,7 +504,7 @@ struct ViewportPanel::Impl {
             sceneViewHeight = 0;
             editorCamera.looking = false;
             editorCamera.draggingPan = false;
-            gizmoDrag.active = false;
+            cancelDrag();
         }
         ImGui::End();
     }
@@ -645,10 +564,12 @@ void ViewportPanel::onImGuiRender(int& selectedIndex, bool playMode, bool focusG
     m_impl->drawGamePanel(focusGameView);
 }
 
+TransformGizmoInstance ViewportPanel::gizmo(const Entity& entity) const { return m_impl->gizmo(entity); }
+
 bool ViewportPanel::selectionActivated() const { return m_impl->selectionActivated; }
 
 void ViewportPanel::resetInteraction() {
-    m_impl->gizmoDrag.active = false;
+    m_impl->cancelDrag();
     m_impl->editorCamera.looking = false;
     m_impl->editorCamera.draggingPan = false;
 }

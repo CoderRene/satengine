@@ -1,10 +1,13 @@
 #pragma once
 
+#include "SceneDraw.hpp"
+
 #include <memory>
 
 namespace sat {
 
 class Scene;
+struct Entity;
 class Renderer;
 struct GameViewCamera;
 
@@ -21,6 +24,7 @@ public:
     void onImGuiRender(int& selectedIndex, bool playMode, bool focusGameView);
 
     void resetInteraction();
+    [[nodiscard]] TransformGizmoInstance gizmo(const Entity& entity) const;
     [[nodiscard]] bool selectionActivated() const;
 
     [[nodiscard]] int sceneViewWidth() const;

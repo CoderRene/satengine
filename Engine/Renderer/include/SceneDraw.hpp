@@ -6,6 +6,17 @@
 
 namespace sat {
 
+enum class TransformTool { Move, Rotate, Scale };
+enum class TransformSpace { Global, Local };
+
+struct TransformGizmoInstance {
+    TransformTool tool = TransformTool::Move;
+    Vec3 origin{};
+    Mat4 basis{}; // Rotation only, never includes entity scale or translation.
+    int highlightedHandle = -1; // X/Y/Z = 0/1/2; uniform scale = 3.
+    bool dragging = false;
+};
+
 inline constexpr float kTranslateGizmoAxisLength = 1.25f;
 inline constexpr float kTranslateGizmoAxisPixels = 96.0f;
 
@@ -48,8 +59,8 @@ struct SceneDrawList {
     // Editor previews can show a reference grid without enabling gizmos/frustums.
     bool drawGrid = false;
     bool drawEditorOverlay = false;
-    bool showTranslateGizmo = false;
-    Vec3 translateGizmoOrigin{};
+    bool showTransformGizmo = false;
+    TransformGizmoInstance gizmo;
 };
 
 } // namespace sat

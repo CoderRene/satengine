@@ -15,6 +15,7 @@ add_library(SatScene STATIC
     Core/src/SceneFile.cpp
     Renderer/src/SceneRenderData.cpp
     Renderer/src/SceneDraw.cpp
+    Renderer/src/TransformGizmo.cpp
 )
 target_include_directories(SatScene PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/include"
@@ -173,7 +174,7 @@ add_library(SatRuntime STATIC
     Renderer/src/module/GpuAssetCache.cpp
     Renderer/src/module/SelectionOutlinePass.cpp
     Renderer/src/module/CameraFrustumPass.cpp
-    Renderer/src/module/TranslateGizmoPass.cpp
+    Renderer/src/module/TransformGizmoPass.cpp
 )
 target_include_directories(SatRuntime PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb"

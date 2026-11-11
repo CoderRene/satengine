@@ -1,26 +1,26 @@
 #pragma once
 
-#include "Math.hpp"
+#include "SceneDraw.hpp"
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
 
 namespace sat {
 
-class TranslateGizmoPass {
+class TransformGizmoPass {
 public:
-    TranslateGizmoPass() = default;
-    ~TranslateGizmoPass();
+    TransformGizmoPass() = default;
+    ~TransformGizmoPass();
 
-    TranslateGizmoPass(const TranslateGizmoPass&) = delete;
-    TranslateGizmoPass& operator=(const TranslateGizmoPass&) = delete;
+    TransformGizmoPass(const TransformGizmoPass&) = delete;
+    TransformGizmoPass& operator=(const TransformGizmoPass&) = delete;
 
     [[nodiscard]] bool ensure(ID3D11Device* device);
     void release();
     void draw(
         ID3D11DeviceContext* context,
         const Mat4& viewProj,
-        const Vec3& origin,
+        const TransformGizmoInstance& gizmo,
         float worldScale) const;
 
 private:

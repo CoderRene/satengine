@@ -124,6 +124,7 @@ struct UiLayer::Impl {
         if (playMode || !project.isOpen()) {
             return;
         }
+        if (viewport) { viewport->resetInteraction(); }
         if (!saveScene()) {
             return;
         }
@@ -162,6 +163,7 @@ struct UiLayer::Impl {
             return false;
         }
         stopPlay();
+        if (viewport) { viewport->resetInteraction(); }
         if (!saveScene()) {
             return false;
         }
@@ -283,6 +285,7 @@ UiLayer::UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& proj
     m_impl->content->setSelectionHandler([this](std::string path) {
         if (m_impl->assetImports->active() && m_impl->assetImports->path() == path) { return; }
         m_impl->assetImports->request([this, path = std::move(path)] {
+            m_impl->viewport->resetInteraction();
             m_impl->hierarchy->setSelectedIndex(-1);
             if (isMeshAssetPath(path) || isTextureAssetPath(path)) {
                 m_impl->assetImports->select(path);
@@ -327,6 +330,7 @@ UiLayer::UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& proj
 }
 
 UiLayer::~UiLayer() {
+    if (m_impl->viewport) { m_impl->viewport->resetInteraction(); }
     m_impl->stopPlay();
     if (!m_impl->saveScene()) { std::cerr << m_impl->sceneError << '\n'; }
     if (m_impl->dx11Ready) {
@@ -355,6 +359,13 @@ void UiLayer::beginFrame() {
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    const bool canSaveScene = m_impl->project.isOpen() && !m_impl->playMode;
+    const ImGuiIO& io = ImGui::GetIO();
+    if (canSaveScene && io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper &&
+        ImGui::IsKeyPressed(ImGuiKey_S, false)) {
+        const bool saved = m_impl->saveScene();
+        (void)saved; // Failure details appear in Scene Errors.
+    }
     if (m_impl->playMode && !m_impl->scripts.update(ImGui::GetIO().DeltaTime)) {
         m_impl->stopPlay();
     }
@@ -396,7 +407,7 @@ void UiLayer::beginFrame() {
                     m_impl->openProject(folder);
                 }
             }
-            if (ImGui::MenuItem("Save Scene", nullptr, false, m_impl->project.isOpen() && !m_impl->playMode)) {
+            if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, canSaveScene)) {
                 const bool saved = m_impl->saveScene();
                 (void)saved; // Failure details appear in Scene Errors.
             }
@@ -462,7 +473,7 @@ void UiLayer::beginFrame() {
             ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f), "* Unsaved changes");
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("%s", m_impl->project.isOpen()
-                    ? "Scene edits have not been saved. Use File > Save Scene."
+                    ? "Scene edits have not been saved. Use Ctrl+S or File > Save Scene."
                     : "Open or create a project to save your scene.");
             }
         }
@@ -622,6 +633,7 @@ void UiLayer::beginFrame() {
             const EntityId id = entity ? entity->id() : kInvalidEntityId;
             m_impl->hierarchy->setSelectedIndex(previous);
             m_impl->assetImports->request([this, id] {
+                m_impl->viewport->resetInteraction();
                 m_impl->assetImports->clear(); m_impl->content->setSelectedAsset({});
                 const auto index = m_impl->scene.entityIndex(id);
                 m_impl->hierarchy->setSelectedIndex(index ? static_cast<int>(*index) : -1);
@@ -639,6 +651,7 @@ void UiLayer::beginFrame() {
             const Entity* entity = selected >= 0 ? m_impl->scene.entity(static_cast<std::size_t>(selected)) : nullptr;
             const EntityId id = entity ? entity->id() : kInvalidEntityId;
             m_impl->assetImports->request([this, id] {
+                m_impl->viewport->resetInteraction();
                 m_impl->assetImports->clear(); m_impl->content->setSelectedAsset({});
                 const auto index = m_impl->scene.entityIndex(id);
                 m_impl->hierarchy->setSelectedIndex(index ? static_cast<int>(*index) : -1);
@@ -683,6 +696,7 @@ void UiLayer::beginFrame() {
         }
         if (ImGui::Button("Create", ImVec2(120.0f, 0.0f))) {
             m_impl->stopPlay();
+            if (m_impl->viewport) { m_impl->viewport->resetInteraction(); }
             Project created;
             if (m_impl->saveScene() && created.create(
                     m_impl->newProjectParent, std::string(m_impl->newProjectName))) {
@@ -796,8 +810,8 @@ void UiLayer::endFrame() {
     if (selectedEntity >= 0) {
         const Entity* selected = m_impl->scene.entity(static_cast<std::size_t>(selectedEntity));
         if (selected != nullptr) {
-            sceneDraw.showTranslateGizmo = true;
-            sceneDraw.translateGizmoOrigin = toVec3(selected->transform.position);
+            sceneDraw.showTransformGizmo = true;
+            sceneDraw.gizmo = m_impl->viewport->gizmo(*selected);
         }
     }
 

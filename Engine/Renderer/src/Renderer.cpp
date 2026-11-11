@@ -4,7 +4,7 @@
 #include "module/CameraFrustumPass.hpp"
 #include "module/MeshPass.hpp"
 #include "module/SelectionOutlinePass.hpp"
-#include "module/TranslateGizmoPass.hpp"
+#include "module/TransformGizmoPass.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -76,7 +76,7 @@ struct Renderer::Impl {
     MeshPass meshPass;
     SelectionOutlinePass outlinePass;
     CameraFrustumPass frustumPass;
-    TranslateGizmoPass gizmoPass;
+    TransformGizmoPass gizmoPass;
 };
 
 namespace {
@@ -670,12 +670,12 @@ void Renderer::renderOffscreenView(
             m_impl->context, viewProj, drawList.frustums, drawList.frustumCount);
     }
 
-    if (drawList.drawEditorOverlay && drawList.showTranslateGizmo &&
+    if (drawList.drawEditorOverlay && drawList.showTransformGizmo &&
         m_impl->gizmoPass.ensure(m_impl->device)) {
-        const float scale = translateGizmoScale(drawList.translateGizmoOrigin, viewMat, projMat,
+        const float scale = translateGizmoScale(drawList.gizmo.origin, viewMat, projMat,
             static_cast<float>(view.height));
         if (scale > 0.0f) {
-            m_impl->gizmoPass.draw(m_impl->context, viewProj, drawList.translateGizmoOrigin, scale);
+            m_impl->gizmoPass.draw(m_impl->context, viewProj, drawList.gizmo, scale);
         }
     }
 }

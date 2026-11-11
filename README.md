@@ -13,7 +13,7 @@ This repo is an early personal project, expect incomplete systems, rough edges, 
 SatEngine is **not production-ready**. Right now it is closer to a sandbox for learning and iterating on engine/editor pieces:
 
 - Window / app loop (GLFW)
-- D3D11 renderer with a few editor-oriented passes (meshes, selection outline, translate gizmo, camera frustum)
+- D3D11 renderer with a few editor-oriented passes (meshes, selection outline, transform gizmos, camera frustum)
 - Basic scene / project handling
 - ImGui editor panels (hierarchy, inspector, content)
 
@@ -133,3 +133,6 @@ minimize/restore, close, and the editor's scene/game views and panels.
 Static OBJ meshes and PNG/JPEG textures are supported in Mesh components through
 Inspector and Lua, including standalone archives. See [Asset loading](docs/AssetLoading.md)
 and the `Examples/AssetLoading` project.
+
+Scene transform tools use **W** (Move), **R** (Rotate), and **T** (Scale), with
+Local/Global axes and constant screen-size handles. See [Scene transforms](docs/SceneTransforms.md).
