@@ -18,3 +18,10 @@ function onUpdate(deltaSeconds) end
 --- Optional. Called once when the runtime stops or the owner is destroyed.
 --- When the owner is already gone, self.entity is invalid; use sat.isEntityValid.
 function onStop() end
+
+--- Optional. Receives queued messages before onUpdate at the next update boundary.
+--- Sender may have been destroyed; check sat.isEntityValid before using it.
+---@param sender EntityId
+---@param message string
+---@param payload nil|boolean|number|string
+function onMessage(sender, message, payload) end

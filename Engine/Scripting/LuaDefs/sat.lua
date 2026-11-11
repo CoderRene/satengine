@@ -37,6 +37,27 @@ function SatInput.mouseReleased(button) end
 ---@return number y
 function SatInput.cursorPosition() end
 
+---@class SatTime
+local SatTime = {}
+
+---@return number
+function SatTime.deltaSeconds() end
+
+---@return number
+function SatTime.unscaledDeltaSeconds() end
+
+---@return number
+function SatTime.elapsedSeconds() end
+
+---@return number
+function SatTime.unscaledElapsedSeconds() end
+
+---@return number
+function SatTime.timeScale() end
+
+---@param scale number
+function SatTime.setTimeScale(scale) end
+
 ---@class SatKey
 ---@field Space integer
 ---@field Apostrophe integer
@@ -171,12 +192,16 @@ function SatInput.cursorPosition() end
 
 ---@class sat
 ---@field input SatInput
+---@field time SatTime
 ---@field Key SatKey
 ---@field MouseButton SatMouseButton
 sat = {}
 
 ---@type SatInput
 sat.input = {}
+
+---@type SatTime
+sat.time = {}
 
 ---@type SatKey
 sat.Key = {}
@@ -199,6 +224,10 @@ function sat.createCamera(name) end
 ---@param name string
 ---@return EntityId|nil
 function sat.findEntity(name) end
+
+---@param name string
+---@return EntityId[]
+function sat.findEntities(name) end
 
 ---@param entity EntityId
 ---@return boolean
@@ -326,6 +355,13 @@ function sat.isScriptEnabled(entity, path) end
 ---@param enabled boolean
 ---@return boolean
 function sat.setScriptEnabled(entity, path, enabled) end
+
+---@param entity EntityId
+---@param path string
+---@param message string
+---@param payload nil|boolean|number|string
+---@return boolean
+function sat.sendMessage(entity, path, message, payload) end
 
 ---@param ... any
 function sat.log(...) end

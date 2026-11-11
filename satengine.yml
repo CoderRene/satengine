@@ -13,3 +13,5 @@ globals:
     any: true
   onStop:
     any: true
+  onMessage:
+    any: true

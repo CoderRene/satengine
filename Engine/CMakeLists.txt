@@ -89,6 +89,8 @@ add_library(SatScripting STATIC
     Core/src/LuaToolingSync.cpp
     Core/src/module/LuaRuntimeModules/LuaSceneBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaInputBindings.cpp
+    Core/src/module/LuaRuntimeModules/LuaTimeBindings.cpp
+    Core/src/module/LuaRuntimeModules/LuaMessageBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaPackageConfig.cpp
     Core/src/ScriptLog.cpp
     Core/src/module/LuaRuntimeModules/LuaLogBindings.hpp
@@ -106,6 +108,8 @@ if(Python3_Interpreter_FOUND)
     set(SAT_LUA_DEF_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaSceneBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaInputBindings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaTimeBindings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaMessageBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaLogBindings.cpp"
     )
     set(SAT_LUA_DEF_OUTPUT

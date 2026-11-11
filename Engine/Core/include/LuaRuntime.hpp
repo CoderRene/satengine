@@ -45,6 +45,10 @@ explicit LuaRuntime(Scene& scene, const Input* input = nullptr, ScriptLog* log =
     [[nodiscard]] bool start(std::span<const LuaScriptSource> scripts);
     // Destroyed owners stop at callback boundaries, before any further updates.
     // Their onStop runs once with an invalid self.entity; use isEntityValid in Lua.
+    // Queued onMessage callbacks run before onUpdate; messages sent during
+    // delivery or updates wait until the following update.
+    // Input delta is unscaled seconds. sat.time advances once per update;
+    // onUpdate receives scaled seconds. Play resets elapsed time and scale.
     [[nodiscard]] bool update(float deltaSeconds);
     // Calls optional onStop() once after successful startup, then releases the VM.
     // Preserves the first failure. Repeated calls are harmless.

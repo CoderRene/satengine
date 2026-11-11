@@ -21,6 +21,8 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 option(SAT_BUILD_GAME_PLAYER "Build the standalone game player" ON)
 option(SAT_BUILD_EDITOR "Build the editor shell" ON)
+# Tests are opt-in and never part of the normal editor/game build.
+option(BUILD_TESTING "Build engine tests" OFF)
 include(CTest)
 
 if((SAT_BUILD_GAME_PLAYER OR SAT_BUILD_EDITOR) AND NOT WIN32)

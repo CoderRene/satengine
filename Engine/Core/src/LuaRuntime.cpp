@@ -4,6 +4,8 @@
 #include "module/LuaRuntimeModules/LuaPackageConfig.hpp"
 #include "module/LuaRuntimeModules/LuaSceneBindings.hpp"
 #include "module/LuaRuntimeModules/LuaLogBindings.hpp"
+#include "module/LuaRuntimeModules/LuaTimeBindings.hpp"
+#include "module/LuaRuntimeModules/LuaMessageBindings.hpp"
 
 #include "ScriptLog.hpp"
 #include "Scene.hpp"
@@ -15,6 +17,7 @@
 #include <cmath>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -55,9 +58,63 @@ struct LuaRuntime::Impl {
     std::string m_context;
     std::vector<std::unique_ptr<LuaRuntime>> m_instances;
     std::string m_scriptPath;
+    lua::TimeState m_time;
+    lua::TimeState* m_sharedTime = &m_time;
+    lua::MessageBus m_messages;
+    lua::MessageBus* m_sharedMessages = &m_messages;
+    std::size_t m_targetIndex = 0;
+
+    bool enabled() const {
+        const Entity* owner = m_scene.entityById(m_ownerId);
+        if (owner == nullptr) {
+            return false;
+        }
+        return std::any_of(owner->scripts.begin(), owner->scripts.end(),
+            [&](const ScriptComponent& script) { return script.path == m_scriptPath && script.enabled; });
+    }
+
+    bool deliverMessages() {
+        auto& bus = m_messages;
+        for (const auto& message : bus.m_delivery) {
+            auto* target = bus.m_targets[message.m_targetIndex].m_instance;
+            if (target == nullptr || !target->running() || !target->m_impl->enabled()) {
+                continue;
+            }
+            auto& child = *target->m_impl;
+            lua_getglobal(child.m_state, "onMessage");
+            if (lua_isnil(child.m_state, -1)) {
+                lua_pop(child.m_state, 1);
+                continue;
+            }
+            if (!lua_isfunction(child.m_state, -1)) {
+                lua_pop(child.m_state, 1);
+                child.fail("onMessage must be a function or nil");
+                return fail(child.m_error);
+            }
+            lua_pushinteger(child.m_state, static_cast<lua_Integer>(message.m_sender));
+            lua_pushlstring(child.m_state, message.m_name.data(), message.m_name.size());
+            lua::pushMessagePayload(child.m_state, message.m_payload);
+            if (!child.call(3)) {
+                return fail(child.m_error);
+            }
+            if (!retireDestroyed()) {
+                return false;
+            }
+        }
+        bus.m_delivery.clear();
+        return true;
+    }
 
     void close() {
+        if (m_sharedMessages != &m_messages && m_targetIndex < m_sharedMessages->m_targets.size()) {
+            m_sharedMessages->m_targets[m_targetIndex].m_accepting = false;
+        }
+        m_messages.m_accepting = false;
         m_instances.clear();
+        m_messages.m_pending.clear();
+        m_messages.m_delivery.clear();
+        m_messages.m_targets.clear();
+        m_messages.m_pendingBytes = 0;
         if (m_state != nullptr) {
             lua_close(m_state);
             m_state = nullptr;
@@ -147,6 +204,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
     auto& impl = *m_impl;
     impl.m_error.clear();
     impl.m_context.clear();
+    impl.m_time = {};
     for (std::size_t index = 0; index < scripts.size(); ++index) {
         if (scripts[index].bytecode != scripts.front().bytecode) {
             return impl.fail("Cannot mix source and bytecode script bundles");
@@ -179,12 +237,18 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
             }
         }
     }
+    impl.m_messages.m_targets.reserve(attachments.size());
+    for (const auto& attachment : attachments) {
+        impl.m_messages.m_targets.push_back({attachment.ownerId, attachment.path});
+    }
+    impl.m_messages.m_accepting = true;
     std::string modulePath;
     if (!embedded && !attachments.empty()) {
         const auto directory = std::filesystem::absolute(root / "Scripts").generic_string();
         modulePath = directory + "/?.lua;" + directory + "/?/init.lua";
     }
-    for (const auto& attachment : attachments) {
+    for (std::size_t targetIndex = 0; targetIndex < attachments.size(); ++targetIndex) {
+        const auto& attachment = attachments[targetIndex];
         if (impl.m_scene.entityById(attachment.ownerId) == nullptr) {
             continue; // Earlier startup code may destroy an unstarted owner.
         }
@@ -217,6 +281,9 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
             source = ownedSource;
         }
         auto instance = std::make_unique<LuaRuntime>(impl.m_scene, impl.m_input, impl.m_log);
+        instance->m_impl->m_sharedTime = &impl.m_time;
+        instance->m_impl->m_sharedMessages = &impl.m_messages;
+        instance->m_impl->m_targetIndex = targetIndex;
         instance->m_impl->m_context = "Entity " + attachment.entityName + " [Scripts/" + attachment.path + "]";
         instance->m_impl->m_scriptPath = attachment.path;
         if (!instance->startSource(source, "@Scripts/" + attachment.path, modulePath,
@@ -225,6 +292,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
             stop();
             return false;
         }
+        impl.m_messages.m_targets[targetIndex].m_instance = instance.get();
         impl.m_instances.push_back(std::move(instance));
         if (!impl.retireDestroyed()) {
             stop();
@@ -259,6 +327,8 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
     lua::registerSceneBindings(state, impl.m_scene);
     lua::registerInputBindings(state, impl.m_input);
     lua::registerLogBindings(state, impl.m_log);
+    lua::registerTimeBindings(state, *impl.m_sharedTime);
+    lua::registerMessageBindings(state, *impl.m_sharedMessages, impl.m_scene, impl.m_ownerId);
     lua_setglobal(state, "sat");
 
     lua_newtable(state);
@@ -292,24 +362,34 @@ bool LuaRuntime::update(float deltaSeconds) {
     if (impl.m_state != nullptr) {
         return impl.callback("onUpdate", true, deltaSeconds);
     }
-    if (!impl.retireDestroyed(true)) {
+    // Advance once per session, even when no components are enabled. Child VMs
+    // read this snapshot without advancing it again or applying scale twice.
+    auto& time = impl.m_time;
+    const double scaledDelta = static_cast<double>(deltaSeconds) * time.m_timeScale;
+    const double elapsed = time.m_elapsedSeconds + scaledDelta;
+    const double unscaledElapsed = time.m_unscaledElapsedSeconds + deltaSeconds;
+    if (scaledDelta > std::numeric_limits<float>::max() ||
+        !std::isfinite(elapsed) || !std::isfinite(unscaledElapsed)) {
+        return impl.fail("Time update overflow");
+    }
+    time.m_deltaSeconds = static_cast<float>(scaledDelta);
+    time.m_unscaledDeltaSeconds = deltaSeconds;
+    time.m_elapsedSeconds += time.m_deltaSeconds;
+    time.m_unscaledElapsedSeconds = unscaledElapsed;
+    // Freeze the batch before retirement callbacks, which may enqueue messages.
+    impl.m_messages.m_delivery.swap(impl.m_messages.m_pending);
+    impl.m_messages.m_pendingBytes = 0;
+    if (!impl.retireDestroyed(true) || !impl.deliverMessages()) {
         return false;
     }
     for (const auto& instance : impl.m_instances) {
         if (!instance->running()) {
             continue;
         }
-        const Entity* owner = impl.m_scene.entityById(instance->m_impl->m_ownerId);
-        if (owner == nullptr) {
-            continue; // retireDestroyed handles stop
-        }
-        const auto& path = instance->m_impl->m_scriptPath;
-        const auto script = std::find_if(owner->scripts.begin(), owner->scripts.end(),
-            [&](const ScriptComponent& component) { return component.path == path; });
-        if (script == owner->scripts.end() || !script->enabled) {
+        if (!instance->m_impl->enabled()) {
             continue;
         }
-        if (!instance->update(deltaSeconds)) {
+        if (!instance->update(time.m_deltaSeconds)) {
             return impl.fail(instance->error());
         }
         if (!impl.retireDestroyed()) {
@@ -321,6 +401,7 @@ bool LuaRuntime::update(float deltaSeconds) {
 
 void LuaRuntime::stop() {
     auto& impl = *m_impl;
+    impl.m_messages.m_accepting = false;
     for (const auto& instance : impl.m_instances) {
         instance->stop();
         if (!instance->error().empty()) {

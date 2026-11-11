@@ -308,3 +308,117 @@ state. Focus loss releases all held keys/buttons. Hosts must advance input once
 before polling events and updating scripts; all input use is on the window thread.
 C++ hosts may pass a borrowed `const Input*` to `LuaRuntime`; it must outlive the
 runtime. Without one, scripts receive idle input and cursor (0, 0).
+
+### Time helpers
+
+`sat.time` is shared by all script components in one Play session, in both the
+editor and standalone player. All durations are seconds:
+
+- `sat.time.deltaSeconds()` — the scaled frame delta, matching `onUpdate(deltaSeconds)`.
+- `sat.time.elapsedSeconds()` — accumulated scaled frame deltas since Play began.
+- `sat.time.unscaledDeltaSeconds()` — the frame delta supplied by the host.
+- `sat.time.unscaledElapsedSeconds()` — accumulated host deltas since Play began.
+- `sat.time.timeScale()` — current scale (default `1`).
+- `sat.time.setTimeScale(scale)` — sets a finite, nonnegative float scale;
+  `0` pauses game time, `0.5` gives half speed, and `2` gives double speed.
+
+Scale changes apply on the next frame. Every component sees the same frame delta
+and elapsed time, including components that were disabled on earlier frames.
+Updates still run at scale `0`, allowing scripts to resume time using input or
+unscaled time. Before the first update, delta and elapsed values are `0`.
+Starting Play again resets all time values and restores scale `1`. Elapsed time
+counts supplied frame deltas, rather than wall-clock time spent loading scripts.
+
+```lua
+function onUpdate(deltaSeconds)
+    if sat.input.keyPressed(sat.Key.Space) then
+        sat.time.setTimeScale(sat.time.timeScale() == 0 and 1 or 0)
+    end
+    local animationTime = sat.time.elapsedSeconds()
+end
+```
+
+## Finding and controlling other entities
+
+Use `sat.findEntity(name)` for a uniquely named entity, or
+`sat.findEntities(name)` for a snapshot array of every live exact-name match.
+Both use current scene order; duplicate names are allowed and deletion can change
+that order. Cache the returned stable IDs rather than searching every frame.
+Check `sat.isEntityValid(id)` before using a cached ID after destruction. A new
+entity with the same name has a different ID; reacquire it explicitly if needed.
+IDs remain valid across entity creation, renaming and unrelated deletion, but
+are runtime identities and should not be saved as persistent scene references.
+
+Any script can drive another entity through the same transform and component
+APIs it uses for `self.entity`:
+
+```lua
+local door
+function onStart()
+    door = sat.findEntity("Door")
+end
+function onUpdate(dt)
+    if door and sat.isEntityValid(door) then
+        local x, y, z = sat.getPosition(door)
+        sat.setPosition(door, x, y + dt, z)
+    end
+end
+```
+
+### Sending messages to another script
+
+`sat.sendMessage(entity, path, message, payload)` queues a message for one script
+component, identified by stable entity ID and its path relative to `Scripts/`.
+It returns `true` when queued, or `false` for an invalid/destroyed entity, disabled
+component, or script outside the current Play roster. A missing `onMessage`
+handler silently ignores delivery. A `true` result acknowledges queuing, not
+completion; send a reply if the caller needs confirmation.
+
+The optional payload is nil, a boolean, a finite number, or a string. Values are
+copied between VMs; Lua integers retain their precision, and strings may include
+zero bytes. Tables, functions, threads and userdata are rejected. Script globals
+and `require` caches remain private to each component.
+
+```lua
+-- Controller.lua
+local door
+function onStart()
+    door = sat.findEntity("Door")
+    if door then
+        assert(sat.sendMessage(door, "Door.lua", "open", 3))
+    end
+end
+
+-- Door.lua (attached to Door)
+local targetHeight = 0
+function onMessage(sender, message, payload)
+    if message == "open" and type(payload) == "number" then
+        targetHeight = payload
+    end
+end
+function onUpdate(dt)
+    local x, y, z = sat.getPosition(self.entity)
+    sat.setPosition(self.entity, x, math.min(targetHeight, y + dt), z)
+end
+```
+
+Delivery rules:
+
+- Messages run in send order at the next update boundary, before any `onUpdate`,
+  after all startup callbacks have completed. Startup code can message a script
+  later in the initial roster. Messages also run when time scale is zero.
+- Replies and other messages sent during delivery wait for the following update.
+  Callbacks never recursively enter another VM. Each frame uses a fixed batch.
+- A recipient destroyed, disabled or detached before delivery is skipped. Queued
+  messages are discarded on Stop or restart. Components disabled at Play startup
+  have no VM, even if later enabled. New attachments wait for the next Play.
+- A sender may be destroyed before delivery; its ID is still passed to the
+  receiver. Validate it before sending a reply or accessing its components.
+- Handler errors, nonfunction `onMessage` values and instruction-budget failures
+  stop the session with the recipient's entity/script context and traceback.
+- The pending queue is bounded to 1024 messages and 1 MiB of message-name/payload
+  string data. Names contain 1–256 bytes. Invalid arguments and queue overflow
+  raise Lua errors; use `pcall` when recovery is needed.
+
+Choose one script to own an entity's movement when several scripts communicate
+with it. Direct mutations are immediate; multiple writes follow callback order.

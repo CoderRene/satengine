@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <string_view>
 
 namespace sat::lua {
 namespace {
@@ -36,15 +37,30 @@ int createCamera(lua_State* state) {
 }
 
 int findEntity(lua_State* state) {
-    const char* name = luaL_checkstring(state, 1);
+    std::size_t nameSize = 0;
+    const char* name = luaL_checklstring(state, 1, &nameSize);
     const auto& entities = sceneFor(state).entities();
     for (std::size_t index = 0; index < entities.size(); ++index) {
-        if (entities[index].name == name) {
+        if (entities[index].name == std::string_view(name, nameSize)) {
             lua_pushinteger(state, static_cast<lua_Integer>(entities[index].id()));
             return 1;
         }
     }
     lua_pushnil(state);
+    return 1;
+}
+
+int findEntities(lua_State* state) {
+    std::size_t nameSize = 0;
+    const char* name = luaL_checklstring(state, 1, &nameSize);
+    lua_newtable(state);
+    lua_Integer index = 1;
+    for (const auto& entity : sceneFor(state).entities()) {
+        if (entity.name == std::string_view(name, nameSize)) {
+            lua_pushinteger(state, static_cast<lua_Integer>(entity.id()));
+            lua_rawseti(state, -2, index++);
+        }
+    }
     return 1;
 }
 
@@ -293,6 +309,8 @@ void registerSceneBindings(lua_State* state, Scene& scene) {
         {"createCamera", guarded<createCamera>},
         // @lua fun sat.findEntity(name: string): EntityId|nil
         {"findEntity", guarded<findEntity>},
+        // @lua fun sat.findEntities(name: string): EntityId[]
+        {"findEntities", guarded<findEntities>},
         // @lua fun sat.destroyEntity(entity: EntityId): boolean
         {"destroyEntity", guarded<destroyEntity>},
         // @lua fun sat.isEntityValid(entity: EntityId): boolean

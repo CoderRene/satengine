@@ -10,7 +10,8 @@
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "SAT_BUILD_GAME_PLAYER": "OFF"
+        "SAT_BUILD_GAME_PLAYER": "OFF",
+        "BUILD_TESTING": "OFF"
       }
     },
     {
