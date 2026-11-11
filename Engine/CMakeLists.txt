@@ -1,11 +1,11 @@
 add_library(SatAssets STATIC
-    Assets/src/AssetData.cpp
-    Assets/src/AssetImportSettings.cpp
-    Assets/src/AssetImporter.cpp
-    Assets/src/AssetLibrary.cpp
-    Assets/src/TextureData.cpp
+    Core/src/AssetData.cpp
+    Core/src/AssetImportSettings.cpp
+    Core/src/AssetImporter.cpp
+    Core/src/AssetLibrary.cpp
+    Core/src/TextureData.cpp
 )
-target_include_directories(SatAssets PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Assets/include")
+target_include_directories(SatAssets PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Core/include")
 target_include_directories(SatAssets SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb")
 target_compile_features(SatAssets PUBLIC cxx_std_20)
 
