@@ -1,3 +1,14 @@
+add_library(SatAssets STATIC
+    Assets/src/AssetData.cpp
+    Assets/src/AssetImportSettings.cpp
+    Assets/src/AssetImporter.cpp
+    Assets/src/AssetLibrary.cpp
+    Assets/src/TextureData.cpp
+)
+target_include_directories(SatAssets PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Assets/include")
+target_include_directories(SatAssets SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb")
+target_compile_features(SatAssets PUBLIC cxx_std_20)
+
 # Scene extraction is portable and can be tested without a window or graphics device.
 add_library(SatScene STATIC
     Core/src/Scene.cpp
@@ -9,6 +20,7 @@ target_include_directories(SatScene PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/include"
 )
 target_compile_features(SatScene PUBLIC cxx_std_20)
+target_link_libraries(SatScene PUBLIC SatAssets)
 
 add_library(SatPak STATIC Core/src/PakArchive.cpp Core/src/module/Pak/PakCrypto.cpp)
 if(WIN32)
@@ -133,7 +145,7 @@ else()
 endif()
 
 add_executable(SatPakBuilder "${PROJECT_SOURCE_DIR}/Tools/PakBuilder/main.cpp")
-target_link_libraries(SatPakBuilder PRIVATE SatPak SatLua)
+target_link_libraries(SatPakBuilder PRIVATE SatPak SatLua SatScene)
 target_include_directories(SatPakBuilder PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Core/src")
 
 if(NOT SAT_BUILD_GAME_PLAYER AND NOT SAT_BUILD_EDITOR)
@@ -157,6 +169,7 @@ add_library(SatRuntime STATIC
     Core/src/Window.cpp
     Renderer/src/Renderer.cpp
     Renderer/src/module/MeshPass.cpp
+    Renderer/src/module/GpuAssetCache.cpp
     Renderer/src/module/SelectionOutlinePass.cpp
     Renderer/src/module/CameraFrustumPass.cpp
     Renderer/src/module/TranslateGizmoPass.cpp
@@ -193,6 +206,7 @@ add_library(SatEditor STATIC
     Platform/src/EditorLuaDefs.cpp
     Platform/src/GameBuilder.cpp
     UI/src/UiLayer.cpp
+    UI/src/module/AssetImportPanel.cpp
     UI/src/HierarchyPanel.cpp
     UI/src/InspectorPanel.cpp
     UI/src/ContentPanel.cpp
@@ -211,6 +225,7 @@ target_include_directories(SatEditor PUBLIC
     "${CMAKE_CURRENT_BINARY_DIR}/generated"
 )
 target_include_directories(SatEditor PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/UI/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/Platform/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb"
     "${imgui_SOURCE_DIR}"

@@ -13,6 +13,7 @@ namespace sat {
 
 struct HierarchyPanel::Impl {
     Scene* scene = nullptr;
+    bool selectionActivated = false;
     EntityId selected = kInvalidEntityId;
     int renaming = -1;
     char renameBuffer[128] = {};
@@ -73,6 +74,8 @@ HierarchyPanel::HierarchyPanel(Scene& scene)
 
 HierarchyPanel::~HierarchyPanel() = default;
 
+bool HierarchyPanel::selectionActivated() const { return m_impl->selectionActivated; }
+
 int HierarchyPanel::selectedIndex() const {
     const auto index = m_impl->scene->entityIndex(m_impl->selected);
     return index ? static_cast<int>(*index) : -1;
@@ -91,6 +94,7 @@ void HierarchyPanel::setSelectedIndex(int index) {
 }
 
 void HierarchyPanel::onImGuiRender(bool readOnly) {
+    m_impl->selectionActivated = false;
     ImGui::Begin("Hierarchy");
     if (readOnly) {
         for (const auto& entity : m_impl->scene->entities()) {
@@ -123,13 +127,13 @@ void HierarchyPanel::onImGuiRender(bool readOnly) {
         } else {
             if (ImGui::Selectable(
                     entities[static_cast<std::size_t>(i)].name.c_str(), m_impl->selected == entities[static_cast<std::size_t>(i)].id())) {
-                m_impl->selected = entities[static_cast<std::size_t>(i)].id();
+                m_impl->selectionActivated = true; m_impl->selected = entities[static_cast<std::size_t>(i)].id();
             }
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                 m_impl->beginRename(i);
             }
             if (ImGui::BeginPopupContextItem("EntityContext")) {
-                m_impl->selected = entities[static_cast<std::size_t>(i)].id();
+                m_impl->selectionActivated = true; m_impl->selected = entities[static_cast<std::size_t>(i)].id();
                 if (ImGui::MenuItem("Rename")) {
                     m_impl->beginRename(i);
                 }
@@ -145,7 +149,7 @@ void HierarchyPanel::onImGuiRender(bool readOnly) {
 
     if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         !ImGui::IsAnyItemHovered()) {
-        m_impl->selected = kInvalidEntityId;
+        m_impl->selectionActivated = true; m_impl->selected = kInvalidEntityId;
     }
 
     if (m_impl->selected != kInvalidEntityId && m_impl->renaming < 0 &&
@@ -163,7 +167,7 @@ void HierarchyPanel::onImGuiRender(bool readOnly) {
             ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
         if (ImGui::MenuItem("Add Empty Entity")) {
             m_impl->scene->addEmpty();
-            m_impl->selected = m_impl->scene->entities().back().id();
+            m_impl->selectionActivated = true; m_impl->selected = m_impl->scene->entities().back().id();
         }
         if (ImGui::MenuItem("Add Camera")) {
             m_impl->scene->addCamera();

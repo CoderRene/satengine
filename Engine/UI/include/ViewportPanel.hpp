@@ -21,6 +21,7 @@ public:
     void onImGuiRender(int& selectedIndex, bool playMode, bool focusGameView);
 
     void resetInteraction();
+    [[nodiscard]] bool selectionActivated() const;
 
     [[nodiscard]] int sceneViewWidth() const;
     [[nodiscard]] int sceneViewHeight() const;

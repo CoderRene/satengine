@@ -19,6 +19,7 @@ public:
     UiLayer& operator=(const UiLayer&) = delete;
 
     [[nodiscard]] bool valid() const;
+    [[nodiscard]] bool requestClose();
     void beginFrame();
     void endFrame();
 

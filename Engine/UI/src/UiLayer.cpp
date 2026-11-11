@@ -1,5 +1,7 @@
 #include "UiLayer.hpp"
 
+#include "module/AssetImportPanel.hpp"
+
 #include "ContentPanel.hpp"
 #include "EnginePaths.hpp"
 #include "FileDialog.hpp"
@@ -57,6 +59,8 @@ struct UiLayer::Impl {
     std::unique_ptr<HierarchyPanel> hierarchy;
     std::unique_ptr<InspectorPanel> inspector;
     std::unique_ptr<ContentPanel> content;
+    std::unique_ptr<AssetImportPanel> assetImports;
+    bool closeApproved = false;
     std::unique_ptr<ViewportPanel> viewport;
     std::unique_ptr<LuaLogPanel> luaLog;
 
@@ -114,6 +118,9 @@ struct UiLayer::Impl {
     }
 
     void startPlay() {
+        assetImports->request([this] { startPlayNow(); });
+    }
+    void startPlayNow() {
         if (playMode || !project.isOpen()) {
             return;
         }
@@ -138,7 +145,10 @@ struct UiLayer::Impl {
     std::filesystem::path newProjectParent;
     char newProjectName[128] = {};
 
-    bool openProject(const std::filesystem::path& folder) {
+    void openProject(const std::filesystem::path& folder) {
+        assetImports->request([this, folder] { (void)openProjectNow(folder); });
+    }
+    bool openProjectNow(const std::filesystem::path& folder) {
         Project opened;
         if (!opened.open(folder)) {
             recent.remove(folder);
@@ -155,9 +165,12 @@ struct UiLayer::Impl {
         if (!saveScene()) {
             return false;
         }
+        assetImports->clear();
+        content->setSelectedAsset({});
         project = std::move(opened);
         scene = std::move(loaded);
         recordLoadedScene();
+        renderer->setAssetReader(fileAssetReader(project.root()));
         if (hierarchy) { hierarchy->setSelectedIndex(-1); }
         if (viewport) { viewport->resetInteraction(); }
         recent.add(project.root());
@@ -262,9 +275,24 @@ UiLayer::UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& proj
         return;
     }
 
+    renderer.setAssetReader(fileAssetReader(m_impl->project.root()));
     m_impl->hierarchy = std::make_unique<HierarchyPanel>(m_impl->scene);
     m_impl->inspector = std::make_unique<InspectorPanel>(m_impl->scene, m_impl->project);
+    m_impl->assetImports = std::make_unique<AssetImportPanel>(m_impl->project, renderer);
     m_impl->content = std::make_unique<ContentPanel>(m_impl->project, renderer);
+    m_impl->content->setSelectionHandler([this](std::string path) {
+        if (m_impl->assetImports->active() && m_impl->assetImports->path() == path) { return; }
+        m_impl->assetImports->request([this, path = std::move(path)] {
+            m_impl->hierarchy->setSelectedIndex(-1);
+            if (isMeshAssetPath(path) || isTextureAssetPath(path)) {
+                m_impl->assetImports->select(path);
+                m_impl->content->setSelectedAsset(path);
+            } else {
+                m_impl->assetImports->clear();
+                m_impl->content->setSelectedAsset({});
+            }
+        });
+    });
     m_impl->viewport = std::make_unique<ViewportPanel>(m_impl->scene, renderer);
     m_impl->luaLog = std::make_unique<LuaLogPanel>(m_impl->scriptLog);
 
@@ -354,9 +382,11 @@ void UiLayer::beginFrame() {
                 const std::filesystem::path folder =
                     openFolderDialog(m_impl->window, "Select Parent Folder");
                 if (!folder.empty()) {
-                    m_impl->newProjectParent = folder;
-                    m_impl->newProjectName[0] = '\0';
-                    m_impl->openNewProjectModal = true;
+                    m_impl->assetImports->request([this, folder] {
+                        m_impl->newProjectParent = folder;
+                        m_impl->newProjectName[0] = '\0';
+                        m_impl->openNewProjectModal = true;
+                    });
                 }
             }
             if (ImGui::MenuItem("Open Project...")) {
@@ -369,6 +399,12 @@ void UiLayer::beginFrame() {
             if (ImGui::MenuItem("Save Scene", nullptr, false, m_impl->project.isOpen() && !m_impl->playMode)) {
                 const bool saved = m_impl->saveScene();
                 (void)saved; // Failure details appear in Scene Errors.
+            }
+            if (ImGui::MenuItem("Reload Assets", nullptr, false, m_impl->project.isOpen() && !m_impl->playMode)) {
+                m_impl->assetImports->request([this] {
+                    m_impl->renderer->setAssetReader(fileAssetReader(m_impl->project.root()));
+                    if (m_impl->assetImports->active()) { m_impl->assetImports->select(m_impl->assetImports->path()); }
+                });
             }
             if (ImGui::BeginMenu("Recent...")) {
                 const auto& recent = m_impl->recent.entries();
@@ -522,6 +558,21 @@ void UiLayer::beginFrame() {
         ImGui::End();
     }
 
+    if (!m_impl->renderer->assetErrors().empty()) {
+        ImGui::Begin("Asset Errors");
+        for (const auto& error : m_impl->renderer->assetErrors()) {
+            ImGui::TextWrapped("%s", error.c_str());
+        }
+        ImGui::BeginDisabled(m_impl->playMode);
+        if (ImGui::Button("Reload Assets")) {
+            m_impl->assetImports->request([this] {
+                    m_impl->renderer->setAssetReader(fileAssetReader(m_impl->project.root()));
+                    if (m_impl->assetImports->active()) { m_impl->assetImports->select(m_impl->assetImports->path()); }
+                });
+        }
+        ImGui::EndDisabled();
+        ImGui::End();
+    }
     if (!m_impl->sceneError.empty()) {
         ImGui::Begin("Scene Errors");
         ImGui::TextWrapped("%s", m_impl->sceneError.c_str());
@@ -563,7 +614,19 @@ void UiLayer::beginFrame() {
 
     ImGui::BeginDisabled(m_impl->playMode);
     if (m_impl->hierarchy) {
+        const int previous = m_impl->hierarchy->selectedIndex();
         m_impl->hierarchy->onImGuiRender(m_impl->playMode);
+        if (m_impl->hierarchy->selectionActivated()) {
+            const int selected = m_impl->hierarchy->selectedIndex();
+            const Entity* entity = selected >= 0 ? m_impl->scene.entity(static_cast<std::size_t>(selected)) : nullptr;
+            const EntityId id = entity ? entity->id() : kInvalidEntityId;
+            m_impl->hierarchy->setSelectedIndex(previous);
+            m_impl->assetImports->request([this, id] {
+                m_impl->assetImports->clear(); m_impl->content->setSelectedAsset({});
+                const auto index = m_impl->scene.entityIndex(id);
+                m_impl->hierarchy->setSelectedIndex(index ? static_cast<int>(*index) : -1);
+            });
+        }
     }
     ImGui::EndDisabled();
 
@@ -572,13 +635,21 @@ void UiLayer::beginFrame() {
         const bool focusGame = m_impl->focusGameView;
         m_impl->focusGameView = false;
         m_impl->viewport->onImGuiRender(selected, m_impl->playMode, focusGame);
-        if (m_impl->hierarchy) {
-            m_impl->hierarchy->setSelectedIndex(selected);
+        if (m_impl->hierarchy && m_impl->viewport->selectionActivated()) {
+            const Entity* entity = selected >= 0 ? m_impl->scene.entity(static_cast<std::size_t>(selected)) : nullptr;
+            const EntityId id = entity ? entity->id() : kInvalidEntityId;
+            m_impl->assetImports->request([this, id] {
+                m_impl->assetImports->clear(); m_impl->content->setSelectedAsset({});
+                const auto index = m_impl->scene.entityIndex(id);
+                m_impl->hierarchy->setSelectedIndex(index ? static_cast<int>(*index) : -1);
+            });
         }
     }
 
     ImGui::BeginDisabled(m_impl->playMode);
-    if (m_impl->inspector) {
+    if (m_impl->assetImports->active()) {
+        m_impl->assetImports->draw(m_impl->playMode);
+    } else if (m_impl->inspector) {
         const int selected =
             m_impl->hierarchy ? m_impl->hierarchy->selectedIndex() : -1;
         m_impl->inspector->onImGuiRender(selected);
@@ -617,9 +688,15 @@ void UiLayer::beginFrame() {
                     m_impl->newProjectParent, std::string(m_impl->newProjectName))) {
                 Scene loaded;
                 if (created.loadScene(loaded, m_impl->sceneError)) {
+                    m_impl->assetImports->clear();
+                    m_impl->content->setSelectedAsset({});
                     m_impl->project = std::move(created);
                     m_impl->scene = std::move(loaded);
                     m_impl->recordLoadedScene();
+                    m_impl->assetImports->request([this] {
+                    m_impl->renderer->setAssetReader(fileAssetReader(m_impl->project.root()));
+                    if (m_impl->assetImports->active()) { m_impl->assetImports->select(m_impl->assetImports->path()); }
+                });
                     if (m_impl->hierarchy) { m_impl->hierarchy->setSelectedIndex(-1); }
                     m_impl->recent.add(m_impl->project.root());
                     if (!m_impl->syncLuaToolingFor(m_impl->project)) {
@@ -640,10 +717,21 @@ void UiLayer::beginFrame() {
     }
 }
 
+bool UiLayer::requestClose() {
+    if (m_impl->closeApproved || !m_impl->assetImports->dirty()) { return true; }
+    m_impl->assetImports->request([this] {
+        m_impl->closeApproved = true;
+        glfwSetWindowShouldClose(m_impl->window, GLFW_TRUE);
+    });
+    return false;
+}
+
 void UiLayer::endFrame() {
     if (!valid()) {
         return;
     }
+
+    m_impl->assetImports->drawPrompt();
 
     GameViewCamera sceneCamera{};
     if (m_impl->viewport) {
@@ -672,6 +760,8 @@ void UiLayer::endFrame() {
         if (entities[i].hasMesh) {
             MeshInstance instance{};
             instance.world = matrixFromTransform(entities[i].transform);
+            instance.meshPath = entities[i].mesh.meshPath;
+            instance.texturePath = entities[i].mesh.texturePath;
             switch (entities[i].mesh.primitive) {
             case MeshComponent::Primitive::Cube:
                 instance.primitive = MeshPrimitive::Cube;

@@ -16,6 +16,7 @@ public:
 
     void onImGuiRender(bool readOnly = false);
     [[nodiscard]] int selectedIndex() const;
+    [[nodiscard]] bool selectionActivated() const;
     void setSelectedIndex(int index);
 
 private:

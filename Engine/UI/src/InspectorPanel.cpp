@@ -2,6 +2,7 @@
 
 #include "Scene.hpp"
 #include "Project.hpp"
+#include "AssetData.hpp"
 
 #include <imgui.h>
 
@@ -18,6 +19,50 @@ struct InspectorPanel::Impl {
     Project* project = nullptr;
     std::vector<std::string> availableScripts;
     std::string scanError;
+    std::vector<std::string> meshes;
+    std::vector<std::string> textures;
+    std::string assetError;
+
+    void refreshAssets() {
+        meshes.clear();
+        textures.clear();
+        assetError.clear();
+        if (!project->isOpen()) { return; }
+        std::error_code error;
+        const auto root = project->root() / "Assets";
+        std::filesystem::recursive_directory_iterator current(root, error), end;
+        while (!error && current != end) {
+            if (current->is_regular_file(error)) {
+                const auto encoded = current->path().lexically_relative(project->root()).generic_u8string();
+                const std::string path(encoded.begin(), encoded.end());
+                if (isMeshAssetPath(path)) { meshes.push_back(path); }
+                if (isTextureAssetPath(path)) { textures.push_back(path); }
+            }
+            if (!error) { current.increment(error); }
+        }
+        if (error) { assetError = error.message(); }
+        std::sort(meshes.begin(), meshes.end());
+        std::sort(textures.begin(), textures.end());
+    }
+
+    bool assetPicker(const char* label, const char* emptyLabel, std::string& path, bool mesh) {
+        bool changed = false;
+        if (ImGui::BeginCombo(label, path.empty() ? emptyLabel : path.c_str())) {
+            if (ImGui::IsWindowAppearing()) { refreshAssets(); }
+            if (ImGui::Selectable(emptyLabel, path.empty())) { changed = !path.empty(); path.clear(); }
+            const auto& paths = mesh ? meshes : textures;
+            for (const auto& candidate : paths) {
+                if (ImGui::Selectable(candidate.c_str(), candidate == path)) {
+                    changed = candidate != path;
+                    path = candidate;
+                }
+            }
+            if (paths.empty()) { ImGui::TextDisabled("Add files to the project's Assets folder."); }
+            if (!assetError.empty()) { ImGui::TextWrapped("%s", assetError.c_str()); }
+            ImGui::EndCombo();
+        }
+        return changed;
+    }
 
     void refreshScripts() {
         availableScripts.clear();
@@ -107,13 +152,8 @@ void InspectorPanel::onImGuiRender(int selectedIndex) {
     }
 
     if (entity->hasMesh && ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
-        const char* primitiveName = "Cube";
-        switch (entity->mesh.primitive) {
-        case MeshComponent::Primitive::Cube:
-            primitiveName = "Cube";
-            break;
-        }
-        ImGui::Text("Primitive: %s", primitiveName);
+        changed |= m_impl->assetPicker("Geometry", "Built-in Cube", entity->mesh.meshPath, true);
+        changed |= m_impl->assetPicker("Texture", "None", entity->mesh.texturePath, false);
     }
 
     if (entity->hasMesh && ImGui::Button("Remove Mesh")) {

@@ -1,4 +1,7 @@
 #include "PakArchive.hpp"
+#include "AssetLibrary.hpp"
+#include "Scene.hpp"
+#include "SceneFile.hpp"
 #include "module/Pak/PakCrypto.hpp"
 #include <lua.hpp>
 #include <algorithm>
@@ -47,6 +50,20 @@ int main(int argc, char** argv) {
         std::unique_ptr<lua_State, decltype(&lua_close)> state(luaL_newstate(), lua_close);
         if (!state) { throw std::runtime_error("Cannot allocate Lua compiler"); }
         std::vector<sat::PakEntry> entries{{"Scene.sat", read(root / "Scene.sat")}};
+        sat::Scene scene;
+        std::string sceneError;
+        if (!sat::deserializeScene(entries.front().bytes, scene, sceneError)) {
+            throw std::runtime_error("Cannot pack scene: " + sceneError);
+        }
+        sat::AssetLibrary assets;
+        assets.setReader(sat::fileAssetReader(root));
+        for (const auto& entity : scene.entities()) {
+            if (!entity.hasMesh) { continue; }
+            if ((!entity.mesh.meshPath.empty() && assets.mesh(entity.mesh.meshPath) == nullptr) ||
+                (!entity.mesh.texturePath.empty() && assets.texture(entity.mesh.texturePath) == nullptr)) {
+                throw std::runtime_error("Entity " + entity.name + ": " + assets.errors().back());
+            }
+        }
         std::vector<std::filesystem::path> files;
         for (const char* folder : {"Scripts", "Assets"}) {
             if (!std::filesystem::exists(root / folder)) { continue; }
@@ -61,6 +78,19 @@ int main(int argc, char** argv) {
         for (const auto& path : files) {
             const auto encoded = path.lexically_relative(root).generic_u8string();
             std::string name(encoded.begin(), encoded.end());
+            if (name.ends_with(".satimport.tmp")) { continue; }
+            if (name.ends_with(".satimport")) {
+                const auto source = std::string_view(name).substr(0, name.size() - std::string_view(".satimport").size());
+                if (!sat::isMeshAssetPath(source) && !sat::isTextureAssetPath(source)) {
+                    throw std::runtime_error("Import metadata has no supported source: " + name);
+                }
+                const auto sourcePath = root / std::filesystem::path(std::u8string(source.begin(), source.end()));
+                if (!std::filesystem::is_regular_file(sourcePath)) { throw std::runtime_error("Orphan import metadata: " + name); }
+            }
+            if ((sat::isMeshAssetPath(name) && assets.mesh(name) == nullptr) ||
+                (sat::isTextureAssetPath(name) && assets.texture(name) == nullptr)) {
+                throw std::runtime_error(assets.errors().back());
+            }
             std::string bytes = read(path);
             if (name.starts_with("Scripts/")) {
                 const std::string label = "@" + name;
@@ -73,6 +103,32 @@ int main(int argc, char** argv) {
                 lua_pop(state.get(), 1);
             }
             entries.push_back({std::move(name), std::move(bytes)});
+        }
+        for (const auto& entry : entries) {
+            if (entry.name.ends_with(".satimport")) {
+                const auto source = std::string_view(entry.name).substr(0, entry.name.size() - std::string_view(".satimport").size());
+                if (std::none_of(entries.begin(), entries.end(), [&](const sat::PakEntry& candidate) { return candidate.name == source; })) {
+                    throw std::runtime_error("Import metadata source spelling does not match a packed asset: " + entry.name);
+                }
+            }
+            if (sat::isMeshAssetPath(entry.name) || sat::isTextureAssetPath(entry.name)) {
+                const auto metadata = entry.name + ".satimport";
+                if (std::filesystem::exists(root / std::filesystem::path(std::u8string(metadata.begin(), metadata.end()))) &&
+                    std::none_of(entries.begin(), entries.end(), [&](const sat::PakEntry& candidate) { return candidate.name == metadata; })) {
+                    throw std::runtime_error("Import metadata spelling does not match its asset: " + metadata);
+                }
+            }
+        }
+        // Windows file lookup can accept a case mismatch that an archive lookup
+        // cannot. Validate the exact packed spelling before writing any archive.
+        for (const auto& entity : scene.entities()) {
+            if (!entity.hasMesh) { continue; }
+            for (const auto* path : {&entity.mesh.meshPath, &entity.mesh.texturePath}) {
+                if (!path->empty() && std::none_of(entries.begin(), entries.end(),
+                    [&](const sat::PakEntry& entry) { return entry.name == *path; })) {
+                    throw std::runtime_error("Asset path does not exactly match a packaged file: " + *path);
+                }
+            }
         }
         std::string error;
         const std::filesystem::path base = argv[2];

@@ -10,6 +10,7 @@
       "windowsSdkVersion": "10.0.26100.0",
       "configurationProvider": "ms-vscode.cmake-tools",
       "includePath": [
+        "${workspaceFolder}/Engine/Assets/include",
         "${workspaceFolder}/Engine/Core/include",
         "${workspaceFolder}/Engine/Renderer/include",
         "${workspaceFolder}/Engine/UI/include",

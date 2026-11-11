@@ -130,7 +130,8 @@ float distancePointToSegment2D(
     return std::sqrt(dx * dx + dy * dy);
 }
 
-bool intersectRayUnitCube(const Ray& worldRay, const Mat4& world, float& outT) {
+bool intersectRayBounds(const Ray& worldRay, const Mat4& world, float& outT,
+    const Vec3& minimum = {-0.5f, -0.5f, -0.5f}, const Vec3& maximum = {0.5f, 0.5f, 0.5f}) {
     const Mat4 invWorld = inverse(world);
     const Vec3 origin = transformPoint(invWorld, worldRay.origin);
     // Keep direction unnormalized so slab t matches the world-ray parameter.
@@ -138,7 +139,7 @@ bool intersectRayUnitCube(const Ray& worldRay, const Mat4& world, float& outT) {
 
     float tMin = 0.0f;
     float tMax = 1.0e30f;
-    const float bounds[3][2] = {{-0.5f, 0.5f}, {-0.5f, 0.5f}, {-0.5f, 0.5f}};
+    const float bounds[3][2] = {{minimum.x, maximum.x}, {minimum.y, maximum.y}, {minimum.z, maximum.z}};
     const float o[3] = {origin.x, origin.y, origin.z};
     const float d[3] = {direction.x, direction.y, direction.z};
 
@@ -303,6 +304,7 @@ void drawSceneOrientationGizmo(
 struct ViewportPanel::Impl {
     Scene* scene = nullptr;
     Renderer* renderer = nullptr;
+    bool selectionActivated = false;
     int gameViewWidth = 0;
     int gameViewHeight = 0;
     int sceneViewWidth = 0;
@@ -551,17 +553,23 @@ struct ViewportPanel::Impl {
                                     if (entities[i].hasMesh) {
                                         const Mat4 world =
                                             matrixFromTransform(entities[i].transform);
-                                        hit = intersectRayUnitCube(mouseRay, world, t);
+                                        Vec3 minimum{-0.5f, -0.5f, -0.5f};
+                                        Vec3 maximum{0.5f, 0.5f, 0.5f};
+                                        if (entities[i].mesh.meshPath.empty() ||
+                                            renderer->meshBounds(entities[i].mesh.meshPath, minimum, maximum)) {
+                                            hit = intersectRayBounds(mouseRay, world, t, minimum, maximum);
+                                        }
                                     } else if (entities[i].hasCamera) {
                                         const Mat4 world =
                                             cameraPickWorld(toVec3(entities[i].transform.position));
-                                        hit = intersectRayUnitCube(mouseRay, world, t);
+                                        hit = intersectRayBounds(mouseRay, world, t);
                                     }
                                     if (hit && t < bestT) {
                                         bestT = t;
                                         bestEntity = static_cast<int>(i);
                                     }
                                 }
+                                selectionActivated = true;
                                 selectedIndex = bestEntity;
                             }
                         }
@@ -632,9 +640,12 @@ ViewportPanel::~ViewportPanel() {
 }
 
 void ViewportPanel::onImGuiRender(int& selectedIndex, bool playMode, bool focusGameView) {
+    m_impl->selectionActivated = false;
     m_impl->drawScenePanel(selectedIndex, playMode);
     m_impl->drawGamePanel(focusGameView);
 }
+
+bool ViewportPanel::selectionActivated() const { return m_impl->selectionActivated; }
 
 void ViewportPanel::resetInteraction() {
     m_impl->gizmoDrag.active = false;

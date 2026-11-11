@@ -427,6 +427,22 @@ function sat.getCameraClearColor(entity) end
 function sat.setCameraClearColor(entity, r, g, b, a) end
 
 ---@param entity EntityId
+---@return string|nil
+function sat.getMeshAsset(entity) end
+
+---@param entity EntityId
+---@param path string|nil
+function sat.setMeshAsset(entity, path) end
+
+---@param entity EntityId
+---@return string|nil
+function sat.getTextureAsset(entity) end
+
+---@param entity EntityId
+---@param path string|nil
+function sat.setTextureAsset(entity, path) end
+
+---@param entity EntityId
 ---@return boolean
 function sat.hasMesh(entity) end
 

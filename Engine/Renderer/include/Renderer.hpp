@@ -1,9 +1,13 @@
 #pragma once
 
 #include "SceneDraw.hpp"
+#include "AssetLibrary.hpp"
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace sat {
 
@@ -33,6 +37,16 @@ public:
 
     [[nodiscard]] bool valid() const;
 
+    // Window/device thread only. Clears CPU/GPU caches and prior diagnostics.
+    // Reader captures must outlive the renderer or the next setAssetReader().
+    void setAssetReader(AssetReader reader);
+    // Frame-boundary/device-thread import. Stage CPU/GPU data, invoke optional
+    // persistence callback, then replace only this asset. Failure preserves it.
+    [[nodiscard]] bool reimportAsset(std::string_view path, const AssetImportSettings* settings,
+        const AssetImportWriter& writer, std::string& error);
+    [[nodiscard]] std::string assetInfo(std::string_view path);
+    [[nodiscard]] const std::vector<std::string>& assetErrors() const;
+    [[nodiscard]] bool meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum);
     void newFrame();
     void resizeGameView(int width, int height);
     void resizeSceneView(int width, int height);

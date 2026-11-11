@@ -2,6 +2,9 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <string>
+#include <utility>
 
 namespace sat {
 
@@ -17,6 +20,8 @@ public:
     ContentPanel& operator=(const ContentPanel&) = delete;
 
     void onImGuiRender();
+    void setSelectionHandler(std::function<void(std::string)> handler) { m_select = std::move(handler); }
+    void setSelectedAsset(std::string path) { m_selectedAsset = std::move(path); }
 
 private:
     void syncToProject();
@@ -32,6 +37,8 @@ private:
     std::filesystem::path m_relative; // path under project root; empty = root
     std::uintptr_t m_folderIcon = 0;
     std::uintptr_t m_returnIcon = 0;
+    std::function<void(std::string)> m_select;
+    std::string m_selectedAsset;
     float m_zoom = 0.0f; // 0 = list, 1 = large icons
 };
 

@@ -7,6 +7,8 @@
 #include <GLFW/glfw3.h>
 
 #include <chrono>
+#include <cstddef>
+#include <iostream>
 #include <thread>
 
 namespace sat {
@@ -24,7 +26,9 @@ int Application::run() {
     m_input = window.input();
     m_stopRequested = false;
     onStart();
+    renderer.setAssetReader(m_assetReader);
     SceneRenderData renderData;
+    std::size_t reportedAssetErrors = 0;
     auto previous = std::chrono::steady_clock::now();
     while (!m_stopRequested && !window.shouldClose()) {
         window.pollEvents();
@@ -53,6 +57,10 @@ int Application::run() {
         if (!renderer.renderWindow(renderData.camera(), renderData.drawList())) {
             onStop();
             return 1;
+        }
+        const auto& assetErrors = renderer.assetErrors();
+        for (; reportedAssetErrors < assetErrors.size(); ++reportedAssetErrors) {
+            std::cerr << assetErrors[reportedAssetErrors] << '\n';
         }
         renderer.present();
     }

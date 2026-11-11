@@ -26,6 +26,7 @@
 #include <iostream>
 #include <memory>
 #include <vector>
+#include <utility>
 
 namespace sat {
 
@@ -650,13 +651,14 @@ void Renderer::renderOffscreenView(
     }
 
     if (m_impl->meshPass.ensure(m_impl->device)) {
+        m_impl->meshPass.prepareAssets(m_impl->device, drawList);
         m_impl->meshPass.draw(m_impl->context, viewProj, drawList);
     }
 
     if (drawList.drawEditorOverlay && drawList.selectedMesh >= 0 &&
         drawList.selectedMesh < drawList.meshCount && drawList.meshes != nullptr) {
         const MeshInstance& selected = drawList.meshes[drawList.selectedMesh];
-        const GpuMesh* meshGeometry = m_impl->meshPass.geometry(selected.primitive);
+        const GpuMesh* meshGeometry = m_impl->meshPass.geometry(selected);
         if (meshGeometry != nullptr && m_impl->outlinePass.ensure(m_impl->device)) {
             m_impl->outlinePass.draw(m_impl->context, viewProj, selected, *meshGeometry);
         }
@@ -683,6 +685,7 @@ Renderer::~Renderer() {
     releaseOffscreenView(m_impl->game);
     releaseOffscreenView(m_impl->scene);
     releaseDebugLines();
+    m_impl->meshPass.setAssetReader({});
     m_impl->meshPass.release();
     m_impl->outlinePass.release();
     m_impl->frustumPass.release();
@@ -740,6 +743,21 @@ void Renderer::resizeGameView(int width, int height) {
 
 void Renderer::resizeSceneView(int width, int height) {
     resizeOffscreenView(m_impl->scene, width, height, "scene");
+}
+
+bool Renderer::reimportAsset(std::string_view path, const AssetImportSettings* settings,
+    const AssetImportWriter& writer, std::string& error) {
+    return m_impl->meshPass.reimportAsset(m_impl->device, path, settings, writer, error);
+}
+std::string Renderer::assetInfo(std::string_view path) { return m_impl->meshPass.assetInfo(path); }
+void Renderer::setAssetReader(AssetReader reader) {
+    m_impl->meshPass.setAssetReader(std::move(reader));
+}
+const std::vector<std::string>& Renderer::assetErrors() const {
+    return m_impl->meshPass.assetErrors();
+}
+bool Renderer::meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum) {
+    return m_impl->meshPass.meshBounds(path, minimum, maximum);
 }
 
 void Renderer::renderGameView(const GameViewCamera& camera, const SceneDrawList& drawList) {

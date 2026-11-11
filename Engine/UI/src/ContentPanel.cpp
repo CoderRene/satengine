@@ -168,7 +168,7 @@ void ContentPanel::drawFolderList() {
             break;
         }
         const fs::path fileName = entry.path().filename();
-        if (isToolingEntry(fileName)) {
+        if (isToolingEntry(fileName) || fileName.extension() == ".satimport" || fileName.string().ends_with(".satimport.tmp")) {
             continue;
         }
         std::error_code typeEc;
@@ -215,7 +215,10 @@ void ContentPanel::drawFolderList() {
                 ImGui::SameLine();
             }
 
-            if (ImGui::Selectable(name.c_str())) {
+            const auto encoded = (m_relative / entry.name).generic_u8string();
+            const std::string assetPath(encoded.begin(), encoded.end());
+            if (ImGui::Selectable(name.c_str(), !entry.isDirectory && assetPath == m_selectedAsset)) {
+                if (!entry.isDirectory && m_select) { m_select(assetPath); }
                 if (isParent) {
                     navigateUp();
                 }
@@ -258,7 +261,10 @@ void ContentPanel::drawFolderList() {
         const ImVec2 min = ImGui::GetItemRectMin();
         ImDrawList* draw = ImGui::GetWindowDrawList();
 
-        if (hovered) {
+        const auto encoded = (m_relative / entry.name).generic_u8string();
+        const std::string assetPath(encoded.begin(), encoded.end());
+        if (pressed && !entry.isDirectory && m_select) { m_select(assetPath); }
+        if (hovered || (!entry.isDirectory && assetPath == m_selectedAsset)) {
             draw->AddRectFilled(
                 min,
                 ImVec2(min.x + iconSize, min.y + cellH),

@@ -33,6 +33,10 @@ struct CameraComponent {
 struct MeshComponent {
     enum class Primitive { Cube };
     Primitive primitive = Primitive::Cube;
+    // Empty mesh path selects the built-in cube; texture path empty means white.
+    // Both paths are relative to the project root, under Assets/.
+    std::string meshPath;
+    std::string texturePath;
 };
 
 // Paths are relative to the project's Scripts folder. Disabled components do not run.

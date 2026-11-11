@@ -32,6 +32,8 @@ void SceneRenderData::update(const Scene& scene, int width, int height) {
         }
         MeshInstance instance{};
         instance.world = matrixFromTransform(entity.transform);
+        instance.meshPath = entity.mesh.meshPath;
+        instance.texturePath = entity.mesh.texturePath;
         switch (entity.mesh.primitive) {
         case MeshComponent::Primitive::Cube:
             instance.primitive = MeshPrimitive::Cube;

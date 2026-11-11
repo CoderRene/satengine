@@ -7,6 +7,8 @@
 #include "UiLayer.hpp"
 #include "Window.hpp"
 
+#include <GLFW/glfw3.h>
+
 namespace sat {
 
 int EditorApplication::run() {
@@ -26,10 +28,11 @@ int EditorApplication::run() {
     if (!ui.valid()) {
         return 1;
     }
-    while (!window.shouldClose()) {
+    while (true) {
         window.pollEvents();
         if (window.shouldClose()) {
-            break;
+            if (ui.requestClose()) { break; }
+            glfwSetWindowShouldClose(static_cast<GLFWwindow*>(window.nativeHandle()), GLFW_FALSE);
         }
         ui.beginFrame();
         ui.endFrame();

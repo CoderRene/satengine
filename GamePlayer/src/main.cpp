@@ -11,6 +11,7 @@
 #include <windows.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <exception>
 #include <filesystem>
@@ -135,6 +136,22 @@ protected:
             requestStop();
             return;
         }
+        setAssetReader([this](std::string_view path, std::string& bytes, std::string& assetError) {
+            for (const auto& archive : m_assets) {
+                const auto source = archive.find(path);
+                if (!source.empty() || std::any_of(archive.entries().begin(), archive.entries().end(),
+                    [&](const sat::PakEntry& entry) { return entry.name == path; })) {
+                    if (source.size() > (path.ends_with(".satimport") ? 4096 : sat::kMaxAssetBytes)) {
+                        assetError = "Packed asset exceeds read limit";
+                        return sat::AssetReadResult::Error;
+                    }
+                    bytes.assign(source);
+                    return sat::AssetReadResult::Found;
+                }
+            }
+            assetError.clear();
+            return sat::AssetReadResult::Missing;
+        });
         std::vector<sat::LuaScriptSource> scripts;
         for (const auto& entry : m_archive.entries()) {
             if (entry.name.starts_with("Scripts/") && entry.name.ends_with(".lua")) {

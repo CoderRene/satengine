@@ -1,6 +1,7 @@
 #include "SceneFile.hpp"
 
 #include "Scene.hpp"
+#include "AssetData.hpp"
 
 #include <cmath>
 #include <fstream>
@@ -29,7 +30,7 @@ bool finite(const DVec3& value) {
 std::string serializeScene(const Scene& scene) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "SatScene 1\n" << scene.entities().size() << '\n';
+    out << "SatScene 2\n" << scene.entities().size() << '\n';
     for (const auto& entity : scene.entities()) {
         const auto& t = entity.transform;
         const auto& c = entity.camera;
@@ -39,7 +40,8 @@ std::string serializeScene(const Scene& scene) {
             << std::setprecision(std::numeric_limits<float>::max_digits10)
             << t.rotation.x << ' ' << t.rotation.y << ' ' << t.rotation.z << ' '
             << t.scale.x << ' ' << t.scale.y << ' ' << t.scale.z << '\n'
-            << entity.hasMesh << ' ' << static_cast<int>(entity.mesh.primitive) << '\n'
+            << entity.hasMesh << ' ' << static_cast<int>(entity.mesh.primitive) << ' '
+            << std::quoted(entity.mesh.meshPath) << ' ' << std::quoted(entity.mesh.texturePath) << '\n'
             << entity.hasCamera << ' ' << c.isMain << ' ' << c.fieldOfView << ' '
             << c.nearClip << ' ' << c.farClip;
         for (float channel : c.clearColor) {
@@ -64,7 +66,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
     std::string magic;
     int version = 0;
     std::size_t count = 0;
-    if (!(in >> magic >> version >> count) || magic != "SatScene" || version != 1 || count > kMaxEntities) {
+    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version != 1 && version != 2) || count > kMaxEntities) {
         return fail("Invalid scene header, version or entity count.");
     }
     Scene candidate;
@@ -82,7 +84,11 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
         if (!(in >> t.position.x >> t.position.y >> t.position.z
                  >> t.rotation.x >> t.rotation.y >> t.rotation.z
                  >> t.scale.x >> t.scale.y >> t.scale.z
-                 >> e.hasMesh >> primitive >> e.hasCamera >> c.isMain
+                 >> e.hasMesh >> primitive) ||
+            (version == 2 && (!(in >> std::quoted(e.mesh.meshPath) >> std::quoted(e.mesh.texturePath)) ||
+                (!e.mesh.meshPath.empty() && !isMeshAssetPath(e.mesh.meshPath)) ||
+                (!e.mesh.texturePath.empty() && !isTextureAssetPath(e.mesh.texturePath)))) ||
+            !(in >> e.hasCamera >> c.isMain
                  >> c.fieldOfView >> c.nearClip >> c.farClip) ||
             !finite(t.position) || !finite(t.rotation) || !finite(t.scale) || primitive != 0 ||
             !std::isfinite(c.fieldOfView) || !std::isfinite(c.nearClip) || !std::isfinite(c.farClip) ||

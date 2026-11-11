@@ -3,6 +3,7 @@
 #include "LuaBindingUtils.hpp"
 
 #include "Scene.hpp"
+#include "AssetData.hpp"
 
 #include <lua.hpp>
 
@@ -262,6 +263,31 @@ int removeComponent(lua_State* state) {
     return 1;
 }
 
+template<std::string MeshComponent::* member>
+int getAsset(lua_State* state) {
+    const Entity& entity = checkedEntity(state);
+    if (!entity.hasMesh) { return luaL_error(state, "entity has no mesh"); }
+    const auto& path = entity.mesh.*member;
+    if (path.empty()) { lua_pushnil(state); }
+    else { lua_pushlstring(state, path.data(), path.size()); }
+    return 1;
+}
+
+template<std::string MeshComponent::* member, bool (*validate)(std::string_view)>
+int setAsset(lua_State* state) {
+    Entity& entity = checkedEntity(state);
+    if (!entity.hasMesh) { return luaL_error(state, "entity has no mesh"); }
+    std::size_t size = 0;
+    const char* text = lua_isnoneornil(state, 2) ? "" : luaL_checklstring(state, 2, &size);
+    const std::string_view path(text, size);
+    if (!path.empty() && !validate(path)) {
+        return luaL_argerror(state, 2, "expected a supported project-relative Assets/ path");
+    }
+    auto& destination = entity.mesh.*member;
+    if (destination != path) { destination.assign(path); sceneFor(state).markEdited(); }
+    return 0;
+}
+
 ScriptComponent* findScript(Entity& entity, std::string_view path) {
     for (auto& script : entity.scripts) {
         if (script.path == path) {
@@ -349,6 +375,14 @@ void registerSceneBindings(lua_State* state, Scene& scene) {
         {"getCameraClearColor", guarded<getCameraClearColor>},
         // @lua fun sat.setCameraClearColor(entity: EntityId, r: number, g: number, b: number, a: number)
         {"setCameraClearColor", guarded<setCameraClearColor>},
+        // @lua fun sat.getMeshAsset(entity: EntityId): string|nil
+        {"getMeshAsset", guarded<getAsset<&MeshComponent::meshPath>>},
+        // @lua fun sat.setMeshAsset(entity: EntityId, path: string|nil)
+        {"setMeshAsset", guarded<setAsset<&MeshComponent::meshPath, isMeshAssetPath>>},
+        // @lua fun sat.getTextureAsset(entity: EntityId): string|nil
+        {"getTextureAsset", guarded<getAsset<&MeshComponent::texturePath>>},
+        // @lua fun sat.setTextureAsset(entity: EntityId, path: string|nil)
+        {"setTextureAsset", guarded<setAsset<&MeshComponent::texturePath, isTextureAssetPath>>},
         // @lua fun sat.hasMesh(entity: EntityId): boolean
         {"hasMesh", guarded<hasComponent<&Entity::hasMesh>>},
         // @lua fun sat.hasCamera(entity: EntityId): boolean

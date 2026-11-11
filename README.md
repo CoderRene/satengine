@@ -129,3 +129,7 @@ minimize/restore, close, and the editor's scene/game views and panels.
 ## License
 
 **TBD**, not decided yet while the project is still in flux.
+
+Static OBJ meshes and PNG/JPEG textures are supported in Mesh components through
+Inspector and Lua, including standalone archives. See [Asset loading](docs/AssetLoading.md)
+and the `Examples/AssetLoading` project.

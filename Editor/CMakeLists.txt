@@ -18,7 +18,7 @@ endif()
 add_custom_command(
     OUTPUT "${_sat_relink_stub}"
     COMMAND ${CMAKE_COMMAND} -E touch "${_sat_relink_stub}"
-    DEPENDS "$<TARGET_FILE:SatScripting>" "$<TARGET_FILE:SatLua>" "$<TARGET_FILE:SatScene>" "$<TARGET_FILE:SatRuntime>" "$<TARGET_FILE:SatEditor>"
+    DEPENDS "$<TARGET_FILE:SatAssets>" "$<TARGET_FILE:SatScripting>" "$<TARGET_FILE:SatLua>" "$<TARGET_FILE:SatScene>" "$<TARGET_FILE:SatRuntime>" "$<TARGET_FILE:SatEditor>"
     COMMENT "Engine library changed; refreshing Editor relink stub"
     VERBATIM
 )

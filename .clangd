@@ -2,10 +2,12 @@ CompileFlags:
   Add:
     - -std=c++20
     - -Ibuild/Engine/generated
+    - -IEngine/Assets/include
     - -IEngine/Core/include
     - -IEngine/Renderer/include
     - -IEngine/UI/include
     - -IEngine/ThirdParty/stb
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Assets/include"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Core/include"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Renderer/include"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/UI/include"

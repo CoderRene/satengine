@@ -1,0 +1,23 @@
+{
+  "folders": [
+    {
+      "path": "."
+    }
+  ],
+  "settings": {
+    "Lua.runtime.version": "Lua 5.4",
+    "Lua.workspace.library": [
+      "${workspaceFolder}/LuaDefs"
+    ],
+    "Lua.workspace.checkThirdParty": false,
+    "Lua.workspace.useGitIgnore": false,
+    "Lua.diagnostics.globals": [
+      "sat",
+      "self",
+      "onStart",
+      "onUpdate",
+      "onStop"
+    ],
+    "selene.configPath": "${workspaceFolder}/selene.toml"
+  }
+}

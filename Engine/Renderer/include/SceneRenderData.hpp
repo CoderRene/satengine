@@ -14,6 +14,7 @@ public:
     [[nodiscard]] const GameViewCamera& camera() const { return m_camera; }
     [[nodiscard]] bool hasCamera() const { return m_hasCamera; }
     // Borrowed mesh storage remains valid until the next update or destruction.
+    // Source scene asset-path strings must remain unchanged until submission ends.
     [[nodiscard]] SceneDrawList drawList() const;
 
 private:

@@ -2,6 +2,8 @@
 
 #include "Math.hpp"
 
+#include <string_view>
+
 namespace sat {
 
 inline constexpr float kTranslateGizmoAxisLength = 1.25f;
@@ -15,6 +17,9 @@ struct MeshInstance {
     Mat4 world{};
     float color[4] = {0.75f, 0.75f, 0.78f, 1.0f};
     MeshPrimitive primitive = MeshPrimitive::Cube;
+    // Borrowed from scene components, valid through the render submission.
+    std::string_view meshPath;
+    std::string_view texturePath;
 };
 
 struct CameraFrustumInstance {
