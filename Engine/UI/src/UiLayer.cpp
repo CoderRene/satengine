@@ -61,6 +61,8 @@ struct UiLayer::Impl {
     std::unique_ptr<ContentPanel> content;
     std::unique_ptr<AssetImportPanel> assetImports;
     bool closeApproved = false;
+    bool openClosePrompt = false;
+    bool discardSceneOnClose = false;
     std::unique_ptr<ViewportPanel> viewport;
     std::unique_ptr<LuaLogPanel> luaLog;
 
@@ -332,7 +334,9 @@ UiLayer::UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& proj
 UiLayer::~UiLayer() {
     if (m_impl->viewport) { m_impl->viewport->resetInteraction(); }
     m_impl->stopPlay();
-    if (!m_impl->saveScene()) { std::cerr << m_impl->sceneError << '\n'; }
+    if (!m_impl->discardSceneOnClose && !m_impl->saveScene()) {
+        std::cerr << m_impl->sceneError << '\n';
+    }
     if (m_impl->dx11Ready) {
         ImGui_ImplDX11_Shutdown();
     }
@@ -732,10 +736,17 @@ void UiLayer::beginFrame() {
 }
 
 bool UiLayer::requestClose() {
-    if (m_impl->closeApproved || !m_impl->assetImports->dirty()) { return true; }
+    if (m_impl->closeApproved ||
+        (!m_impl->hasUnsavedChanges() && !m_impl->assetImports->dirty())) {
+        return true;
+    }
     m_impl->assetImports->request([this] {
-        m_impl->closeApproved = true;
-        glfwSetWindowShouldClose(m_impl->window, GLFW_TRUE);
+        if (m_impl->hasUnsavedChanges()) {
+            m_impl->openClosePrompt = true;
+        } else {
+            m_impl->closeApproved = true;
+            glfwSetWindowShouldClose(m_impl->window, GLFW_TRUE);
+        }
     });
     return false;
 }
@@ -746,6 +757,42 @@ void UiLayer::endFrame() {
     }
 
     m_impl->assetImports->drawPrompt();
+
+    if (m_impl->openClosePrompt) {
+        ImGui::OpenPopup("Unsaved Scene Changes");
+        m_impl->openClosePrompt = false;
+    }
+    if (ImGui::BeginPopupModal("Unsaved Scene Changes", nullptr,
+                              ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Save scene changes before exiting the editor?");
+        if (!m_impl->sceneError.empty()) {
+            ImGui::TextWrapped("%s", m_impl->sceneError.c_str());
+        }
+        if (!m_impl->project.isOpen()) {
+            ImGui::TextUnformatted("Open or create a project to save this scene.");
+        }
+        ImGui::BeginDisabled(!m_impl->project.isOpen());
+        if (ImGui::Button("Save and Exit")) {
+            if (m_impl->saveScene()) {
+                m_impl->closeApproved = true;
+                glfwSetWindowShouldClose(m_impl->window, GLFW_TRUE);
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Exit Without Saving")) {
+            m_impl->discardSceneOnClose = true;
+            m_impl->closeApproved = true;
+            glfwSetWindowShouldClose(m_impl->window, GLFW_TRUE);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     GameViewCamera sceneCamera{};
     if (m_impl->viewport) {
