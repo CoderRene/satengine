@@ -37,6 +37,107 @@ function SatInput.mouseReleased(button) end
 ---@return number y
 function SatInput.cursorPosition() end
 
+---@class SatMath
+local SatMath = {}
+
+---@param value number
+---@param minimum number
+---@param maximum number
+---@return number
+function SatMath.clamp(value, minimum, maximum) end
+
+---@param from number
+---@param to number
+---@param t number
+---@return number
+function SatMath.lerp(from, to, t) end
+
+---@param current number
+---@param target number
+---@param maxDelta number
+---@return number
+function SatMath.moveTowards(current, target, maxDelta) end
+
+---@param from number
+---@param to number
+---@return number
+function SatMath.deltaAngle(from, to) end
+
+---@param from number
+---@param to number
+---@param t number
+---@return number
+function SatMath.lerpAngle(from, to, t) end
+
+---@param x number
+---@param y number
+---@param z number
+---@return number
+function SatMath.length(x, y, z) end
+
+---@param ax number
+---@param ay number
+---@param az number
+---@param bx number
+---@param by number
+---@param bz number
+---@return number
+function SatMath.distance(ax, ay, az, bx, by, bz) end
+
+---@param ax number
+---@param ay number
+---@param az number
+---@param bx number
+---@param by number
+---@param bz number
+---@return number
+function SatMath.dot(ax, ay, az, bx, by, bz) end
+
+---@param ax number
+---@param ay number
+---@param az number
+---@param bx number
+---@param by number
+---@param bz number
+---@return number x
+---@return number y
+---@return number z
+function SatMath.cross(ax, ay, az, bx, by, bz) end
+
+---@param x number
+---@param y number
+---@param z number
+---@return number x
+---@return number y
+---@return number z
+function SatMath.normalize(x, y, z) end
+
+---@param x number
+---@param y number
+---@param z number
+---@param pitch number
+---@param yaw number
+---@param roll number
+---@return number x
+---@return number y
+---@return number z
+function SatMath.rotateVector(x, y, z, pitch, yaw, roll) end
+
+---@param pitch number
+---@param yaw number
+---@param roll number
+---@return number x
+---@return number y
+---@return number z
+function SatMath.forward(pitch, yaw, roll) end
+
+---@param pitch number
+---@param yaw number
+---@return number x
+---@return number y
+---@return number z
+function SatMath.cameraForward(pitch, yaw) end
+
 ---@class SatTime
 local SatTime = {}
 
@@ -192,6 +293,7 @@ function SatTime.setTimeScale(scale) end
 
 ---@class sat
 ---@field input SatInput
+---@field math SatMath
 ---@field time SatTime
 ---@field Key SatKey
 ---@field MouseButton SatMouseButton
@@ -199,6 +301,9 @@ sat = {}
 
 ---@type SatInput
 sat.input = {}
+
+---@type SatMath
+sat.math = {}
 
 ---@type SatTime
 sat.time = {}

@@ -422,3 +422,58 @@ Delivery rules:
 
 Choose one script to own an entity's movement when several scripts communicate
 with it. Direct mutations are immediate; multiple writes follow callback order.
+
+## Basic math helpers
+
+`sat.math` complements Lua's standard `math` library with engine rotation
+conventions and common movement/vector operations. Coordinates are left-handed:
++X right, +Y up, +Z forward. Angles are degrees. Use Lua `math.rad`, `math.deg`,
+`math.sin`, `math.cos`, etc. for ordinary scalar math; Lua trigonometry takes
+radians.
+
+Vectors are passed as consecutive `x, y, z` numbers and returned as three
+numbers, matching the transform API. Helpers create no Lua vector tables or
+userdata. Scalar/vector calculations use doubles; object rotations use the same
+float matrix as the engine renderer. All inputs must be finite; invalid bounds,
+negative movement limits, and nonfinite results raise Lua errors.
+
+| Helper | Behavior |
+| --- | --- |
+| `sat.math.clamp(value, minimum, maximum)` | Clamp to inclusive bounds; minimum must not exceed maximum |
+| `sat.math.lerp(from, to, t)` | Linear interpolation; clamps `t` to `[0, 1]` |
+| `sat.math.moveTowards(current, target, maxDelta)` | Move by at most nonnegative `maxDelta`, without overshooting |
+| `sat.math.deltaAngle(from, to)` | Signed shortest degree difference in `(-180, 180]`; exact half-turns choose `+180` |
+| `sat.math.lerpAngle(from, to, t)` | Interpolate along the shortest degree arc; clamps `t` to `[0, 1]`, returns `[0, 360)` |
+| `sat.math.length(x, y, z)` | Vector magnitude |
+| `sat.math.distance(ax, ay, az, bx, by, bz)` | Distance between two points |
+| `sat.math.dot(ax, ay, az, bx, by, bz)` | Vector dot product |
+| `sat.math.cross(ax, ay, az, bx, by, bz)` | Vector cross product; `up × forward = right` |
+| `sat.math.normalize(x, y, z)` | Unit vector; a zero vector returns `(0, 0, 0)` |
+| `sat.math.rotateVector(x, y, z, pitch, yaw, roll)` | Rotate a vector using object Euler degrees, `Rz * Ry * Rx`; ignores translation and scale |
+| `sat.math.forward(pitch, yaw, roll)` | Object's rotated local `+Z` axis, using the same Euler matrix |
+| `sat.math.cameraForward(pitch, yaw)` | Camera view direction; roll is ignored, matching the engine view matrix |
+
+The engine currently has distinct object and camera pitch conventions. For
+objects, positive pitch rotates `+Z` toward `-Y`; positive yaw turns `+Z` toward
+`+X`, and positive roll turns `+X` toward `+Y`. Cameras use positive pitch to look
+up (`+Y`) and positive yaw to look toward `+X`. Use `forward` for object movement
+and `cameraForward` for camera movement. Rotation arguments must fit a finite
+float, matching `sat.setRotation`.
+
+```lua
+function onUpdate(dt)
+    local pitch, yaw, roll = sat.getRotation(self.entity)
+    local dx, dy, dz = sat.math.forward(pitch, yaw, roll)
+    local x, y, z = sat.getPosition(self.entity)
+    local speed = 5
+    sat.setPosition(self.entity,
+        x + dx * speed * dt, y + dy * speed * dt, z + dz * speed * dt)
+end
+```
+
+For smooth turning through zero, use
+`sat.math.lerpAngle(350, 10, 0.5)` (returns `0`), rather than scalar `lerp` (returns
+`180`). For constant-speed movement, pass `speed * dt` as `moveTowards`'s
+`maxDelta`. Normalization handles very small and very large finite vectors
+without inventing a direction for zero input. Arithmetic whose result cannot be
+represented as a finite double raises an error.

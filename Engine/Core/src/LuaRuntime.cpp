@@ -6,6 +6,7 @@
 #include "module/LuaRuntimeModules/LuaLogBindings.hpp"
 #include "module/LuaRuntimeModules/LuaTimeBindings.hpp"
 #include "module/LuaRuntimeModules/LuaMessageBindings.hpp"
+#include "module/LuaRuntimeModules/LuaMathBindings.hpp"
 
 #include "ScriptLog.hpp"
 #include "Scene.hpp"
@@ -325,6 +326,7 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
 
     lua_newtable(state);
     lua::registerSceneBindings(state, impl.m_scene);
+    lua::registerMathBindings(state);
     lua::registerInputBindings(state, impl.m_input);
     lua::registerLogBindings(state, impl.m_log);
     lua::registerTimeBindings(state, *impl.m_sharedTime);

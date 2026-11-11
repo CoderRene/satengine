@@ -148,18 +148,22 @@ inline Mat4 lookAt(const Vec3& eye, const Vec3& target, const Vec3& up) {
     return out;
 }
 
-// Euler degrees: x=pitch, y=yaw, z=roll. Scale is ignored for the view.
-inline Mat4 viewFromEuler(const Vec3& position, const Vec3& rotationDegrees) {
-    const float pitch = rotationDegrees.x * kDegToRad;
-    const float yaw = rotationDegrees.y * kDegToRad;
-
+// Left-handed camera direction: +Z forward, +Y up. Positive pitch looks up;
+// positive yaw turns toward +X. Camera roll is ignored by viewFromEuler.
+[[nodiscard]] inline Vec3 cameraForward(float pitchDegrees, float yawDegrees) {
+    const float pitch = pitchDegrees * kDegToRad;
+    const float yaw = yawDegrees * kDegToRad;
     const float cosPitch = std::cos(pitch);
-    const Vec3 forward = normalize(Vec3{
+    return normalize(Vec3{
         cosPitch * std::sin(yaw),
         std::sin(pitch),
         cosPitch * std::cos(yaw),
     });
+}
 
+// Euler degrees: x=pitch, y=yaw, z=roll. Scale is ignored for the view.
+inline Mat4 viewFromEuler(const Vec3& position, const Vec3& rotationDegrees) {
+    const Vec3 forward = cameraForward(rotationDegrees.x, rotationDegrees.y);
     return lookAt(position, position + forward, Vec3{0.0f, 1.0f, 0.0f});
 }
 
