@@ -19,3 +19,10 @@ CompileFlags:
     - "-ID:/Software Projects/GameEngine Project/SatEngine/build/Game/SatGameScripts"
     - -IEngine/Platform/include
     - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Platform/include"
+    - -IEngine/Physics/include
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Physics/include"
+    - -IEngine/Physics/src
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Physics/src"
+    - -Ibuild/_deps/jolt-src
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/jolt-src"
+    - -DJPH_DOUBLE_PRECISION

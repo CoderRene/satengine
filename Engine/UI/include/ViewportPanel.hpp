@@ -24,6 +24,7 @@ public:
     void onImGuiRender(int& selectedIndex, bool playMode, bool focusGameView);
 
     void resetInteraction();
+    [[nodiscard]] bool showColliders() const;
     [[nodiscard]] TransformGizmoInstance gizmo(const Entity& entity) const;
     [[nodiscard]] bool selectionActivated() const;
 

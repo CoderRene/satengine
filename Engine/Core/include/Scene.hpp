@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Math.hpp"
+#include "PhysicsTypes.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -18,8 +19,8 @@ struct Transform {
     Vec3 scale{1.0f, 1.0f, 1.0f};
 };
 
-inline Mat4 matrixFromTransform(const Transform& transform) {
-    return matrixFromTRS(toVec3(transform.position), transform.rotation, transform.scale);
+inline Mat4 matrixFromTransform(const Transform& transform, DVec3 renderOrigin = {}) {
+    return matrixFromTRS(toVec3(transform.position - renderOrigin), transform.rotation, transform.scale);
 }
 
 struct CameraComponent {
@@ -60,6 +61,14 @@ struct Entity {
     bool hasMesh = false;
     MeshComponent mesh;
     std::vector<ScriptComponent> scripts;
+    bool hasRigidBody = false;
+    RigidBodyComponent rigidBody;
+    bool hasCollider = false;
+    // Absent colliders do not allocate shape storage. Adding the component
+    // initializes ColliderComponent{} (one unit box).
+    ColliderComponent collider{.shapes = {}};
+    bool hasGravitySource = false;
+    GravitySourceComponent gravitySource;
 
 private:
     friend class Scene;
@@ -69,6 +78,7 @@ private:
 class Scene {
 public:
     Scene();
+    PhysicsSettings physicsSettings;
 
     // Window-thread only. Copies preserve identity for snapshots; newly created
     // entities always get fresh IDs. IDs are not serialized. Load replaces them.

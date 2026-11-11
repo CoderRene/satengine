@@ -1,6 +1,7 @@
 #include "UiLayer.hpp"
 
 #include "module/AssetImportPanel.hpp"
+#include "module/PhysicsInspector.hpp"
 
 #include "ContentPanel.hpp"
 #include "EnginePaths.hpp"
@@ -11,10 +12,12 @@
 #include "Math.hpp"
 #include "LuaRuntime.hpp"
 #include "Project.hpp"
+#include "PhysicsSystem.hpp"
 #include "RecentProjects.hpp"
 #include "Renderer.hpp"
 #include "Scene.hpp"
 #include "SceneDraw.hpp"
+#include "ColliderLines.hpp"
 #include "SceneRenderData.hpp"
 #include "ViewportPanel.hpp"
 #include "Window.hpp"
@@ -31,6 +34,7 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdio>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <iostream>
@@ -44,7 +48,7 @@ namespace sat {
 
 struct UiLayer::Impl {
     Impl(Scene& scene, Project& project, const Input& input)
-    : project(project), scene(scene), scripts(scene, &input, &scriptLog),
+    : project(project), scene(scene), physics(scene), scripts(scene, &input, &scriptLog, &physics),
       savedSceneRevision(scene.editRevision()) {
         if (project.isOpen()) { recordLoadedScene(); }
     }
@@ -55,6 +59,9 @@ struct UiLayer::Impl {
     Project& project;
     Scene& scene;
     SceneRenderData gameRenderData;
+    std::vector<MeshInstance> sceneMeshes;
+    std::vector<CameraFrustumInstance> sceneFrustums;
+    std::vector<DebugLine> colliderLines;
     RecentProjects recent{std::filesystem::path("recent_projects.txt")};
     std::unique_ptr<HierarchyPanel> hierarchy;
     std::unique_ptr<InspectorPanel> inspector;
@@ -67,6 +74,7 @@ struct UiLayer::Impl {
     std::unique_ptr<LuaLogPanel> luaLog;
 
     ScriptLog scriptLog;
+    PhysicsSystem physics;
     LuaRuntime scripts;
     Scene editScene;
     bool playMode = false;
@@ -144,6 +152,7 @@ struct UiLayer::Impl {
     }
     GameBuilder builder{std::filesystem::path(SAT_ENGINE_SOURCE_DIR)};
     bool showBuildStatus = false;
+    bool showPhysicsSettings = false;
     bool openNewProjectModal = false;
     std::filesystem::path newProjectParent;
     char newProjectName[128] = {};
@@ -448,6 +457,10 @@ void UiLayer::beginFrame() {
             ImGui::EndMenu();
         }
 
+        if (ImGui::BeginMenu("Scene")) {
+            ImGui::MenuItem("Physics Settings", nullptr, &m_impl->showPhysicsSettings);
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Build")) {
             const bool building = m_impl->builder.status() == GameBuilder::Status::Building;
             const bool canBuild = m_impl->project.isOpen() && !m_impl->playMode && !building;
@@ -530,6 +543,15 @@ void UiLayer::beginFrame() {
         ImGui::EndMenuBar();
     }
 
+    if (m_impl->showPhysicsSettings) {
+        if (ImGui::Begin("Physics Settings", &m_impl->showPhysicsSettings)) {
+            ImGui::BeginDisabled(m_impl->playMode);
+            if (drawPhysicsSettings(m_impl->scene.physicsSettings)) { m_impl->scene.markEdited(); }
+            ImGui::EndDisabled();
+            if (m_impl->playMode) { ImGui::Text("Active local worlds: %zu", m_impl->physics.frameCount()); }
+        }
+        ImGui::End();
+    }
     if (m_impl->showBuildStatus) {
         ImGui::SetNextWindowSize(ImVec2(680.0f, 440.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Build Status", &m_impl->showBuildStatus)) {
@@ -807,8 +829,10 @@ void UiLayer::endFrame() {
     m_impl->gameRenderData.update(m_impl->scene, gameViewWidth, gameViewHeight);
     const auto& gameCamera = m_impl->gameRenderData.camera();
 
-    std::vector<MeshInstance> meshInstances;
-    std::vector<CameraFrustumInstance> frustumInstances;
+    auto& meshInstances = m_impl->sceneMeshes;
+    auto& frustumInstances = m_impl->sceneFrustums;
+    auto& colliderLines = m_impl->colliderLines;
+    meshInstances.clear(); frustumInstances.clear(); colliderLines.clear();
     int selectedMesh = -1;
     const int selectedEntity =
         m_impl->hierarchy ? m_impl->hierarchy->selectedIndex() : -1;
@@ -818,9 +842,12 @@ void UiLayer::endFrame() {
             : 1.0f;
     const auto& entities = m_impl->scene.entities();
     for (std::size_t i = 0; i < entities.size(); ++i) {
+        if (m_impl->viewport && m_impl->viewport->showColliders()) {
+            appendColliderLines(entities[i], sceneCamera.renderOrigin, static_cast<int>(i) == selectedEntity, colliderLines);
+        }
         if (entities[i].hasMesh) {
             MeshInstance instance{};
-            instance.world = matrixFromTransform(entities[i].transform);
+            instance.world = matrixFromTransform(entities[i].transform, sceneCamera.renderOrigin);
             instance.meshPath = entities[i].mesh.meshPath;
             instance.texturePath = entities[i].mesh.texturePath;
             switch (entities[i].mesh.primitive) {
@@ -835,7 +862,7 @@ void UiLayer::endFrame() {
         }
         if (entities[i].hasCamera) {
             CameraFrustumInstance frustum{};
-            frustum.position = toVec3(entities[i].transform.position);
+            frustum.position = toVec3(entities[i].transform.position - sceneCamera.renderOrigin);
             frustum.rotation = entities[i].transform.rotation;
             frustum.fieldOfView = entities[i].camera.fieldOfView;
             frustum.nearClip = entities[i].camera.nearClip;
@@ -847,6 +874,10 @@ void UiLayer::endFrame() {
     }
 
     SceneDrawList sceneDraw{};
+    sceneDraw.debugLines = colliderLines.data();
+    sceneDraw.debugLineCount = static_cast<int>(colliderLines.size());
+    sceneDraw.gridOffset = {-static_cast<float>(std::fmod(sceneCamera.renderOrigin.x, 1.0)),
+        -static_cast<float>(sceneCamera.renderOrigin.y), -static_cast<float>(std::fmod(sceneCamera.renderOrigin.z, 1.0))};
     sceneDraw.meshes = meshInstances.empty() ? nullptr : meshInstances.data();
     sceneDraw.meshCount = static_cast<int>(meshInstances.size());
     sceneDraw.selectedMesh = selectedMesh;

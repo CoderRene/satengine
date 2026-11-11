@@ -138,6 +138,108 @@ function SatMath.forward(pitch, yaw, roll) end
 ---@return number z
 function SatMath.cameraForward(pitch, yaw) end
 
+---@class SatPhysics
+local SatPhysics = {}
+
+---@param entity EntityId
+---@return integer
+function SatPhysics.frameId(entity) end
+
+---@param entity EntityId
+---@return number
+---@return number
+---@return number
+function SatPhysics.linearVelocity(entity) end
+
+---@param entity EntityId
+---@return number
+---@return number
+---@return number
+function SatPhysics.angularVelocity(entity) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.setLinearVelocity(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.setAngularVelocity(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.addForce(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.addTorque(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.addImpulse(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.addAngularImpulse(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+---@param rx number
+---@param ry number
+---@param rz number
+---@param clearVelocity? boolean
+function SatPhysics.teleport(entity, x, y, z, rx, ry, rz, clearVelocity?) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+---@param rx number
+---@param ry number
+---@param rz number
+function SatPhysics.moveKinematic(entity, x, y, z, rx, ry, rz) end
+
+---@param x number
+---@param y number
+---@param z number
+---@return number
+---@return number
+---@return number
+function SatPhysics.gravityAt(x, y, z) end
+
+---@param x number
+---@param y number
+---@param z number
+---@return number?
+---@return number?
+---@return number?
+function SatPhysics.upAt(x, y, z) end
+
+---@param x number
+---@param y number
+---@param z number
+---@param dx number
+---@param dy number
+---@param dz number
+---@param distance number
+---@param ignore? EntityId
+---@param includeTriggers? boolean
+---@return table?
+function SatPhysics.raycast(x, y, z, dx, dy, dz, distance, ignore?, includeTriggers?) end
+
 ---@class SatTime
 local SatTime = {}
 
@@ -294,6 +396,7 @@ function SatTime.setTimeScale(scale) end
 ---@class sat
 ---@field input SatInput
 ---@field math SatMath
+---@field physics SatPhysics
 ---@field time SatTime
 ---@field Key SatKey
 ---@field MouseButton SatMouseButton
@@ -304,6 +407,9 @@ sat.input = {}
 
 ---@type SatMath
 sat.math = {}
+
+---@type SatPhysics
+sat.physics = {}
 
 ---@type SatTime
 sat.time = {}

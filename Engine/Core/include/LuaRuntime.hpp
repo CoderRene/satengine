@@ -12,6 +12,7 @@ namespace sat {
 class Scene;
 class Input;
 class ScriptLog;
+class PhysicsSystem;
 
 // Script names are relative to Scripts/, using '/' separators (e.g. main.lua).
 struct LuaScriptSource {
@@ -27,8 +28,9 @@ struct LuaScriptSource {
 // Entity IDs are opaque positive integers; retain them instead of scene indices.
 class LuaRuntime {
 public:
-explicit LuaRuntime(Scene& scene, const Input* input = nullptr, ScriptLog* log = nullptr);
-    // Borrowed input must outlive the runtime; null supplies an idle input state.
+explicit LuaRuntime(Scene& scene, const Input* input = nullptr, ScriptLog* log = nullptr, PhysicsSystem* physics = nullptr);
+    // Borrowed input/physics must outlive the runtime; null input is idle.
+    // The session starts/stops borrowed physics and coordinates its fixed ticks.
     ~LuaRuntime();
     LuaRuntime(const LuaRuntime&) = delete;
     LuaRuntime& operator=(const LuaRuntime&) = delete;

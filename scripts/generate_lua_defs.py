@@ -16,6 +16,7 @@ BINDING_SOURCES = [
     ROOT / "Engine/Core/src/module/LuaRuntimeModules/LuaTimeBindings.cpp",
     ROOT / "Engine/Core/src/module/LuaRuntimeModules/LuaMessageBindings.cpp",
     ROOT / "Engine/Core/src/module/LuaRuntimeModules/LuaMathBindings.cpp",
+    ROOT / "Engine/Core/src/module/LuaRuntimeModules/LuaPhysicsBindings.cpp",
     ROOT / "Engine/Core/src/module/LuaRuntimeModules/LuaLogBindings.cpp",
 ]
 OUTPUT = ROOT / "Engine/Scripting/LuaDefs/sat.lua"

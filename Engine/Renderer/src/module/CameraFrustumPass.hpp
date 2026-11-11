@@ -21,7 +21,7 @@ public:
         ID3D11DeviceContext* context,
         const Mat4& viewProj,
         const CameraFrustumInstance* frustums,
-        int frustumCount);
+        int frustumCount, const DebugLine* lines = nullptr, int lineCount = 0);
 
 private:
     struct Impl;

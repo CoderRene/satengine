@@ -633,7 +633,8 @@ void Renderer::renderOffscreenView(
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (SUCCEEDED(
                 m_impl->context->Map(m_impl->lineCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-            std::memcpy(mapped.pData, viewProj.m, sizeof(viewProj.m));
+            const Mat4 gridViewProj = viewProj * translationMatrix(drawList.gridOffset);
+            std::memcpy(mapped.pData, gridViewProj.m, sizeof(gridViewProj.m));
             m_impl->context->Unmap(m_impl->lineCb, 0);
 
             const UINT stride = sizeof(DebugLineVertex);
@@ -664,10 +665,10 @@ void Renderer::renderOffscreenView(
         }
     }
 
-    if (drawList.drawEditorOverlay && drawList.frustumCount > 0 && drawList.frustums != nullptr &&
+    if (drawList.drawEditorOverlay && (drawList.frustumCount > 0 || drawList.debugLineCount > 0) &&
         m_impl->frustumPass.ensure(m_impl->device)) {
         m_impl->frustumPass.draw(
-            m_impl->context, viewProj, drawList.frustums, drawList.frustumCount);
+            m_impl->context, viewProj, drawList.frustums, drawList.frustumCount, drawList.debugLines, drawList.debugLineCount);
     }
 
     if (drawList.drawEditorOverlay && drawList.showTransformGizmo &&

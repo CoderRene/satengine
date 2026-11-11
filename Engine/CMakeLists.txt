@@ -13,8 +13,10 @@ target_compile_features(SatAssets PUBLIC cxx_std_20)
 add_library(SatScene STATIC
     Core/src/Scene.cpp
     Core/src/SceneFile.cpp
+    Core/src/module/ScenePhysicsFile.cpp
     Renderer/src/SceneRenderData.cpp
     Renderer/src/SceneDraw.cpp
+    Renderer/src/ColliderLines.cpp
     Renderer/src/TransformGizmo.cpp
 )
 target_include_directories(SatScene PUBLIC
@@ -97,6 +99,8 @@ add_library(SatInput STATIC Core/src/Input.cpp
 target_include_directories(SatInput PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Core/include")
 target_compile_features(SatInput PUBLIC cxx_std_20)
 
+add_subdirectory(Physics)
+
 add_library(SatScripting STATIC
     Core/src/LuaRuntime.cpp
     Core/src/Project.cpp
@@ -106,6 +110,7 @@ add_library(SatScripting STATIC
     Core/src/module/LuaRuntimeModules/LuaTimeBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaMessageBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaMathBindings.cpp
+    Core/src/module/LuaRuntimeModules/LuaPhysicsBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaPackageConfig.cpp
     Core/src/ScriptLog.cpp
     Core/src/module/LuaRuntimeModules/LuaLogBindings.hpp
@@ -114,8 +119,20 @@ add_library(SatScripting STATIC
 target_include_directories(SatScripting PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/src"
 )
-target_link_libraries(SatScripting PUBLIC SatScene SatInput PRIVATE SatLua)
+target_link_libraries(SatScripting PUBLIC SatScene SatInput SatPhysics PRIVATE SatLua)
 target_compile_features(SatScripting PUBLIC cxx_std_20)
+
+if(BUILD_TESTING)
+    add_executable(PhysicsTests Physics/tests/PhysicsTests.cpp)
+    target_link_libraries(PhysicsTests PRIVATE SatPhysics)
+    target_compile_definitions(PhysicsTests PRIVATE SAT_PHYSICS_EXAMPLE_DIR="${PROJECT_SOURCE_DIR}/Examples/SpacePhysics")
+    add_test(NAME Physics COMMAND PhysicsTests)
+    set_tests_properties(Physics PROPERTIES TIMEOUT 60)
+    add_executable(PhysicsScriptingTests Physics/tests/PhysicsScriptingTests.cpp)
+    target_link_libraries(PhysicsScriptingTests PRIVATE SatScripting)
+    add_test(NAME PhysicsScripting COMMAND PhysicsScriptingTests)
+    set_tests_properties(PhysicsScripting PROPERTIES TIMEOUT 15)
+endif()
 
 # Optional EmmyLua stub regen from // @lua metadata (not required to build/link).
 find_package(Python3 COMPONENTS Interpreter QUIET)
@@ -126,6 +143,7 @@ if(Python3_Interpreter_FOUND)
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaTimeBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaMessageBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaMathBindings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaPhysicsBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaLogBindings.cpp"
     )
     set(SAT_LUA_DEF_OUTPUT
@@ -209,6 +227,7 @@ add_library(SatEditor STATIC
     Platform/src/GameBuilder.cpp
     UI/src/UiLayer.cpp
     UI/src/module/AssetImportPanel.cpp
+    UI/src/module/PhysicsInspector.cpp
     UI/src/HierarchyPanel.cpp
     UI/src/InspectorPanel.cpp
     UI/src/ContentPanel.cpp

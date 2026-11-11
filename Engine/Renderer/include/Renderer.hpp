@@ -12,6 +12,7 @@
 namespace sat {
 
 struct GameViewCamera {
+    DVec3 renderOrigin{}; // Universe position subtracted before float conversion.
     float clearColor[4] = {0.12f, 0.16f, 0.24f, 1.0f};
     float view[16] = {
         1, 0, 0, 0,

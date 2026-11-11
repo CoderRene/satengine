@@ -2,6 +2,7 @@
 #include "PakArchive.hpp"
 #include "GamePakKeys.hpp"
 #include "LuaRuntime.hpp"
+#include "PhysicsSystem.hpp"
 #include "SceneFile.hpp"
 
 #if defined(_WIN32)
@@ -104,7 +105,7 @@ private:
 
 class LuaGame final : public sat::Application {
 public:
-    LuaGame() : m_scripts(scene(), &input()) {}
+    LuaGame() : m_physics(scene()), m_scripts(scene(), &input(), nullptr, &m_physics) {}
     [[nodiscard]] bool failed() const { return m_failed; }
 protected:
     void onStart() override {
@@ -181,6 +182,7 @@ private:
     }
     sat::PakArchive m_archive;
     std::array<sat::PakArchive, 3> m_assets;
+    sat::PhysicsSystem m_physics;
     sat::LuaRuntime m_scripts;
     bool m_failed = false;
 };

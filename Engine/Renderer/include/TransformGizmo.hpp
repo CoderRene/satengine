@@ -32,7 +32,7 @@ struct GizmoHit {
 class TransformGizmoDrag {
 public:
     [[nodiscard]] bool begin(EntityId owner, const Transform& transform, TransformTool tool, TransformSpace space,
-        GizmoHit hit, const Mat4& view, const Mat4& projection, float width, float height, float mouseX, float mouseY);
+        GizmoHit hit, const Mat4& view, const Mat4& projection, float width, float height, float mouseX, float mouseY, DVec3 renderOrigin = {});
     [[nodiscard]] bool update(Scene& scene, float mouseX, float mouseY);
     [[nodiscard]] bool cancel(Scene& scene);
     void finish() { m_active = false; }

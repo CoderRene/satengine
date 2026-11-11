@@ -1,4 +1,5 @@
 #include "LuaSceneBindings.hpp"
+#include "PhysicsSystem.hpp"
 
 #include "LuaBindingUtils.hpp"
 
@@ -115,7 +116,16 @@ int setVector(lua_State* state) {
     const float x = checkedFloat(state, 2);
     const float y = checkedFloat(state, 3);
     const float z = checkedFloat(state, 4);
+    auto* physics = static_cast<PhysicsSystem*>(lua_touserdata(state, lua_upvalueindex(2)));
+    if constexpr (member == &Transform::scale) {
+        if (physics && physics->running() && entity.hasCollider) { return luaL_error(state, "runtime collider scaling is not supported"); }
+    }
     entity.transform.*member = {x, y, z};
+    if constexpr (member == &Transform::rotation) {
+        if (physics && physics->running() && entity.hasCollider && !physics->teleport(entity.id(), entity.transform)) {
+            return luaL_error(state, "%s", physics->error().c_str());
+        }
+    }
     sceneFor(state).markEdited();
     return 0;
 }
@@ -135,6 +145,10 @@ int setPosition(lua_State* state) {
         checkedDouble(state, 3),
         checkedDouble(state, 4),
     };
+    auto* physics = static_cast<PhysicsSystem*>(lua_touserdata(state, lua_upvalueindex(2)));
+    if (physics && physics->running() && entity.hasCollider && !physics->teleport(entity.id(), entity.transform)) {
+        return luaL_error(state, "%s", physics->error().c_str());
+    }
     sceneFor(state).markEdited();
     return 0;
 }
@@ -325,7 +339,7 @@ int setScriptEnabled(lua_State* state) {
 
 } // namespace
 
-void registerSceneBindings(lua_State* state, Scene& scene) {
+void registerSceneBindings(lua_State* state, Scene& scene, PhysicsSystem* physics) {
     const luaL_Reg bindings[] = {
         // @lua fun sat.createEntity(name: string): EntityId
         {"createEntity", guarded<createEntity>},
@@ -402,7 +416,8 @@ void registerSceneBindings(lua_State* state, Scene& scene) {
         {nullptr, nullptr}
     };
     lua_pushlightuserdata(state, &scene);
-    luaL_setfuncs(state, bindings, 1);
+    lua_pushlightuserdata(state, physics);
+    luaL_setfuncs(state, bindings, 2);
 }
 
 } // namespace sat::lua

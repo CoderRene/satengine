@@ -50,7 +50,14 @@ struct CameraFrustumInstance {
     bool selected = false;
 };
 
+struct DebugLine {
+    Vec3 a{}, b{}, color{0,1,0};
+};
+
 struct SceneDrawList {
+    const DebugLine* debugLines = nullptr;
+    int debugLineCount = 0;
+    Vec3 gridOffset{};
     const MeshInstance* meshes = nullptr;
     int meshCount = 0;
     int selectedMesh = -1;

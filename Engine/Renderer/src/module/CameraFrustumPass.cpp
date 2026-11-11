@@ -88,32 +88,7 @@ void appendLine(
 }
 
 Mat4 cameraWorldMatrix(const Vec3& position, const Vec3& rotationDegrees) {
-    const float pitch = rotationDegrees.x * kDegToRad;
-    const float yaw = rotationDegrees.y * kDegToRad;
-    const float cosPitch = std::cos(pitch);
-    const Vec3 forward = normalize(Vec3{
-        cosPitch * std::sin(yaw),
-        std::sin(pitch),
-        cosPitch * std::cos(yaw),
-    });
-    const Vec3 worldUp{0.0f, 1.0f, 0.0f};
-    const Vec3 right = normalize(cross(worldUp, forward));
-    const Vec3 up = cross(forward, right);
-
-    Mat4 out = Mat4::identity();
-    out.m[0] = right.x;
-    out.m[1] = right.y;
-    out.m[2] = right.z;
-    out.m[4] = up.x;
-    out.m[5] = up.y;
-    out.m[6] = up.z;
-    out.m[8] = forward.x;
-    out.m[9] = forward.y;
-    out.m[10] = forward.z;
-    out.m[12] = position.x;
-    out.m[13] = position.y;
-    out.m[14] = position.z;
-    return out;
+    return inverse(viewFromEuler(position, rotationDegrees));
 }
 
 void appendFrustum(
@@ -190,6 +165,7 @@ struct CameraFrustumPass::Impl {
     ID3D11Buffer* frameCb = nullptr;
     ID3D11RasterizerState* rasterizer = nullptr;
     ID3D11DepthStencilState* depthState = nullptr;
+    std::vector<FrustumVertex> vertices;
     UINT capacity = 0;
     bool ready = false;
     bool failed = false;
@@ -355,16 +331,21 @@ void CameraFrustumPass::draw(
     ID3D11DeviceContext* context,
     const Mat4& viewProj,
     const CameraFrustumInstance* frustums,
-    int frustumCount) {
-    if (m_impl == nullptr || !m_impl->ready || context == nullptr || frustums == nullptr ||
-        frustumCount <= 0) {
+    int frustumCount, const DebugLine* lines, int lineCount) {
+    if (m_impl == nullptr || !m_impl->ready || context == nullptr ||
+        (frustumCount <= 0 && lineCount <= 0)) {
         return;
     }
 
-    std::vector<FrustumVertex> vertices;
+    auto& vertices = m_impl->vertices;
+    vertices.clear();
     vertices.reserve(static_cast<std::size_t>(frustumCount) * 24);
     for (int i = 0; i < frustumCount; ++i) {
         appendFrustum(vertices, frustums[i]);
+    }
+    for (int i = 0; i < lineCount; ++i) {
+        const auto& line = lines[i];
+        appendLine(vertices, line.a, line.b, line.color.x, line.color.y, line.color.z, 1.0f);
     }
     if (vertices.empty()) {
         return;

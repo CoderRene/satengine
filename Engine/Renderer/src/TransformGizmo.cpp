@@ -181,11 +181,11 @@ Vec3 gizmoEulerDegrees(const Mat4& rotation, const Vec3& referenceDegrees) {
     return eulerDistance(a, referenceDegrees) <= eulerDistance(b, referenceDegrees) ? a : b;
 }
 bool TransformGizmoDrag::begin(EntityId owner, const Transform& transform, TransformTool tool, TransformSpace space,
-    GizmoHit hit, const Mat4& view, const Mat4& projection, float width, float height, float mouseX, float mouseY) {
+    GizmoHit hit, const Mat4& view, const Mat4& projection, float width, float height, float mouseX, float mouseY, DVec3 renderOrigin) {
     if (m_active) { return false; }
     if (owner == kInvalidEntityId || !finite(transform) || hit.handle < 0 || hit.handle > (tool == TransformTool::Scale ? 3 : 2) ||
         !std::isfinite(width) || width <= 0 || !std::isfinite(mouseX) || !std::isfinite(mouseY)) { return false; }
-    m_origin = toVec3(transform.position);
+    m_origin = toVec3(transform.position - renderOrigin);
     const float scale = translateGizmoScale(m_origin, view, projection, height);
     if (scale <= 0) { return false; }
     const Mat4 viewProjection = projection * view;

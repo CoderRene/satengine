@@ -64,7 +64,7 @@ void drawCameraIcons(
     float viewH,
     const Scene& scene,
     int selectedIndex,
-    std::uintptr_t cameraIcon) {
+    std::uintptr_t cameraIcon, DVec3 renderOrigin) {
     if (draw == nullptr || cameraIcon == 0) {
         return;
     }
@@ -79,7 +79,7 @@ void drawCameraIcons(
         float sx = 0.0f;
         float sy = 0.0f;
         if (!projectWorldToScreen(
-                toVec3(entities[i].transform.position),
+                toVec3(entities[i].transform.position - renderOrigin),
                 view,
                 projection,
                 viewW,
@@ -235,6 +235,7 @@ struct ViewportPanel::Impl {
     Scene* scene = nullptr;
     Renderer* renderer = nullptr;
     bool selectionActivated = false;
+    bool showColliders = false;
     TransformTool tool = TransformTool::Move;
     int gameViewWidth = 0;
     int gameViewHeight = 0;
@@ -243,7 +244,7 @@ struct ViewportPanel::Impl {
     std::uintptr_t cameraIcon = 0;
 
     struct EditorCamera {
-        Vec3 position{-5.12f, 3.38f, -5.12f};
+        DVec3 position{-5.12, 3.38, -5.12};
         float yawDegrees = 45.0f;
         float pitchDegrees = -25.0f;
         float moveSpeed = 8.0f;
@@ -266,6 +267,13 @@ struct ViewportPanel::Impl {
         }
     } editorCamera;
 
+    void focusSelection(int selectedIndex) {
+        const auto* entity = selectedIndex >= 0 ? scene->entity(static_cast<std::size_t>(selectedIndex)) : nullptr;
+        if (!entity || gizmoDrag.active()) { return; }
+        const Vec3 forward = editorCamera.forward();
+        editorCamera.position = entity->transform.position - DVec3{forward.x, forward.y, forward.z} * 10.0;
+    }
+
     TransformGizmoDrag gizmoDrag;
     TransformSpace moveSpace = TransformSpace::Global;
     TransformSpace rotateSpace = TransformSpace::Local;
@@ -278,7 +286,7 @@ struct ViewportPanel::Impl {
     TransformGizmoInstance gizmo(const Entity& entity) const {
         TransformGizmoInstance result;
         result.tool = tool;
-        result.origin = toVec3(entity.transform.position);
+        result.origin = toVec3(entity.transform.position - editorCamera.position);
         result.basis = transformGizmoBasis(tool, space(), entity.transform.rotation);
         if (gizmoDrag.active() && gizmoDrag.owner() == entity.id()) {
             result.highlightedHandle = gizmoDrag.handle(); result.dragging = true;
@@ -320,6 +328,10 @@ struct ViewportPanel::Impl {
                 ImGui::SetTooltip("Scale uses local axes; the center handle scales uniformly.");
             }
             ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::Checkbox("Show Colliders", &showColliders);
+            ImGui::SameLine();
+            if (ImGui::Button("Focus (F)")) { focusSelection(selectedIndex); }
             const ImVec2 sceneSize = ImGui::GetContentRegionAvail();
             const int sceneWidth = static_cast<int>(sceneSize.x);
             const int sceneHeight = static_cast<int>(sceneSize.y);
@@ -393,6 +405,7 @@ struct ViewportPanel::Impl {
                     if (hovered && !playMode && !cam.looking && !cam.draggingPan && !gizmoDrag.active() && !io.WantTextInput &&
                         !io.KeyCtrl && !io.KeyAlt && !io.KeySuper && !io.KeyShift &&
                         ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive()) {
+                        if (ImGui::IsKeyPressed(ImGuiKey_F, false)) { focusSelection(selectedIndex); }
                         if (ImGui::IsKeyPressed(ImGuiKey_W, false)) { tool = TransformTool::Move; }
                         if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { tool = TransformTool::Rotate; }
                         if (ImGui::IsKeyPressed(ImGuiKey_T, false)) { tool = TransformTool::Scale; }
@@ -420,7 +433,7 @@ struct ViewportPanel::Impl {
                     const float viewW = static_cast<float>(sceneWidth);
                     const float viewH = static_cast<float>(sceneHeight);
                     const Mat4 view =
-                        lookAt(cam.position, cam.position + forward, Vec3{0.0f, 1.0f, 0.0f});
+                        lookAt(Vec3{}, forward, Vec3{0.0f, 1.0f, 0.0f});
                     const Mat4 projection = perspective(60.0f, viewW / viewH, 0.1f, 1000.0f);
                     drawCameraIcons(
                         ImGui::GetWindowDrawList(),
@@ -431,7 +444,7 @@ struct ViewportPanel::Impl {
                         viewH,
                         *scene,
                         selectedIndex,
-                        cameraIcon);
+                        cameraIcon, cam.position);
 
                     const float mouseX = io.MousePos.x - imageMin.x;
                     const float mouseY = io.MousePos.y - imageMin.y;
@@ -457,7 +470,7 @@ struct ViewportPanel::Impl {
                         if (!gizmoDrag.active() && leftClicked) {
                             if (selectedEntity && hoveredHandle.handle >= 0) {
                                 (void)gizmoDrag.begin(selectedEntity->id(), selectedEntity->transform, tool, space(), hoveredHandle,
-                                    view, projection, viewW, viewH, mouseX, mouseY);
+                                    view, projection, viewW, viewH, mouseX, mouseY, cam.position);
                             } else {
                                 int bestEntity = -1;
                                 float bestT = 1.0e30f;
@@ -467,7 +480,7 @@ struct ViewportPanel::Impl {
                                     bool hit = false;
                                     if (entities[i].hasMesh) {
                                         const Mat4 world =
-                                            matrixFromTransform(entities[i].transform);
+                                            matrixFromTransform(entities[i].transform, cam.position);
                                         Vec3 minimum{-0.5f, -0.5f, -0.5f};
                                         Vec3 maximum{0.5f, 0.5f, 0.5f};
                                         if (entities[i].mesh.meshPath.empty() ||
@@ -476,7 +489,7 @@ struct ViewportPanel::Impl {
                                         }
                                     } else if (entities[i].hasCamera) {
                                         const Mat4 world =
-                                            cameraPickWorld(toVec3(entities[i].transform.position));
+                                            cameraPickWorld(toVec3(entities[i].transform.position - cam.position));
                                         hit = intersectRayBounds(mouseRay, world, t);
                                     }
                                     if (hit && t < bestT) {
@@ -590,6 +603,8 @@ int ViewportPanel::gameViewHeight() const {
     return m_impl->gameViewHeight;
 }
 
+bool ViewportPanel::showColliders() const { return m_impl->showColliders; }
+
 void ViewportPanel::fillSceneCamera(GameViewCamera& out) const {
     out.clearColor[0] = 0.10f;
     out.clearColor[1] = 0.10f;
@@ -597,8 +612,9 @@ void ViewportPanel::fillSceneCamera(GameViewCamera& out) const {
     out.clearColor[3] = 1.0f;
 
     const auto& cam = m_impl->editorCamera;
+    out.renderOrigin = cam.position;
     const Vec3 forward = cam.forward();
-    const Mat4 view = lookAt(cam.position, cam.position + forward, Vec3{0.0f, 1.0f, 0.0f});
+    const Mat4 view = lookAt(Vec3{}, forward, Vec3{0.0f, 1.0f, 0.0f});
     std::memcpy(out.view, view.m, sizeof(out.view));
 
     const float aspect =

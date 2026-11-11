@@ -136,3 +136,7 @@ and the `Examples/AssetLoading` project.
 
 Scene transform tools use **W** (Move), **R** (Rotate), and **T** (Scale), with
 Local/Global axes and constant screen-size handles. See [Scene transforms](docs/SceneTransforms.md).
+
+Jolt-backed rigid bodies, compound colliders and local gravity fields run in Play
+mode and standalone games. See [Physics](docs/Physics.md) and the
+[SpacePhysics example](Examples/SpacePhysics/README.md).

@@ -19,8 +19,8 @@ void SceneRenderData::update(const Scene& scene, int width, int height) {
     m_hasCamera = true;
     const auto& camera = cameraEntity->camera;
     std::memcpy(m_camera.clearColor, camera.clearColor, sizeof(m_camera.clearColor));
-    const Mat4 view = viewFromEuler(
-        toVec3(cameraEntity->transform.position), cameraEntity->transform.rotation);
+    m_camera.renderOrigin = cameraEntity->transform.position;
+    const Mat4 view = viewFromEuler(Vec3{}, cameraEntity->transform.rotation);
     const Mat4 projection = perspective(
         camera.fieldOfView, static_cast<float>(width) / static_cast<float>(height),
         camera.nearClip, camera.farClip);
@@ -31,7 +31,7 @@ void SceneRenderData::update(const Scene& scene, int width, int height) {
             continue;
         }
         MeshInstance instance{};
-        instance.world = matrixFromTransform(entity.transform);
+        instance.world = matrixFromTransform(entity.transform, m_camera.renderOrigin);
         instance.meshPath = entity.mesh.meshPath;
         instance.texturePath = entity.mesh.texturePath;
         switch (entity.mesh.primitive) {

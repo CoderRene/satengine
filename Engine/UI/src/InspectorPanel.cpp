@@ -1,6 +1,7 @@
 #include "InspectorPanel.hpp"
 
 #include "Scene.hpp"
+#include "module/PhysicsInspector.hpp"
 #include "Project.hpp"
 #include "AssetData.hpp"
 
@@ -186,12 +187,22 @@ void InspectorPanel::onImGuiRender(int selectedIndex) {
         changed = true;
     }
 
+    changed |= drawPhysicsInspector(*entity);
     ImGui::Separator();
     if (ImGui::Button("Add Component", ImVec2(-1.0f, 0.0f))) {
         m_impl->refreshScripts();
         ImGui::OpenPopup("AddComponent");
     }
     if (ImGui::BeginPopup("AddComponent")) {
+        if (ImGui::MenuItem("Rigid Body", nullptr, false, !entity->hasRigidBody)) {
+            entity->hasRigidBody = true; entity->rigidBody = {}; changed = true;
+        }
+        if (ImGui::MenuItem("Compound Collider", nullptr, false, !entity->hasCollider)) {
+            entity->hasCollider = true; entity->collider = {}; changed = true;
+        }
+        if (ImGui::MenuItem("Gravity Source", nullptr, false, !entity->hasGravitySource)) {
+            entity->hasGravitySource = true; entity->gravitySource = {}; changed = true;
+        }
         if (ImGui::MenuItem("Mesh (Cube)", nullptr, false, !entity->hasMesh)) {
             entity->mesh = {};
             entity->hasMesh = true;

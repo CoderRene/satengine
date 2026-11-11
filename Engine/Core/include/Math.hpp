@@ -57,6 +57,10 @@ inline DVec3 operator*(const DVec3& v, double s) {
     return {v.x * s, v.y * s, v.z * s};
 }
 
+inline DVec3 operator+(const DVec3& a, const Vec3& b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
 [[nodiscard]] inline Vec3 toVec3(const DVec3& v) {
     return {
         static_cast<float>(v.x),
@@ -164,7 +168,11 @@ inline Mat4 lookAt(const Vec3& eye, const Vec3& target, const Vec3& up) {
 // Euler degrees: x=pitch, y=yaw, z=roll. Scale is ignored for the view.
 inline Mat4 viewFromEuler(const Vec3& position, const Vec3& rotationDegrees) {
     const Vec3 forward = cameraForward(rotationDegrees.x, rotationDegrees.y);
-    return lookAt(position, position + forward, Vec3{0.0f, 1.0f, 0.0f});
+    const float yaw = rotationDegrees.y * kDegToRad;
+    const float roll = rotationDegrees.z * kDegToRad;
+    const Vec3 right{std::cos(yaw), 0.0f, -std::sin(yaw)};
+    const Vec3 up = cross(forward, right) * std::cos(roll) - right * std::sin(roll);
+    return lookAt(position, position + forward, up);
 }
 
 inline Mat4 translationMatrix(const Vec3& t) {

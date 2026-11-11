@@ -10,6 +10,8 @@
 
 #include "ScriptLog.hpp"
 #include "Scene.hpp"
+#include "PhysicsSystem.hpp"
+#include "module/LuaRuntimeModules/LuaPhysicsBindings.hpp"
 #include "Input.hpp"
 
 #include <lua.hpp>
@@ -39,8 +41,8 @@ void instructionLimit(lua_State* state, lua_Debug*) {
 } // namespace
 
 struct LuaRuntime::Impl {
-    explicit Impl(Scene& scene, const Input* input, ScriptLog* log)
-    : m_scene(scene), m_input(input), m_log(log) {}
+    explicit Impl(Scene& scene, const Input* input, ScriptLog* log, PhysicsSystem* physics)
+    : m_scene(scene), m_input(input), m_log(log), m_physics(physics) {}
     ~Impl() { close(); }
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
@@ -50,6 +52,9 @@ struct LuaRuntime::Impl {
     Scene& m_scene;
     const Input* m_input;
     ScriptLog* m_log = nullptr;
+    PhysicsSystem* m_physics = nullptr;
+    double m_physicsDebt = 0;
+    PhysicsSettings m_physicsSettings;
     lua_State* m_state = nullptr;
     bool m_running = false;
     bool m_started = false;
@@ -187,8 +192,8 @@ struct LuaRuntime::Impl {
     }
 };
 
-LuaRuntime::LuaRuntime(Scene& scene, const Input* input, ScriptLog* log)
-    : m_impl(std::make_unique<Impl>(scene, input, log)) {}
+LuaRuntime::LuaRuntime(Scene& scene, const Input* input, ScriptLog* log, PhysicsSystem* physics)
+    : m_impl(std::make_unique<Impl>(scene, input, log, physics)) {}
 LuaRuntime::~LuaRuntime() = default;
 
 bool LuaRuntime::start(const std::filesystem::path& projectRoot) {
@@ -206,6 +211,9 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
     impl.m_error.clear();
     impl.m_context.clear();
     impl.m_time = {};
+    impl.m_physicsDebt = 0;
+    impl.m_physicsSettings = impl.m_scene.physicsSettings;
+    if (impl.m_physics && !impl.m_physics->start()) { return impl.fail(impl.m_physics->error()); }
     for (std::size_t index = 0; index < scripts.size(); ++index) {
         if (scripts[index].bytecode != scripts.front().bytecode) {
             return impl.fail("Cannot mix source and bytecode script bundles");
@@ -281,7 +289,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
             }
             source = ownedSource;
         }
-        auto instance = std::make_unique<LuaRuntime>(impl.m_scene, impl.m_input, impl.m_log);
+        auto instance = std::make_unique<LuaRuntime>(impl.m_scene, impl.m_input, impl.m_log, impl.m_physics);
         instance->m_impl->m_sharedTime = &impl.m_time;
         instance->m_impl->m_sharedMessages = &impl.m_messages;
         instance->m_impl->m_targetIndex = targetIndex;
@@ -325,7 +333,8 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
     }
 
     lua_newtable(state);
-    lua::registerSceneBindings(state, impl.m_scene);
+    lua::registerSceneBindings(state, impl.m_scene, impl.m_physics);
+    lua::registerPhysicsBindings(state, impl.m_scene, impl.m_physics);
     lua::registerMathBindings(state);
     lua::registerInputBindings(state, impl.m_input);
     lua::registerLogBindings(state, impl.m_log);
@@ -398,6 +407,38 @@ bool LuaRuntime::update(float deltaSeconds) {
             return false;
         }
     }
+    if (impl.m_physics) {
+        const auto& settings = impl.m_physicsSettings;
+        const double step = settings.fixedSeconds;
+        impl.m_physicsDebt = std::min(impl.m_physicsDebt + time.m_deltaSeconds,
+            step * settings.maxCatchUpSteps);
+        for (std::uint32_t tick = 0; tick < settings.maxCatchUpSteps && impl.m_physicsDebt + 1e-12 >= step; ++tick) {
+            for (const auto& instance : impl.m_instances) {
+                auto& child = *instance->m_impl;
+                if (child.m_running && child.enabled() && !child.callback("onFixedUpdate", true, static_cast<float>(step))) {
+                    return impl.fail(child.m_error);
+                }
+                if (!impl.retireDestroyed()) { return false; }
+            }
+            if (!impl.m_physics->step(step)) { return impl.fail(impl.m_physics->error()); }
+            impl.m_physicsDebt = std::max(0.0, impl.m_physicsDebt - step);
+            for (const auto& event : impl.m_physics->events()) {
+                const char* name = event.trigger
+                    ? (event.phase == PhysicsEventPhase::Enter ? "onTriggerEnter" : event.phase == PhysicsEventPhase::Stay ? "onTriggerStay" : "onTriggerExit")
+                    : (event.phase == PhysicsEventPhase::Enter ? "onCollisionEnter" : event.phase == PhysicsEventPhase::Stay ? "onCollisionStay" : "onCollisionExit");
+                for (const auto& instance : impl.m_instances) {
+                    auto& child = *instance->m_impl;
+                    if (!child.m_running || !child.enabled() || (child.m_ownerId != event.first && child.m_ownerId != event.second)) { continue; }
+                    lua_getglobal(child.m_state, name);
+                    if (lua_isnil(child.m_state, -1)) { lua_pop(child.m_state, 1); continue; }
+                    if (!lua_isfunction(child.m_state, -1)) { lua_pop(child.m_state, 1); return impl.fail(std::string(name) + " must be a function or nil"); }
+                    lua_pushinteger(child.m_state, static_cast<lua_Integer>(child.m_ownerId == event.first ? event.second : event.first));
+                    if (!child.call(1)) { return impl.fail(child.m_error); }
+                    if (!impl.retireDestroyed()) { return false; }
+                }
+            }
+        }
+    }
     return true;
 }
 
@@ -415,6 +456,7 @@ void LuaRuntime::stop() {
         impl.callback("onStop");
     }
     impl.close();
+    if (impl.m_physics && impl.m_sharedTime == &impl.m_time) { impl.m_physics->stop(); }
 }
 bool LuaRuntime::running() const { return m_impl->m_running; }
 const std::string& LuaRuntime::error() const { return m_impl->m_error; }

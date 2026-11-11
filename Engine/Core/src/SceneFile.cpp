@@ -1,6 +1,7 @@
 #include "SceneFile.hpp"
 
 #include "Scene.hpp"
+#include "module/ScenePhysicsFile.hpp"
 #include "AssetData.hpp"
 
 #include <cmath>
@@ -30,7 +31,8 @@ bool finite(const DVec3& value) {
 std::string serializeScene(const Scene& scene) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "SatScene 2\n" << scene.entities().size() << '\n';
+    out << "SatScene 3\n" << scene.entities().size() << '\n';
+    writePhysicsSettings(out, scene.physicsSettings);
     for (const auto& entity : scene.entities()) {
         const auto& t = entity.transform;
         const auto& c = entity.camera;
@@ -51,6 +53,7 @@ std::string serializeScene(const Scene& scene) {
         for (const auto& script : entity.scripts) {
             out << script.enabled << ' ' << std::quoted(script.path) << '\n';
         }
+        writePhysicsComponents(out, entity);
     }
     return out.str();
 }
@@ -66,11 +69,14 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
     std::string magic;
     int version = 0;
     std::size_t count = 0;
-    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version != 1 && version != 2) || count > kMaxEntities) {
+    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > 3) || count > kMaxEntities) {
         return fail("Invalid scene header, version or entity count.");
     }
     Scene candidate;
     candidate.clear();
+    if (version >= 3 && !readPhysicsSettings(in, candidate.physicsSettings)) {
+        return fail("Invalid physics settings.");
+    }
     bool hasMain = false;
     for (std::size_t index = 0; index < count; ++index) {
         std::string name;
@@ -85,7 +91,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
                  >> t.rotation.x >> t.rotation.y >> t.rotation.z
                  >> t.scale.x >> t.scale.y >> t.scale.z
                  >> e.hasMesh >> primitive) ||
-            (version == 2 && (!(in >> std::quoted(e.mesh.meshPath) >> std::quoted(e.mesh.texturePath)) ||
+            (version >= 2 && (!(in >> std::quoted(e.mesh.meshPath) >> std::quoted(e.mesh.texturePath)) ||
                 (!e.mesh.meshPath.empty() && !isMeshAssetPath(e.mesh.meshPath)) ||
                 (!e.mesh.texturePath.empty() && !isTextureAssetPath(e.mesh.texturePath)))) ||
             !(in >> e.hasCamera >> c.isMain
@@ -116,6 +122,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
             }
             e.scripts.back().enabled = enabled;
         }
+        if (version >= 3 && !readPhysicsComponents(in, e, error)) { return false; }
     }
     in >> std::ws;
     if (!in.eof()) {
