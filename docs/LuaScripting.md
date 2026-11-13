@@ -481,13 +481,13 @@ For smooth turning through zero, use
 without inventing a direction for zero input. Arithmetic whose result cannot be
 represented as a finite double raises an error.
 
-## Mesh and texture assets
+## Mesh and material assets
 
-Mesh components can use static OBJ files and PNG/JPEG textures. Assign them with
+Mesh components can use static OBJ files and shared SATMAT materials. Assign them with
 `sat.setMeshAsset(id, "Assets/Meshes/model.obj")` and
-`sat.setTextureAsset(id, "Assets/Textures/color.png")`. Use nil to reset either
+`sat.setMaterialAsset(id, "Assets/Materials/Color.satmat")`. Use nil to reset either
 assignment. Both APIs require a live entity with a Mesh component. Read paths
-with `sat.getMeshAsset(id)` / `sat.getTextureAsset(id)`.
+with `sat.getMeshAsset(id)` / `sat.getMaterialAsset(id)`.
 
 See [Asset loading](AssetLoading.md) for formats, coordinate conversion, Inspector
 controls, reload behavior and packed-game support. `Examples/AssetLoading`

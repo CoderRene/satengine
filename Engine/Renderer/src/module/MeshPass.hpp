@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ShaderLibrary.hpp"
+
 #include "GpuMesh.hpp"
 #include "GpuAssetCache.hpp"
 #include "SceneDraw.hpp"
@@ -24,12 +26,14 @@ public:
     [[nodiscard]] bool ensure(ID3D11Device* device);
     void release();
     void draw(
-        ID3D11DeviceContext* context,
-        const Mat4& viewProj,
-        const SceneDrawList& drawList) const;
+        ID3D11DeviceContext* context, ShaderProgram program,
+        const Mat4& viewProj, Vec3 eye,
+        const SceneDrawList& drawList, bool hdr = false, ID3D11PixelShader* shadowPixel = nullptr, ShaderLibrary* shaders = nullptr) const;
 
     // Geometry owned by this pass for the given primitive (nullptr if unknown/unready).
     [[nodiscard]] const GpuMesh* geometry(const MeshInstance& instance) const;
+    [[nodiscard]] const GpuMaterial* material(std::string_view path) const { return m_assets.material(path, false); }
+    void invalidateMaterial(std::string_view path) { m_assets.invalidateMaterial(path); }
     void setAssetReader(AssetReader reader);
     [[nodiscard]] bool reimportAsset(ID3D11Device* device, std::string_view path, const AssetImportSettings* settings,
         const AssetImportWriter& writer, std::string& error) { return m_assets.reimport(device, path, settings, writer, error); }

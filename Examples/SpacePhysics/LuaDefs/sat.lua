@@ -6,6 +6,47 @@
 
 ---@alias EntityId integer Opaque positive entity id from the scene.
 
+---@class SatAudio
+local SatAudio = {}
+
+---@param entity EntityId
+function SatAudio.play(entity) end
+
+---@param entity EntityId
+function SatAudio.stop(entity) end
+
+---@param entity EntityId
+function SatAudio.pause(entity) end
+
+---@param entity EntityId
+function SatAudio.resume(entity) end
+
+---@param entity EntityId
+---@return boolean
+function SatAudio.isPlaying(entity) end
+
+---@param entity EntityId
+---@param volume number
+function SatAudio.setVolume(entity, volume) end
+
+---@param entity EntityId
+---@param pitch number
+function SatAudio.setPitch(entity, pitch) end
+
+---@param path string
+---@param x number
+---@param y number
+---@param z number
+---@param volume number
+function SatAudio.playOneShot(path, x, y, z, volume) end
+
+---@param bus "sfx"|"music"|"ui"
+---@param volume number
+function SatAudio.setBusVolume(bus, volume) end
+
+---@param volume number
+function SatAudio.setMasterVolume(volume) end
+
 ---@class SatInput
 local SatInput = {}
 
@@ -394,6 +435,7 @@ function SatTime.setTimeScale(scale) end
 ---@field Button8 integer
 
 ---@class sat
+---@field audio SatAudio
 ---@field input SatInput
 ---@field math SatMath
 ---@field physics SatPhysics
@@ -401,6 +443,9 @@ function SatTime.setTimeScale(scale) end
 ---@field Key SatKey
 ---@field MouseButton SatMouseButton
 sat = {}
+
+---@type SatAudio
+sat.audio = {}
 
 ---@type SatInput
 sat.input = {}
@@ -542,11 +587,81 @@ function sat.setMeshAsset(entity, path) end
 
 ---@param entity EntityId
 ---@return string|nil
-function sat.getTextureAsset(entity) end
+function sat.getMaterialAsset(entity) end
 
 ---@param entity EntityId
 ---@param path string|nil
-function sat.setTextureAsset(entity, path) end
+function sat.setMaterialAsset(entity, path) end
+
+---@param entity EntityId
+---@return boolean
+function sat.hasLight(entity) end
+
+---@param entity EntityId
+---@return boolean
+function sat.addLight(entity) end
+
+---@param entity EntityId
+---@return boolean
+function sat.removeLight(entity) end
+
+---@param entity EntityId
+---@return string
+function sat.getLightType(entity) end
+
+---@param entity EntityId
+---@param lightType string
+function sat.setLightType(entity, lightType) end
+
+---@param entity EntityId
+---@return number
+function sat.getLightIntensity(entity) end
+
+---@param entity EntityId
+---@param intensity number
+function sat.setLightIntensity(entity, intensity) end
+
+---@param entity EntityId
+---@return number
+function sat.getLightRange(entity) end
+
+---@param entity EntityId
+---@param range number
+function sat.setLightRange(entity, range) end
+
+---@param entity EntityId
+---@return number r
+---@return number g
+---@return number b
+function sat.getLightColor(entity) end
+
+---@param entity EntityId
+---@param r number
+---@param g number
+---@param b number
+function sat.setLightColor(entity, r, g, b) end
+
+---@param entity EntityId
+---@return number innerDegrees
+---@return number outerDegrees
+function sat.getLightCone(entity) end
+
+---@param entity EntityId
+---@param innerDegrees number
+---@param outerDegrees number
+function sat.setLightCone(entity, innerDegrees, outerDegrees) end
+
+---@return number r
+---@return number g
+---@return number b
+---@return number intensity
+function sat.getAmbient() end
+
+---@param r number
+---@param g number
+---@param b number
+---@param intensity number
+function sat.setAmbient(r, g, b, intensity) end
 
 ---@param entity EntityId
 ---@return boolean

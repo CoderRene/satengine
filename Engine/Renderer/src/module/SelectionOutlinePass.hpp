@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ShaderLibrary.hpp"
+
 #include "GpuMesh.hpp"
 #include "SceneDraw.hpp"
 
@@ -19,7 +21,7 @@ public:
     [[nodiscard]] bool ensure(ID3D11Device* device);
     void release();
     void draw(
-        ID3D11DeviceContext* context,
+        ID3D11DeviceContext* context, ShaderProgram program,
         const Mat4& viewProj,
         const MeshInstance& selected,
         const GpuMesh& geometry) const;

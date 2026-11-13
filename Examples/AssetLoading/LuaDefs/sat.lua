@@ -587,11 +587,81 @@ function sat.setMeshAsset(entity, path) end
 
 ---@param entity EntityId
 ---@return string|nil
-function sat.getTextureAsset(entity) end
+function sat.getMaterialAsset(entity) end
 
 ---@param entity EntityId
 ---@param path string|nil
-function sat.setTextureAsset(entity, path) end
+function sat.setMaterialAsset(entity, path) end
+
+---@param entity EntityId
+---@return boolean
+function sat.hasLight(entity) end
+
+---@param entity EntityId
+---@return boolean
+function sat.addLight(entity) end
+
+---@param entity EntityId
+---@return boolean
+function sat.removeLight(entity) end
+
+---@param entity EntityId
+---@return string
+function sat.getLightType(entity) end
+
+---@param entity EntityId
+---@param lightType string
+function sat.setLightType(entity, lightType) end
+
+---@param entity EntityId
+---@return number
+function sat.getLightIntensity(entity) end
+
+---@param entity EntityId
+---@param intensity number
+function sat.setLightIntensity(entity, intensity) end
+
+---@param entity EntityId
+---@return number
+function sat.getLightRange(entity) end
+
+---@param entity EntityId
+---@param range number
+function sat.setLightRange(entity, range) end
+
+---@param entity EntityId
+---@return number r
+---@return number g
+---@return number b
+function sat.getLightColor(entity) end
+
+---@param entity EntityId
+---@param r number
+---@param g number
+---@param b number
+function sat.setLightColor(entity, r, g, b) end
+
+---@param entity EntityId
+---@return number innerDegrees
+---@return number outerDegrees
+function sat.getLightCone(entity) end
+
+---@param entity EntityId
+---@param innerDegrees number
+---@param outerDegrees number
+function sat.setLightCone(entity, innerDegrees, outerDegrees) end
+
+---@return number r
+---@return number g
+---@return number b
+---@return number intensity
+function sat.getAmbient() end
+
+---@param r number
+---@param g number
+---@param b number
+---@param intensity number
+function sat.setAmbient(r, g, b, intensity) end
 
 ---@param entity EntityId
 ---@return boolean

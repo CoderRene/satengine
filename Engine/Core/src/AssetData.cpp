@@ -1,5 +1,7 @@
 #include "AssetData.hpp"
 
+#include "Math.hpp"
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -35,6 +37,11 @@ std::string_view token(std::string_view& line) {
     const auto result = line.substr(0, end);
     line = end == std::string_view::npos ? std::string_view{} : line.substr(end);
     return result;
+}
+Vec3 unitVector(const Vec3& vector) {
+    const float magnitude = std::max({std::abs(vector.x), std::abs(vector.y), std::abs(vector.z)});
+    if (!std::isfinite(magnitude) || magnitude < std::numeric_limits<float>::min()) { return {0, 0, 1}; }
+    return normalize(vector * (1.0f / magnitude));
 }
 bool number(std::string_view value, float& result) {
     if (value.starts_with('+')) { value.remove_prefix(1); }
@@ -80,6 +87,14 @@ bool isTextureAssetPath(std::string_view path) {
     return isValidAssetPath(path) && (extensionIs(path, ".png") || extensionIs(path, ".jpg") || extensionIs(path, ".jpeg"));
 }
 
+bool isShaderAssetPath(std::string_view path) {
+    return isValidAssetPath(path) && extensionIs(path, ".slang");
+}
+
+bool isMaterialAssetPath(std::string_view path) {
+    return isValidAssetPath(path) && extensionIs(path, ".satmat");
+}
+
 bool isAudioAssetPath(std::string_view path) {
     return isValidAssetPath(path) && (extensionIs(path, ".wav") || extensionIs(path, ".ogg") ||
         extensionIs(path, ".mp3") || extensionIs(path, ".flac"));
@@ -100,7 +115,8 @@ bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool 
     }
     std::vector<std::array<float, 3>> positions;
     std::vector<std::array<float, 2>> uvs;
-    std::size_t normalCount = 0;
+    std::vector<Vec3> normals;
+    std::vector<Vec3> bitangents;
     MeshData candidate;
     std::unordered_map<std::uint64_t, std::uint32_t> vertices;
     while (!bytes.empty()) {
@@ -127,7 +143,10 @@ bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool 
                 if (positions.size() >= kMaxVertices) { return fail("Position limit exceeded"); }
                 if (rightHanded) { value[2] = -value[2]; }
                 positions.push_back(value);
-            } else if (++normalCount > kMaxVertices) { return fail("Normal limit exceeded"); }
+            } else {
+                if (normals.size() >= kMaxVertices) { return fail("Normal limit exceeded"); }
+                normals.push_back(unitVector({value[0], value[1], rightHanded ? -value[2] : value[2]}));
+            }
         } else if (kind == "vt") {
             std::array<float, 2> uv{};
             if (!number(token(line), uv[0]) || !number(token(line), uv[1])) { return fail("Expected UV coordinates"); }
@@ -146,6 +165,7 @@ bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool 
                 const auto slash = reference.find('/');
                 std::uint32_t position = 0;
                 std::uint32_t uv = std::numeric_limits<std::uint32_t>::max();
+                std::uint32_t normal = std::numeric_limits<std::uint32_t>::max();
                 if (!index(reference.substr(0, slash), positions.size(), position)) { return fail("Invalid position index"); }
                 if (slash != std::string_view::npos) {
                     auto rest = reference.substr(slash + 1);
@@ -153,25 +173,63 @@ bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool 
                     const auto uvText = rest.substr(0, second);
                     if (!uvText.empty() && !index(uvText, uvs.size(), uv)) { return fail("Invalid UV index"); }
                     if (second != std::string_view::npos) {
-                        std::uint32_t normal = 0;
-                        if (!index(rest.substr(second + 1), normalCount, normal)) { return fail("Invalid normal index"); }
+                        if (!index(rest.substr(second + 1), normals.size(), normal)) { return fail("Invalid normal index"); }
                     } else if (uvText.empty()) { return fail("Missing UV index"); }
                 }
-                const auto key = (static_cast<std::uint64_t>(position) << 32) | uv;
-                auto found = vertices.find(key);
+                // Three bounded indices fit in 20 bits each. Generated normals are face-local.
+                constexpr std::uint32_t kMissing = (1u << 20) - 1;
+                const bool hasNormal = normal < normals.size();
+                const auto key = (static_cast<std::uint64_t>(position) << 40) |
+                    (static_cast<std::uint64_t>(std::min(uv, kMissing)) << 20) | std::min(normal, kMissing);
+                auto found = hasNormal ? vertices.find(key) : vertices.end();
                 if (found == vertices.end()) {
                     if (candidate.vertices.size() >= kMaxVertices) { return fail("Vertex limit exceeded"); }
                     const auto& p = positions[position];
                     const auto tex = uv == std::numeric_limits<std::uint32_t>::max() ? std::array<float, 2>{} : uvs[uv];
                     const auto next = static_cast<std::uint32_t>(candidate.vertices.size());
-                    candidate.vertices.push_back({p[0], p[1], p[2], tex[0], tex[1]});
-                    found = vertices.emplace(key, next).first;
+                    const Vec3 n = hasNormal ? normals[normal] : Vec3{};
+                    candidate.vertices.push_back({p[0], p[1], p[2], n.x, n.y, n.z, tex[0], tex[1], 0, 0, 0, 1});
+                    bitangents.emplace_back();
+                    if (hasNormal) { vertices.emplace(key, next); }
+                    face[count++] = next;
+                    continue;
                 }
                 face[count++] = found->second;
             }
             if (count < 3) { return fail("Face requires at least three corners"); }
             if (candidate.indices.size() + (count - 2) * 3 > kMaxIndices) { return fail("Triangle index limit exceeded"); }
+            const auto positionOf = [&](std::uint32_t i) {
+                const auto& v = candidate.vertices[i];
+                return Vec3{v.x, v.y, v.z};
+            };
+            Vec3 faceNormal{};
             for (std::size_t i = 1; i + 1 < count; ++i) {
+                faceNormal = faceNormal + cross(positionOf(face[i]) - positionOf(face[0]),
+                    positionOf(face[i + 1]) - positionOf(face[0]));
+            }
+            faceNormal = unitVector(faceNormal * (rightHanded ? -1.0f : 1.0f));
+            for (std::size_t i = 0; i < count; ++i) {
+                auto& v = candidate.vertices[face[i]];
+                if (v.nx == 0 && v.ny == 0 && v.nz == 0) {
+                    v.nx = faceNormal.x; v.ny = faceNormal.y; v.nz = faceNormal.z;
+                }
+            }
+            for (std::size_t i = 1; i + 1 < count; ++i) {
+                const auto& a = candidate.vertices[face[0]];
+                const auto& b = candidate.vertices[face[i]];
+                const auto& c = candidate.vertices[face[i + 1]];
+                const Vec3 ab = positionOf(face[i]) - positionOf(face[0]);
+                const Vec3 ac = positionOf(face[i + 1]) - positionOf(face[0]);
+                const float det = (b.u - a.u) * (c.v - a.v) - (c.u - a.u) * (b.v - a.v);
+                if (std::abs(det) > 1e-8f) {
+                    const Vec3 tangent = (ab * (c.v - a.v) - ac * (b.v - a.v)) * (1.0f / det);
+                    const Vec3 bitangent = (ac * (b.u - a.u) - ab * (c.u - a.u)) * (1.0f / det);
+                    for (const auto vertexIndex : {face[0], face[i], face[i + 1]}) {
+                        auto& v = candidate.vertices[vertexIndex];
+                        v.tx += tangent.x; v.ty += tangent.y; v.tz += tangent.z;
+                        bitangents[vertexIndex] = bitangents[vertexIndex] + bitangent;
+                    }
+                }
                 if (rightHanded) { candidate.indices.insert(candidate.indices.end(), {face[0], face[i + 1], face[i]}); }
                 else { candidate.indices.insert(candidate.indices.end(), {face[0], face[i], face[i + 1]}); }
             }
@@ -183,7 +241,17 @@ bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool 
     candidate.minimum[0] = candidate.maximum[0] = candidate.vertices[0].x;
     candidate.minimum[1] = candidate.maximum[1] = candidate.vertices[0].y;
     candidate.minimum[2] = candidate.maximum[2] = candidate.vertices[0].z;
-    for (const auto& v : candidate.vertices) {
+    for (std::size_t i = 0; i < candidate.vertices.size(); ++i) {
+        auto& v = candidate.vertices[i];
+        const Vec3 n{v.nx, v.ny, v.nz};
+        Vec3 t{v.tx, v.ty, v.tz};
+        t = t - n * dot(t, n);
+        if (!(dot(t, t) > 1e-12f) || !std::isfinite(dot(t, t))) {
+            t = cross(std::abs(n.y) < 0.9f ? Vec3{0, 1, 0} : Vec3{1, 0, 0}, n);
+        }
+        t = normalize(t);
+        v.tx = t.x; v.ty = t.y; v.tz = t.z;
+        v.tw = dot(cross(n, t), bitangents[i]) < 0 ? -1.0f : 1.0f;
         const float coordinates[3] = {v.x, v.y, v.z};
         for (int axis = 0; axis < 3; ++axis) {
             candidate.minimum[axis] = std::min(candidate.minimum[axis], coordinates[axis]);

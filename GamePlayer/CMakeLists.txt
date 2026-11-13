@@ -17,9 +17,27 @@ include("${PROJECT_SOURCE_DIR}/cmake/PrivatePakKeys.cmake")
 string(JOIN "\n" pak_manifest ${pak_inputs})
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Pak.manifest"
     CONTENT "${SAT_GAME_PROJECT}\n${pak_manifest}\n")
+file(GLOB_RECURSE project_shaders CONFIGURE_DEPENDS "${SAT_GAME_PROJECT}/Assets/*.slang")
+list(FILTER project_shaders EXCLUDE REGEX "/\\._[^/]*$")
+set(project_shader_dir "${CMAKE_CURRENT_BINARY_DIR}/ProjectShaders")
+set(project_shader_outputs)
+set(project_shader_args)
+foreach(source IN LISTS project_shaders)
+    file(RELATIVE_PATH path "${_sat_game_project}" "${source}")
+    set(output "${project_shader_dir}/${path}.dxbc")
+    get_filename_component(folder "${output}" DIRECTORY)
+    add_custom_command(OUTPUT "${output}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${folder}"
+        COMMAND "${SAT_SLANGC}" "${source}" -entry psMain -stage fragment
+            ${SAT_SHADER_FLAGS} -I "${PROJECT_SOURCE_DIR}/Engine/Renderer/shaders" -o "${output}"
+        DEPENDS "${source}" "${SAT_SLANGC}" ${SAT_SHADER_OUTPUTS}
+        VERBATIM)
+    list(APPEND project_shader_outputs "${output}")
+    list(APPEND project_shader_args "${path}")
+endforeach()
 add_custom_command(OUTPUT "${pak_output}" "${pak_output}.parts"
-    COMMAND $<TARGET_FILE:SatPakBuilder> "${SAT_GAME_PROJECT}" "${pak_output}" "${pak_keys}"
-    DEPENDS SatPakBuilder "${pak_provider}" "${pak_keys}/scripts.bin" "${pak_keys}/textures.bin"
+    COMMAND $<TARGET_FILE:SatPakBuilder> "${SAT_GAME_PROJECT}" "${pak_output}" "${pak_keys}" "${CMAKE_BINARY_DIR}/Shaders" "${project_shader_dir}" ${project_shader_args}
+    DEPENDS SatShaders ${SAT_SHADER_OUTPUTS} ${project_shader_outputs} SatPakBuilder "${pak_provider}" "${pak_keys}/scripts.bin" "${pak_keys}/textures.bin"
         "${pak_keys}/audio.bin" "${pak_keys}/assets.bin" ${pak_inputs} "${SAT_GAME_PROJECT}/Scene.sat"
         "${CMAKE_CURRENT_BINARY_DIR}/Pak.manifest"
     COMMENT "Compiling Lua and encrypting split project archives" VERBATIM)
@@ -61,3 +79,10 @@ set_target_properties(GamePlayer PROPERTIES
 install(TARGETS GamePlayer RUNTIME DESTINATION .)
 
 target_compile_definitions(GamePlayer PRIVATE SAT_GAME_PAK_NAME="${_sat_game_name}.pak")
+
+if(SAT_SHADER_HOT_RELOAD)
+    add_custom_command(TARGET GamePlayer POST_BUILD
+        COMMAND ${CMAKE_COMMAND} "-DCONFIG=$<CONFIG>" "-DSLANG_DLL=${SAT_SLANG_DLL}"
+            "-DDEST=$<TARGET_FILE_DIR:GamePlayer>" -P "${PROJECT_SOURCE_DIR}/scripts/StageSlang.cmake"
+        VERBATIM)
+endif()

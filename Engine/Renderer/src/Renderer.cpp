@@ -1,5 +1,11 @@
 #include "Renderer.hpp"
 
+#include "module/ShaderLibrary.hpp"
+#include "module/ShaderLayout.hpp"
+#ifdef SAT_SHADER_HOT_RELOAD
+#include "module/ShaderHotReload.hpp"
+#endif
+
 #include "Math.hpp"
 #include "module/CameraFrustumPass.hpp"
 #include "module/MeshPass.hpp"
@@ -18,20 +24,32 @@
 #include <GLFW/glfw3native.h>
 
 #include <d3d11.h>
-#include <d3dcompiler.h>
 #include <dxgi1_2.h>
 #include <dxgi1_5.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <memory>
 #include <vector>
 #include <utility>
+#include <unordered_map>
 
 namespace sat {
 
 struct Renderer::OffscreenView {
+    struct BloomLevel {
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> downTarget, upTarget;
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> downView, upView;
+        int width = 0;
+        int height = 0;
+    };
+    std::vector<BloomLevel> bloomLevels;
+    bool bloomAllocationFailed = false;
     ID3D11Texture2D* color = nullptr;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> hdrTarget;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> hdrView;
     ID3D11RenderTargetView* rtv = nullptr;
     ID3D11ShaderResourceView* srv = nullptr;
     ID3D11Texture2D* depth = nullptr;
@@ -60,10 +78,17 @@ struct Renderer::Impl {
     int swapHeight = 0;
     OffscreenView game;
     OffscreenView scene;
+    OffscreenView thumbnail;
+    struct Thumbnail {
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
+        std::uint64_t lastUsed = 0;
+    };
+    std::unordered_map<std::string, Thumbnail> thumbnails;
+    std::uint64_t thumbnailFrame = 0;
+    std::uint64_t thumbnailShaderRevision = 0;
+    unsigned thumbnailBudget = 0;
+    bool thumbnailsDirty = false;
 
-    ID3D11VertexShader* lineVs = nullptr;
-    ID3D11PixelShader* linePs = nullptr;
-    ID3D11InputLayout* lineLayout = nullptr;
     ID3D11Buffer* lineVb = nullptr;
     ID3D11Buffer* lineCb = nullptr;
     ID3D11RasterizerState* lineRasterizer = nullptr;
@@ -73,6 +98,12 @@ struct Renderer::Impl {
     bool debugLinesFailed = false;
     bool allowTearing = false;
 
+    ShaderLibrary shaders;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> postSampler;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> bloomCb;
+#ifdef SAT_SHADER_HOT_RELOAD
+    ShaderHotReload hotReload;
+#endif
     MeshPass meshPass;
     SelectionOutlinePass outlinePass;
     CameraFrustumPass frustumPass;
@@ -124,37 +155,7 @@ std::vector<DebugLineVertex> buildDebugLineVertices() {
     return vertices;
 }
 
-constexpr const char* kLineShaderSource = R"(
-cbuffer Frame : register(b0)
-{
-    float4x4 viewProj;
-};
 
-struct VSIn
-{
-    float3 position : POSITION;
-    float4 color : COLOR;
-};
-
-struct VSOut
-{
-    float4 position : SV_Position;
-    float4 color : COLOR;
-};
-
-VSOut vs_main(VSIn input)
-{
-    VSOut output;
-    output.position = mul(viewProj, float4(input.position, 1.0f));
-    output.color = input.color;
-    return output;
-}
-
-float4 ps_main(VSOut input) : SV_Target
-{
-    return input.color;
-}
-)";
 
 } // namespace
 
@@ -202,6 +203,10 @@ Renderer::Renderer(void* glfwWindow)
 }
 
 void Renderer::releaseOffscreenView(OffscreenView& view) {
+    view.bloomLevels.clear();
+    view.bloomAllocationFailed = false;
+    view.hdrTarget.Reset();
+    view.hdrView.Reset();
     releaseCom(view.dsv);
     releaseCom(view.depth);
     releaseCom(view.srv);
@@ -216,9 +221,6 @@ void Renderer::releaseDebugLines() {
     releaseCom(m_impl->lineRasterizer);
     releaseCom(m_impl->lineCb);
     releaseCom(m_impl->lineVb);
-    releaseCom(m_impl->lineLayout);
-    releaseCom(m_impl->linePs);
-    releaseCom(m_impl->lineVs);
     m_impl->lineVertexCount = 0;
     m_impl->debugLinesReady = false;
 }
@@ -387,102 +389,8 @@ bool Renderer::ensureDebugLines() {
         return false;
     }
 
-    ID3DBlob* vsBlob = nullptr;
-    ID3DBlob* psBlob = nullptr;
-    ID3DBlob* errorBlob = nullptr;
-    HRESULT hr = D3DCompile(
-        kLineShaderSource,
-        std::strlen(kLineShaderSource),
-        "DebugLine",
-        nullptr,
-        nullptr,
-        "vs_main",
-        "vs_5_0",
-        0,
-        0,
-        &vsBlob,
-        &errorBlob);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to compile debug line VS";
-        if (errorBlob != nullptr) {
-            std::cerr << ": " << static_cast<const char*>(errorBlob->GetBufferPointer());
-            errorBlob->Release();
-        }
-        std::cerr << '\n';
-        m_impl->debugLinesFailed = true;
-        return false;
-    }
-    releaseCom(errorBlob);
+    HRESULT hr = S_OK;
 
-    hr = D3DCompile(
-        kLineShaderSource,
-        std::strlen(kLineShaderSource),
-        "DebugLine",
-        nullptr,
-        nullptr,
-        "ps_main",
-        "ps_5_0",
-        0,
-        0,
-        &psBlob,
-        &errorBlob);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to compile debug line PS";
-        if (errorBlob != nullptr) {
-            std::cerr << ": " << static_cast<const char*>(errorBlob->GetBufferPointer());
-            errorBlob->Release();
-        }
-        std::cerr << '\n';
-        releaseCom(vsBlob);
-        m_impl->debugLinesFailed = true;
-        return false;
-    }
-    releaseCom(errorBlob);
-
-    hr = m_impl->device->CreateVertexShader(
-        vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &m_impl->lineVs);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to create debug line VS\n";
-        releaseCom(vsBlob);
-        releaseCom(psBlob);
-        m_impl->debugLinesFailed = true;
-        return false;
-    }
-
-    hr = m_impl->device->CreatePixelShader(
-        psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &m_impl->linePs);
-    releaseCom(psBlob);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to create debug line PS\n";
-        releaseCom(vsBlob);
-        releaseDebugLines();
-        m_impl->debugLinesFailed = true;
-        return false;
-    }
-
-    const D3D11_INPUT_ELEMENT_DESC layout[] = {
-        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"COLOR",
-         0,
-         DXGI_FORMAT_R32G32B32A32_FLOAT,
-         0,
-         D3D11_APPEND_ALIGNED_ELEMENT,
-         D3D11_INPUT_PER_VERTEX_DATA,
-         0},
-    };
-    hr = m_impl->device->CreateInputLayout(
-        layout,
-        2,
-        vsBlob->GetBufferPointer(),
-        vsBlob->GetBufferSize(),
-        &m_impl->lineLayout);
-    releaseCom(vsBlob);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to create debug line input layout\n";
-        releaseDebugLines();
-        m_impl->debugLinesFailed = true;
-        return false;
-    }
 
     const std::vector<DebugLineVertex> vertices = buildDebugLineVertices();
     m_impl->lineVertexCount = static_cast<UINT>(vertices.size());
@@ -502,7 +410,7 @@ bool Renderer::ensureDebugLines() {
     }
 
     D3D11_BUFFER_DESC cbDesc{};
-    cbDesc.ByteWidth = sizeof(float) * 16;
+    cbDesc.ByteWidth = sizeof(GridFrameCb);
     cbDesc.Usage = D3D11_USAGE_DYNAMIC;
     cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
@@ -584,6 +492,15 @@ void Renderer::resizeOffscreenView(
         return;
     }
 
+    colorDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> hdr;
+    if (FAILED(m_impl->device->CreateTexture2D(&colorDesc, nullptr, hdr.GetAddressOf())) ||
+        FAILED(m_impl->device->CreateRenderTargetView(hdr.Get(), nullptr, view.hdrTarget.GetAddressOf())) ||
+        FAILED(m_impl->device->CreateShaderResourceView(hdr.Get(), nullptr, view.hdrView.GetAddressOf()))) {
+        std::cerr << "Failed to create " << label << " HDR target\n";
+        releaseOffscreenView(view);
+        return;
+    }
     D3D11_TEXTURE2D_DESC depthDesc = colorDesc;
     depthDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
     depthDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
@@ -629,7 +546,136 @@ void Renderer::renderOffscreenView(
     std::memcpy(projMat.m, camera.projection, sizeof(projMat.m));
     const Mat4 viewProj = projMat * viewMat;
 
+    if (!initializeShaders()) { return; }
+    if (!m_impl->postSampler) {
+        D3D11_SAMPLER_DESC sampler{};
+        sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+        sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+        sampler.ComparisonFunc = D3D11_COMPARISON_NEVER;
+        sampler.MaxAnisotropy = 1;
+        sampler.MaxLOD = D3D11_FLOAT32_MAX;
+        if (FAILED(m_impl->device->CreateSamplerState(&sampler, m_impl->postSampler.GetAddressOf()))) {
+            return;
+        }
+    }
+
+    auto* context = m_impl->context;
+    if (!m_impl->bloomCb) {
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = sizeof(BloomCb);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        if (FAILED(m_impl->device->CreateBuffer(&desc, nullptr, m_impl->bloomCb.GetAddressOf()))) {
+            std::cerr << "Cannot create bloom constant buffer\n";
+            return;
+        }
+    }
+    auto* hdrTarget = view.hdrTarget.Get();
+    context->OMSetRenderTargets(1, &hdrTarget, view.dsv);
+    // Camera clear colors are authored in display space. Invert the display transform.
+    float hdrClear[4]{};
+    for (int i = 0; i < 3; ++i) {
+        const float srgb = std::clamp(camera.clearColor[i], 0.0f, 1.0f);
+        const float linear = srgb <= 0.04045f ? srgb / 12.92f : std::pow((srgb + 0.055f) / 1.055f, 2.4f);
+        hdrClear[i] = linear / std::max(1.0f - linear, 0.001f);
+    }
+    context->ClearRenderTargetView(hdrTarget, hdrClear);
+    if (drawList.meshCount > 0 && m_impl->meshPass.ensure(m_impl->device)) {
+        const Mat4 invView = inverse(viewMat);
+        m_impl->meshPass.prepareAssets(m_impl->device, drawList);
+        m_impl->meshPass.draw(context, m_impl->shaders.program(ShaderId::Mesh), viewProj,
+            {invView.m[12], invView.m[13], invView.m[14]}, drawList, true, m_impl->shaders.program(ShaderId::Shadow).pixel, &m_impl->shaders);
+    }
+
+    const auto post = m_impl->shaders.program(ShaderId::PostProcess);
+    context->OMSetRenderTargets(1, &view.rtv, nullptr);
+    context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    context->OMSetDepthStencilState(nullptr, 0);
+    context->RSSetState(nullptr);
+    context->IASetInputLayout(nullptr);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->VSSetShader(post.vertex, nullptr, 0);
+    context->PSSetShader(post.pixel, nullptr, 0);
+    auto* sampler = m_impl->postSampler.Get();
+    context->PSSetSamplers(0, 1, &sampler);
+    const auto& bloom = drawList.bloom;
+    BloomCb constants{bloom.threshold, bloom.softKnee * bloom.threshold,
+        bloom.enabled ? bloom.intensity : 0.0f, bloom.radius, {bloom.tint[0], bloom.tint[1], bloom.tint[2]},
+        bloom.highlightClamp, static_cast<unsigned>(std::clamp(bloom.quality, 0, 2) + 1), 0, 0, 0};
+    auto* bloomBuffer = m_impl->bloomCb.Get();
+    context->PSSetConstantBuffers(0, 1, &bloomBuffer);
+    const auto drawPost = [&](ID3D11RenderTargetView* target, ID3D11ShaderResourceView* source,
+        ID3D11ShaderResourceView* secondary, int width, int height) {
+        const D3D11_VIEWPORT passViewport{0, 0, static_cast<float>(width), static_cast<float>(height), 0, 1};
+        context->RSSetViewports(1, &passViewport);
+        context->OMSetRenderTargets(1, &target, nullptr);
+        ID3D11ShaderResourceView* inputs[]{source, secondary};
+        context->PSSetShaderResources(0, 2, inputs);
+        context->UpdateSubresource(bloomBuffer, 0, nullptr, &constants, 0, 0);
+        context->Draw(3, 0);
+        ID3D11ShaderResourceView* unbound[2]{};
+        context->PSSetShaderResources(0, 2, unbound);
+    };
+
+    ID3D11ShaderResourceView* glow = nullptr;
+    if (constants.intensity > 0 && bloom.radius > 0 && bloom.highlightClamp > 0) {
+        // Radius selects the deepest scale. Blend in the last level as radius increases.
+        const float scale = std::clamp(std::log2(std::max(bloom.radius, 2.0f) / 2.0f), 0.0f, 5.0f);
+        const auto wanted = static_cast<std::size_t>(std::ceil(scale)) + 1;
+        int width = view.width, height = view.height;
+        std::size_t count = 0;
+        for (; count < wanted; ++count) {
+            width = (width + 1) / 2;
+            height = (height + 1) / 2;
+            if (count == view.bloomLevels.size()) {
+                if (view.bloomAllocationFailed) { break; }
+                OffscreenView::BloomLevel level;
+                level.width = width;
+                level.height = height;
+                D3D11_TEXTURE2D_DESC desc{};
+                desc.Width = static_cast<UINT>(width);
+                desc.Height = static_cast<UINT>(height);
+                desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+                desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                const auto create = [&](auto& target, auto& resource) {
+                    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+                    return SUCCEEDED(m_impl->device->CreateTexture2D(&desc, nullptr, texture.GetAddressOf())) &&
+                        SUCCEEDED(m_impl->device->CreateRenderTargetView(texture.Get(), nullptr, target.GetAddressOf())) &&
+                        SUCCEEDED(m_impl->device->CreateShaderResourceView(texture.Get(), nullptr, resource.GetAddressOf()));
+                };
+                if (!create(level.downTarget, level.downView) || !create(level.upTarget, level.upView)) {
+                    std::cerr << "Cannot allocate bloom pyramid level\n";
+                    view.bloomAllocationFailed = true;
+                    break;
+                }
+                view.bloomLevels.push_back(std::move(level));
+            }
+            auto& level = view.bloomLevels[count];
+            constants.pass = count == 0 ? 1u : 2u;
+            drawPost(level.downTarget.Get(), count == 0 ? view.hdrView.Get() :
+                view.bloomLevels[count - 1].downView.Get(), nullptr, width, height);
+            if (width == 1 && height == 1) { ++count; break; }
+        }
+        if (count != 0) {
+            glow = view.bloomLevels[count - 1].downView.Get();
+            constants.pass = 3;
+            for (std::size_t i = count - 1; i > 0; --i) {
+                auto& level = view.bloomLevels[i - 1];
+                constants.coarseWeight = 0.5f * std::clamp(scale - static_cast<float>(i - 1), 0.0f, 1.0f);
+                drawPost(level.upTarget.Get(), level.downView.Get(), glow, level.width, level.height);
+                glow = level.upView.Get();
+            }
+        }
+    }
+    constants.pass = 0;
+    if (!glow) { constants.intensity = 0; }
+    drawPost(view.rtv, view.hdrView.Get(), glow, view.width, view.height);
+    context->RSSetViewports(1, &viewport);
+    context->OMSetRenderTargets(1, &view.rtv, view.dsv);
+
     if (drawList.drawGrid && ensureDebugLines()) {
+        const auto program = m_impl->shaders.program(ShaderId::Grid);
         D3D11_MAPPED_SUBRESOURCE mapped{};
         if (SUCCEEDED(
                 m_impl->context->Map(m_impl->lineCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -639,21 +685,16 @@ void Renderer::renderOffscreenView(
 
             const UINT stride = sizeof(DebugLineVertex);
             const UINT offset = 0;
-            m_impl->context->IASetInputLayout(m_impl->lineLayout);
+            m_impl->context->IASetInputLayout(program.layout);
             m_impl->context->IASetVertexBuffers(0, 1, &m_impl->lineVb, &stride, &offset);
             m_impl->context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_LINELIST);
-            m_impl->context->VSSetShader(m_impl->lineVs, nullptr, 0);
+            m_impl->context->VSSetShader(program.vertex, nullptr, 0);
             m_impl->context->VSSetConstantBuffers(0, 1, &m_impl->lineCb);
-            m_impl->context->PSSetShader(m_impl->linePs, nullptr, 0);
+            m_impl->context->PSSetShader(program.pixel, nullptr, 0);
             m_impl->context->RSSetState(m_impl->lineRasterizer);
             m_impl->context->OMSetDepthStencilState(m_impl->lineDepthState, 0);
             m_impl->context->Draw(m_impl->lineVertexCount, 0);
         }
-    }
-
-    if (m_impl->meshPass.ensure(m_impl->device)) {
-        m_impl->meshPass.prepareAssets(m_impl->device, drawList);
-        m_impl->meshPass.draw(m_impl->context, viewProj, drawList);
     }
 
     if (drawList.drawEditorOverlay && drawList.selectedMesh >= 0 &&
@@ -661,14 +702,14 @@ void Renderer::renderOffscreenView(
         const MeshInstance& selected = drawList.meshes[drawList.selectedMesh];
         const GpuMesh* meshGeometry = m_impl->meshPass.geometry(selected);
         if (meshGeometry != nullptr && m_impl->outlinePass.ensure(m_impl->device)) {
-            m_impl->outlinePass.draw(m_impl->context, viewProj, selected, *meshGeometry);
+            m_impl->outlinePass.draw(m_impl->context, m_impl->shaders.program(ShaderId::SelectionOutline), viewProj, selected, *meshGeometry);
         }
     }
 
     if (drawList.drawEditorOverlay && (drawList.frustumCount > 0 || drawList.debugLineCount > 0) &&
         m_impl->frustumPass.ensure(m_impl->device)) {
         m_impl->frustumPass.draw(
-            m_impl->context, viewProj, drawList.frustums, drawList.frustumCount, drawList.debugLines, drawList.debugLineCount);
+            m_impl->context, m_impl->shaders.program(ShaderId::CameraFrustum), viewProj, drawList.frustums, drawList.frustumCount, drawList.debugLines, drawList.debugLineCount);
     }
 
     if (drawList.drawEditorOverlay && drawList.showTransformGizmo &&
@@ -676,7 +717,7 @@ void Renderer::renderOffscreenView(
         const float scale = translateGizmoScale(drawList.gizmo.origin, viewMat, projMat,
             static_cast<float>(view.height));
         if (scale > 0.0f) {
-            m_impl->gizmoPass.draw(m_impl->context, viewProj, drawList.gizmo, scale);
+            m_impl->gizmoPass.draw(m_impl->context, m_impl->shaders.program(ShaderId::TransformGizmo), viewProj, drawList.gizmo, scale);
         }
     }
 }
@@ -689,7 +730,10 @@ Renderer::~Renderer() {
     }
     releaseOffscreenView(m_impl->game);
     releaseOffscreenView(m_impl->scene);
+    releaseOffscreenView(m_impl->thumbnail);
+    m_impl->thumbnails.clear();
     releaseDebugLines();
+    m_impl->shaders.release();
     m_impl->meshPass.setAssetReader({});
     m_impl->meshPass.release();
     m_impl->outlinePass.release();
@@ -706,6 +750,16 @@ bool Renderer::valid() const {
 }
 
 void Renderer::newFrame() {
+#ifdef SAT_SHADER_HOT_RELOAD
+    if (initializeShaders()) { m_impl->hotReload.poll(m_impl->device, m_impl->shaders); }
+#endif
+    if (m_impl->thumbnailsDirty || m_impl->thumbnailShaderRevision != m_impl->shaders.revision()) {
+        m_impl->thumbnails.clear();
+        m_impl->thumbnailsDirty = false;
+        m_impl->thumbnailShaderRevision = m_impl->shaders.revision();
+    }
+    ++m_impl->thumbnailFrame;
+    m_impl->thumbnailBudget = 4;
     if (!valid()) {
         return;
     }
@@ -752,10 +806,40 @@ void Renderer::resizeSceneView(int width, int height) {
 
 bool Renderer::reimportAsset(std::string_view path, const AssetImportSettings* settings,
     const AssetImportWriter& writer, std::string& error) {
-    return m_impl->meshPass.reimportAsset(m_impl->device, path, settings, writer, error);
+    const bool imported = m_impl->meshPass.reimportAsset(m_impl->device, path, settings, writer, error);
+    if (imported && isTextureAssetPath(path)) { m_impl->thumbnailsDirty = true; }
+    return imported;
 }
 std::string Renderer::assetInfo(std::string_view path) { return m_impl->meshPass.assetInfo(path); }
+void Renderer::invalidateMaterial(std::string_view path) {
+    m_impl->meshPass.invalidateMaterial(path);
+    m_impl->thumbnailsDirty = true;
+}
+
+void Renderer::setShaderReader(AssetReader reader) {
+    m_impl->shaders.setReader(std::move(reader));
+}
+
+bool Renderer::initializeShaders() {
+    return m_impl->shaders.ensure(m_impl->device);
+}
+
+void Renderer::setProjectShaderSource(AssetReader reader) {
+#ifdef SAT_SHADER_HOT_RELOAD
+    if (reader) {
+        m_impl->shaders.setProjectCompiler([this](std::string_view path, std::string_view source, std::string& bytes) {
+            return m_impl->hotReload.compileProjectPixel(path, source, bytes);
+        });
+    } else {
+        m_impl->shaders.setProjectCompiler({});
+    }
+#endif
+    m_impl->shaders.setProjectReader(std::move(reader));
+    m_impl->thumbnailsDirty = true;
+}
+
 void Renderer::setAssetReader(AssetReader reader) {
+    m_impl->thumbnailsDirty = true;
     m_impl->meshPass.setAssetReader(std::move(reader));
 }
 const std::vector<std::string>& Renderer::assetErrors() const {
@@ -787,6 +871,71 @@ int Renderer::gameViewWidth() const {
 
 int Renderer::gameViewHeight() const {
     return m_impl->game.height;
+}
+
+std::uintptr_t Renderer::materialThumbnail(std::string_view path) {
+    if (m_impl->thumbnailsDirty || !isMaterialAssetPath(path)) { return 0; }
+    std::string key(path);
+    auto& cache = m_impl->thumbnails;
+    if (const auto found = cache.find(key); found != cache.end()) {
+        found->second.lastUsed = m_impl->thumbnailFrame;
+        return reinterpret_cast<std::uintptr_t>(found->second.view.Get());
+    }
+    if (m_impl->thumbnailBudget == 0 || !valid() || !initializeShaders()) { return 0; }
+    constexpr std::size_t kCacheLimit = 256;
+    if (cache.size() >= kCacheLimit) {
+        const auto oldest = std::min_element(cache.begin(), cache.end(), [](const auto& a, const auto& b) {
+            return a.second.lastUsed < b.second.lastUsed;
+        });
+        if (oldest->second.lastUsed == m_impl->thumbnailFrame) { return 0; }
+        cache.erase(oldest);
+    }
+    --m_impl->thumbnailBudget;
+
+    constexpr int kSize = 96;
+    auto& preview = m_impl->thumbnail;
+    resizeOffscreenView(preview, kSize, kSize, "material thumbnail");
+    if (!preview.rtv || !m_impl->meshPass.ensure(m_impl->device)) { return 0; }
+
+    GameViewCamera camera;
+    camera.clearColor[0] = 0.16f;
+    camera.clearColor[1] = 0.17f;
+    camera.clearColor[2] = 0.19f;
+    const auto view = lookAt({2.2f, 1.7f, -2.5f}, {}, {0, 1, 0});
+    const auto projection = perspective(32, 1, 0.1f, 10);
+    std::memcpy(camera.view, view.m, sizeof(camera.view));
+    std::memcpy(camera.projection, projection.m, sizeof(camera.projection));
+    MeshInstance mesh;
+    mesh.materialPath = path;
+    const LightInstance lights[] = {
+        {{}, normalize({0.3f, -0.65f, 1.0f}), {3.5f, 3.2f, 2.8f}},
+        {{}, normalize({-1.0f, -0.25f, 0.15f}), {1.1f, 1.4f, 2.1f}},
+    };
+    SceneDrawList draw;
+    draw.meshes = &mesh;
+    draw.meshCount = 1;
+    draw.lights = lights;
+    draw.lightCount = 2;
+    draw.directionalShadows = false;
+    draw.bloom.enabled = false;
+    m_impl->meshPass.prepareAssets(m_impl->device, draw);
+    auto& entry = cache.try_emplace(std::move(key)).first->second;
+    entry.lastUsed = m_impl->thumbnailFrame;
+    if (!m_impl->meshPass.material(path)) { return 0; }
+    renderOffscreenView(preview, camera, draw);
+
+    // Snapshot the shared target. ImGui consumes the cached SRV at end of frame.
+    D3D11_TEXTURE2D_DESC desc{};
+    preview.color->GetDesc(&desc);
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> image;
+    if (FAILED(m_impl->device->CreateTexture2D(&desc, nullptr, image.GetAddressOf())) ||
+        FAILED(m_impl->device->CreateShaderResourceView(image.Get(), nullptr, entry.view.GetAddressOf()))) {
+        return 0;
+    }
+    m_impl->context->OMSetRenderTargets(0, nullptr, nullptr);
+    m_impl->context->CopyResource(image.Get(), preview.color);
+    return reinterpret_cast<std::uintptr_t>(entry.view.Get());
 }
 
 std::uintptr_t Renderer::createTexture(const unsigned char* rgba, int width, int height) {

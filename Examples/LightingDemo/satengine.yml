@@ -1,0 +1,15 @@
+# Selene std overlay for SatEngine script globals.
+# Winget Selene builds ship lua51 as the only base std; LuaLS remains Lua 5.4.
+base: lua51
+name: satengine
+globals:
+  sat:
+    any: true
+  self:
+    any: true
+  onStart:
+    any: true
+  onUpdate:
+    any: true
+  onStop:
+    any: true

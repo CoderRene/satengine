@@ -18,7 +18,9 @@ A large-world or open-world space game engine. Design choices assume vacuum, loc
 | **Audio** | WAV / Ogg / MP3 / FLAC, spatial sources, SFX/Music/UI buses |
 | **Shipping** | Build a standalone `.exe` + `.pak` from **Build > Build Standalone** |
 
-Not there yet: lighting/materials/animation, macOS/Linux editor, stable public API.
+Forward PBR [lighting and materials](docs/Lighting.md) with [Slang shaders](docs/Shaders.md).
+
+Still planned: animation, macOS/Linux editor, and a stable public API.
 
 ## Try an example
 
@@ -27,7 +29,8 @@ Open any folder under `Examples/` as a project in the editor, then press **Play*
 | Example | Try this if you want… |
 | --- | --- |
 | [LuaCube](Examples/LuaCube) | A minimal Lua-driven scene |
-| [AssetLoading](Examples/AssetLoading) | Imported meshes and textures |
+| [AssetLoading](Examples/AssetLoading) | Imported meshes and textured materials |
+| [LightingDemo](Examples/LightingDemo) | Directional, point, and spot lights with metallic-roughness materials |
 | [SpacePhysics](Examples/SpacePhysics) | Rigid bodies, gravity, triggers |
 | [AudioDemo](Examples/AudioDemo) | Spatial audio, buses, time scale |
 
@@ -88,7 +91,9 @@ Ship the exe together with its `.pak` parts. An MSVC runtime is required on the 
 | Topic | Guide |
 | --- | --- |
 | Lua scripting | [docs/LuaScripting.md](docs/LuaScripting.md) |
-| Meshes & textures | [docs/AssetLoading.md](docs/AssetLoading.md) |
+| Meshes, materials & textures | [docs/AssetLoading.md](docs/AssetLoading.md) |
+| Lighting | [docs/Lighting.md](docs/Lighting.md) |
+| Shaders | [docs/Shaders.md](docs/Shaders.md) |
 | Move / rotate / scale | [docs/SceneTransforms.md](docs/SceneTransforms.md) |
 | Physics | [docs/Physics.md](docs/Physics.md) |
 | Audio | [docs/Audio.md](docs/Audio.md) |

@@ -175,6 +175,11 @@ void HierarchyPanel::onImGuiRender(bool readOnly) {
         if (ImGui::MenuItem("Add Cube")) {
             m_impl->scene->addCube();
         }
+        if (ImGui::MenuItem("Add Light")) {
+            m_impl->scene->addLight();
+            m_impl->selectionActivated = true;
+            m_impl->selected = m_impl->scene->entities().back().id();
+        }
         ImGui::EndPopup();
     }
 

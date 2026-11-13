@@ -27,6 +27,11 @@ int Application::run() {
     m_stopRequested = false;
     onStart();
     renderer.setAssetReader(m_assetReader);
+    renderer.setShaderReader(m_shaderReader);
+    if (!m_stopRequested && !renderer.initializeShaders()) {
+        onStop();
+        return 1;
+    }
     SceneRenderData renderData;
     std::size_t reportedAssetErrors = 0;
     auto previous = std::chrono::steady_clock::now();

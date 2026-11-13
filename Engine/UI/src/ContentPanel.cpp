@@ -13,7 +13,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <fstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace sat {
@@ -185,6 +187,48 @@ void ContentPanel::onImGuiRender(bool playMode) {
         drawAudioControls();
         ImGui::EndDisabled();
         drawFolderList();
+        if (ImGui::BeginPopupContextWindow("ContentContext",
+            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
+            const bool createMaterial = ImGui::MenuItem("Create Material", nullptr, false, !playMode);
+            const bool createShader = ImGui::MenuItem("Create Slang Shader", nullptr, false, !playMode);
+            if (createMaterial || createShader) {
+                constexpr std::string_view kShaderTemplate = R"(import Material;
+import MeshFragment;
+
+[shader("fragment")]
+float4 psMain(MeshFragment input) : SV_Target
+{
+    float4 base = sampleBaseColor(input.uv);
+    return float4(base.rgb, materialOpacity(base.a));
+}
+)";
+                const std::string stem = createShader ? "Shader" : "Material";
+                const char* extension = createShader ? ".slang" : ".satmat";
+                std::error_code ec;
+                const auto relative = m_relative.generic_u8string();
+                const auto folder = relative == u8"Assets" || relative.starts_with(u8"Assets/")
+                    ? m_relative : fs::path("Assets");
+                fs::create_directories(m_project->root() / folder, ec);
+                for (int suffix = 0; !ec && suffix < 10000; ++suffix) {
+                    const auto name = suffix == 0 ? stem + extension
+                        : stem + " " + std::to_string(suffix) + extension;
+                    const auto path = m_project->root() / folder / name;
+                    if (fs::exists(path, ec)) { continue; }
+                    if (ec) { break; }
+                    std::ofstream file(path, std::ios::binary);
+                    if (createShader) { file << kShaderTemplate; }
+                    else { file << encodeMaterial(MaterialData{}); }
+                    file.close();
+                    if (!file) { ec = std::make_error_code(std::errc::io_error); break; }
+                    m_relative = folder;
+                    const auto encoded = (folder / name).generic_u8string();
+                    if (createMaterial && m_select) { m_select(std::string(encoded.begin(), encoded.end())); }
+                    break;
+                }
+                if (ec) { std::cerr << "Cannot create " << stem << ": " << ec.message() << '\n'; }
+            }
+            ImGui::EndPopup();
+        }
     } else {
         ImGui::TextUnformatted("Create or open a project from File to browse files.");
     }
@@ -211,7 +255,9 @@ void ContentPanel::drawBreadcrumb() {
 }
 
 void ContentPanel::drawFolderList() {
-    const fs::path current = m_project->root() / m_relative;
+    // Navigation can change m_relative while the current folder's rows are still drawing.
+    const fs::path listedFolder = m_relative;
+    const fs::path current = m_project->root() / listedFolder;
 
     std::error_code ec;
     if (!fs::is_directory(current, ec)) {
@@ -221,7 +267,7 @@ void ContentPanel::drawFolderList() {
     }
 
     std::vector<Entry> entries;
-    if (!m_relative.empty()) {
+    if (!listedFolder.empty()) {
         entries.push_back({fs::path(".."), true});
     }
 
@@ -230,7 +276,7 @@ void ContentPanel::drawFolderList() {
             break;
         }
         const fs::path fileName = entry.path().filename();
-        if (isToolingEntry(fileName) || fileName.extension() == ".satimport" || fileName.string().ends_with(".satimport.tmp")) {
+        if (isToolingEntry(fileName) || fileName.extension() == ".satimport" || fileName.string().ends_with(".satimport.tmp") || fileName.string().ends_with(".satmat.tmp")) {
             continue;
         }
         std::error_code typeEc;
@@ -277,7 +323,7 @@ void ContentPanel::drawFolderList() {
                 ImGui::SameLine();
             }
 
-            const auto encoded = (m_relative / entry.name).generic_u8string();
+            const auto encoded = (listedFolder / entry.name).generic_u8string();
             const std::string assetPath(encoded.begin(), encoded.end());
             if (ImGui::Selectable(name.c_str(), !entry.isDirectory && assetPath == m_selectedAsset)) {
                 if (!entry.isDirectory && m_select) { m_select(assetPath); }
@@ -293,7 +339,7 @@ void ContentPanel::drawFolderList() {
             if (!entry.isDirectory && isLuaFile(entry.name) &&
                 ImGui::IsItemHovered() &&
                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-                openLuaInCursor(*m_project, m_relative, entry.name);
+                openLuaInCursor(*m_project, listedFolder, entry.name);
             }
 
             ImGui::PopID();
@@ -320,10 +366,11 @@ void ContentPanel::drawFolderList() {
         ImGui::BeginGroup();
         const bool pressed = ImGui::InvisibleButton("##cell", ImVec2(iconSize, cellH));
         const bool hovered = ImGui::IsItemHovered();
+        const bool visible = ImGui::IsItemVisible();
         const ImVec2 min = ImGui::GetItemRectMin();
         ImDrawList* draw = ImGui::GetWindowDrawList();
 
-        const auto encoded = (m_relative / entry.name).generic_u8string();
+        const auto encoded = (listedFolder / entry.name).generic_u8string();
         const std::string assetPath(encoded.begin(), encoded.end());
         if (pressed && !entry.isDirectory && m_select) { m_select(assetPath); }
         if (hovered || (!entry.isDirectory && assetPath == m_selectedAsset)) {
@@ -337,7 +384,11 @@ void ContentPanel::drawFolderList() {
         const ImVec2 iconMin(min.x, min.y);
         const ImVec2 iconMax(min.x + iconSize, min.y + iconSize);
         const bool isParent = name == "..";
-        if (isParent && m_returnIcon != 0) {
+        const auto thumbnail = visible && !entry.isDirectory && isMaterialAssetPath(assetPath)
+            ? m_renderer->materialThumbnail(assetPath) : 0;
+        if (thumbnail != 0) {
+            draw->AddImage(ImTextureRef(static_cast<ImTextureID>(thumbnail)), iconMin, iconMax);
+        } else if (isParent && m_returnIcon != 0) {
             draw->AddImage(returnIcon, iconMin, iconMax);
         } else if (entry.isDirectory && m_folderIcon != 0) {
             draw->AddImage(folderIcon, iconMin, iconMax);
@@ -380,7 +431,7 @@ void ContentPanel::drawFolderList() {
             }
         } else if (isLuaFile(entry.name) && hovered &&
             ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-            openLuaInCursor(*m_project, m_relative, entry.name);
+            openLuaInCursor(*m_project, listedFolder, entry.name);
         }
 
         ImGui::EndGroup();

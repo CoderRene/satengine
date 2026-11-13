@@ -337,6 +337,110 @@ int setScriptEnabled(lua_State* state) {
     return 1;
 }
 
+LightComponent& checkedLight(lua_State* state) {
+    auto& entity = checkedEntity(state);
+    if (!entity.hasLight) { luaL_error(state, "entity has no light component"); }
+    return entity.light;
+}
+
+float checkedLightValue(lua_State* state, int arg, float minimum, float maximum) {
+    const float value = checkedFloat(state, arg);
+    if (value < minimum || value > maximum) { luaL_argerror(state, arg, "lighting value out of range"); }
+    return value;
+}
+
+int getLightType(lua_State* state) {
+    constexpr const char* kTypes[] = {"directional", "point", "spot"};
+    lua_pushstring(state, kTypes[static_cast<int>(checkedLight(state).type)]);
+    return 1;
+}
+
+int setLightType(lua_State* state) {
+    auto& light = checkedLight(state);
+    std::size_t size = 0;
+    const char* bytes = luaL_checklstring(state, 2, &size);
+    const std::string_view type(bytes, size);
+    if (type == "directional") { light.type = LightType::Directional; }
+    else if (type == "point") { light.type = LightType::Point; }
+    else if (type == "spot") { light.type = LightType::Spot; }
+    else { return luaL_argerror(state, 2, "expected directional, point, or spot"); }
+    sceneFor(state).markEdited();
+    return 0;
+}
+
+int getLightIntensity(lua_State* state) {
+    lua_pushnumber(state, checkedLight(state).intensity);
+    return 1;
+}
+
+int setLightIntensity(lua_State* state) {
+    auto& light = checkedLight(state);
+    light.intensity = checkedLightValue(state, 2, 0.0f, std::numeric_limits<float>::max());
+    sceneFor(state).markEdited();
+    return 0;
+}
+
+int getLightRange(lua_State* state) {
+    lua_pushnumber(state, checkedLight(state).range);
+    return 1;
+}
+
+int setLightRange(lua_State* state) {
+    auto& light = checkedLight(state);
+    light.range = checkedLightValue(state, 2, std::numeric_limits<float>::min(), std::numeric_limits<float>::max());
+    sceneFor(state).markEdited();
+    return 0;
+}
+
+int getLightColor(lua_State* state) {
+    for (float channel : checkedLight(state).color) { lua_pushnumber(state, channel); }
+    return 3;
+}
+
+int setLightColor(lua_State* state) {
+    auto& light = checkedLight(state);
+    const float channels[] = {checkedLightValue(state, 2, 0, 1), checkedLightValue(state, 3, 0, 1),
+        checkedLightValue(state, 4, 0, 1)};
+    for (int i = 0; i < 3; ++i) { light.color[i] = channels[i]; }
+    sceneFor(state).markEdited();
+    return 0;
+}
+
+int getLightCone(lua_State* state) {
+    const auto& light = checkedLight(state);
+    lua_pushnumber(state, light.innerConeDegrees);
+    lua_pushnumber(state, light.outerConeDegrees);
+    return 2;
+}
+
+int setLightCone(lua_State* state) {
+    auto& light = checkedLight(state);
+    const float outer = checkedFloat(state, 3);
+    if (outer < 0 || outer >= 90) { return luaL_argerror(state, 3, "expected an angle in [0, 90)"); }
+    light.innerConeDegrees = checkedLightValue(state, 2, 0, outer);
+    light.outerConeDegrees = outer;
+    sceneFor(state).markEdited();
+    return 0;
+}
+
+int getAmbient(lua_State* state) {
+    const auto& settings = sceneFor(state).lightingSettings;
+    for (float channel : settings.ambientColor) { lua_pushnumber(state, channel); }
+    lua_pushnumber(state, settings.ambientIntensity);
+    return 4;
+}
+
+int setAmbient(lua_State* state) {
+    const float channels[] = {checkedLightValue(state, 1, 0, 1), checkedLightValue(state, 2, 0, 1),
+        checkedLightValue(state, 3, 0, 1)};
+    const float intensity = checkedLightValue(state, 4, 0, std::numeric_limits<float>::max());
+    auto& scene = sceneFor(state);
+    for (int i = 0; i < 3; ++i) { scene.lightingSettings.ambientColor[i] = channels[i]; }
+    scene.lightingSettings.ambientIntensity = intensity;
+    scene.markEdited();
+    return 0;
+}
+
 } // namespace
 
 void registerSceneBindings(lua_State* state, Scene& scene, PhysicsSystem* physics) {
@@ -393,10 +497,40 @@ void registerSceneBindings(lua_State* state, Scene& scene, PhysicsSystem* physic
         {"getMeshAsset", guarded<getAsset<&MeshComponent::meshPath>>},
         // @lua fun sat.setMeshAsset(entity: EntityId, path: string|nil)
         {"setMeshAsset", guarded<setAsset<&MeshComponent::meshPath, isMeshAssetPath>>},
-        // @lua fun sat.getTextureAsset(entity: EntityId): string|nil
-        {"getTextureAsset", guarded<getAsset<&MeshComponent::texturePath>>},
-        // @lua fun sat.setTextureAsset(entity: EntityId, path: string|nil)
-        {"setTextureAsset", guarded<setAsset<&MeshComponent::texturePath, isTextureAssetPath>>},
+        // @lua fun sat.getMaterialAsset(entity: EntityId): string|nil
+        {"getMaterialAsset", guarded<getAsset<&MeshComponent::materialPath>>},
+        // @lua fun sat.setMaterialAsset(entity: EntityId, path: string|nil)
+        {"setMaterialAsset", guarded<setAsset<&MeshComponent::materialPath, isMaterialAssetPath>>},
+        // @lua fun sat.hasLight(entity: EntityId): boolean
+        {"hasLight", guarded<hasComponent<&Entity::hasLight>>},
+        // @lua fun sat.addLight(entity: EntityId): boolean
+        {"addLight", guarded<addComponent<&Entity::hasLight, &Entity::light>>},
+        // @lua fun sat.removeLight(entity: EntityId): boolean
+        {"removeLight", guarded<removeComponent<&Entity::hasLight, &Entity::light>>},
+        // @lua fun sat.getLightType(entity: EntityId): string
+        {"getLightType", guarded<getLightType>},
+        // @lua fun sat.setLightType(entity: EntityId, lightType: string)
+        {"setLightType", guarded<setLightType>},
+        // @lua fun sat.getLightIntensity(entity: EntityId): number
+        {"getLightIntensity", guarded<getLightIntensity>},
+        // @lua fun sat.setLightIntensity(entity: EntityId, intensity: number)
+        {"setLightIntensity", guarded<setLightIntensity>},
+        // @lua fun sat.getLightRange(entity: EntityId): number
+        {"getLightRange", guarded<getLightRange>},
+        // @lua fun sat.setLightRange(entity: EntityId, range: number)
+        {"setLightRange", guarded<setLightRange>},
+        // @lua fun sat.getLightColor(entity: EntityId): r: number, g: number, b: number
+        {"getLightColor", guarded<getLightColor>},
+        // @lua fun sat.setLightColor(entity: EntityId, r: number, g: number, b: number)
+        {"setLightColor", guarded<setLightColor>},
+        // @lua fun sat.getLightCone(entity: EntityId): innerDegrees: number, outerDegrees: number
+        {"getLightCone", guarded<getLightCone>},
+        // @lua fun sat.setLightCone(entity: EntityId, innerDegrees: number, outerDegrees: number)
+        {"setLightCone", guarded<setLightCone>},
+        // @lua fun sat.getAmbient(): r: number, g: number, b: number, intensity: number
+        {"getAmbient", guarded<getAmbient>},
+        // @lua fun sat.setAmbient(r: number, g: number, b: number, intensity: number)
+        {"setAmbient", guarded<setAmbient>},
         // @lua fun sat.hasMesh(entity: EntityId): boolean
         {"hasMesh", guarded<hasComponent<&Entity::hasMesh>>},
         // @lua fun sat.hasCamera(entity: EntityId): boolean

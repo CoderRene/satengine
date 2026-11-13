@@ -1,4 +1,5 @@
 #include "PhysicsInspector.hpp"
+#include "CursorWrap.hpp"
 
 #include "Scene.hpp"
 
@@ -36,13 +37,13 @@ bool drawPhysicsInspector(Entity &e) {
       b.motion = static_cast<BodyMotion>(motion);
       changed = true;
     }
-    changed |= ImGui::DragFloat("Mass (kg)", &b.mass, 0.1f, 0.001f, 1e12f,
+    changed |= dragFloat("Mass (kg)", &b.mass, 0.1f, 0.001f, 1e12f,
                                 "%.3f", ImGuiSliderFlags_AlwaysClamp);
-    changed |= ImGui::DragFloat("Gravity factor", &b.gravityFactor, 0.01f, 0,
+    changed |= dragFloat("Gravity factor", &b.gravityFactor, 0.01f, 0,
                                 100, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-    changed |= ImGui::DragFloat("Linear damping", &b.linearDamping, 0.01f, 0,
+    changed |= dragFloat("Linear damping", &b.linearDamping, 0.01f, 0,
                                 10, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-    changed |= ImGui::DragFloat("Angular damping", &b.angularDamping, 0.01f, 0,
+    changed |= dragFloat("Angular damping", &b.angularDamping, 0.01f, 0,
                                 10, "%.3f", ImGuiSliderFlags_AlwaysClamp);
     changed |= ImGui::Checkbox("Allow sleeping", &b.allowSleeping);
     changed |= ImGui::Checkbox("Continuous collision detection", &b.continuous);
@@ -74,9 +75,9 @@ bool drawPhysicsInspector(Entity &e) {
                               ImGuiTreeNodeFlags_DefaultOpen)) {
     auto &c = e.collider;
     changed |= ImGui::Checkbox("Trigger (all shapes)", &c.trigger);
-    changed |= ImGui::DragFloat("Friction", &c.friction, 0.01f, 0, 10, "%.3f",
+    changed |= dragFloat("Friction", &c.friction, 0.01f, 0, 10, "%.3f",
                                 ImGuiSliderFlags_AlwaysClamp);
-    changed |= ImGui::DragFloat("Restitution", &c.restitution, 0.01f, 0, 1,
+    changed |= dragFloat("Restitution", &c.restitution, 0.01f, 0, 1,
                                 "%.3f", ImGuiSliderFlags_AlwaysClamp);
     if (e.transform.scale.x <= 0 ||
         e.transform.scale.x != e.transform.scale.y ||
@@ -96,16 +97,16 @@ bool drawPhysicsInspector(Entity &e) {
         changed |= ImGui::InputFloat3("Offset (m)", &s.offset.x);
         changed |= ImGui::InputFloat3("Rotation (degrees)", &s.rotation.x);
         if (s.shape == ColliderShape::Box) {
-          changed |= ImGui::DragFloat3("Half extents (m)", &s.halfExtents.x,
+          changed |= dragFloat3("Half extents (m)", &s.halfExtents.x,
                                        0.01f, 0.001f, 1e6f, "%.3f",
                                        ImGuiSliderFlags_AlwaysClamp);
         } else {
           changed |=
-              ImGui::DragFloat("Radius (m)", &s.radius, 0.01f, 0.001f, 1e6f,
+              dragFloat("Radius (m)", &s.radius, 0.01f, 0.001f, 1e6f,
                                "%.3f", ImGuiSliderFlags_AlwaysClamp);
         }
         if (s.shape == ColliderShape::Capsule) {
-          changed |= ImGui::DragFloat("Cylinder half-height (m)", &s.halfHeight,
+          changed |= dragFloat("Cylinder half-height (m)", &s.halfHeight,
                                       0.01f, 0.001f, 1e6f, "%.3f",
                                       ImGuiSliderFlags_AlwaysClamp);
         }

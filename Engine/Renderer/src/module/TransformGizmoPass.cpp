@@ -1,5 +1,7 @@
 #include "TransformGizmoPass.hpp"
 
+#include "ShaderLayout.hpp"
+
 #include "TransformGizmo.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -10,7 +12,6 @@
 #endif
 
 #include <d3d11.h>
-#include <d3dcompiler.h>
 
 #include <array>
 #include <cmath>
@@ -44,48 +45,11 @@ struct GizmoVertex {
 
 static_assert(sizeof(GizmoVertex) == 8 * sizeof(float));
 
-struct GizmoFrameCb {
-    float viewProj[16] = {
-        1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-    };
-    float selection[4] = {-1, 0, 0, 0};
-};
+
 
 static_assert(sizeof(GizmoFrameCb) % 16 == 0);
 
-constexpr const char* kGizmoShaderSource = R"(
-cbuffer Frame : register(b0)
-{
-    float4x4 viewProj;
-    float4 selection;
-};
 
-struct VSIn
-{
-    float3 position : POSITION;
-    float4 color : COLOR;
-    float handle : TEXCOORD0;
-};
-
-struct VSOut
-{
-    float4 position : SV_Position;
-    float4 color : COLOR;
-};
-
-VSOut vs_main(VSIn input)
-{
-    VSOut output;
-    output.position = mul(viewProj, float4(input.position, 1.0f));
-    output.color = input.handle == selection.x ? (selection.y > 0 ? float4(1, 0.65f, 0.1f, 1) : float4(1, 0.9f, 0.25f, 1)) : input.color;
-    return output;
-}
-
-float4 ps_main(VSOut input) : SV_Target
-{
-    return input.color;
-}
-)";
 
 struct GizmoRange {
     UINT first = 0;
@@ -172,9 +136,6 @@ GizmoGeometry buildGizmoMesh() {
 } // namespace
 
 struct TransformGizmoPass::Impl {
-    ID3D11VertexShader* vs = nullptr;
-    ID3D11PixelShader* ps = nullptr;
-    ID3D11InputLayout* layout = nullptr;
     ID3D11Buffer* vb = nullptr;
     ID3D11Buffer* frameCb = nullptr;
     ID3D11RasterizerState* rasterizer = nullptr;
@@ -196,9 +157,6 @@ void TransformGizmoPass::release() {
     releaseCom(m_impl->rasterizer);
     releaseCom(m_impl->frameCb);
     releaseCom(m_impl->vb);
-    releaseCom(m_impl->layout);
-    releaseCom(m_impl->ps);
-    releaseCom(m_impl->vs);
     delete m_impl;
     m_impl = nullptr;
 }
@@ -224,90 +182,8 @@ bool TransformGizmoPass::ensure(ID3D11Device* device) {
         return false;
     };
 
-    ID3DBlob* vsBlob = nullptr;
-    ID3DBlob* psBlob = nullptr;
-    ID3DBlob* errorBlob = nullptr;
-    HRESULT hr = D3DCompile(
-        kGizmoShaderSource,
-        std::strlen(kGizmoShaderSource),
-        "TransformGizmo",
-        nullptr,
-        nullptr,
-        "vs_main",
-        "vs_5_0",
-        0,
-        0,
-        &vsBlob,
-        &errorBlob);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to compile gizmo VS";
-        if (errorBlob != nullptr) {
-            std::cerr << ": " << static_cast<const char*>(errorBlob->GetBufferPointer());
-            errorBlob->Release();
-        }
-        std::cerr << '\n';
-        m_impl->failed = true;
-        return false;
-    }
-    releaseCom(errorBlob);
+    HRESULT hr = S_OK;
 
-    hr = D3DCompile(
-        kGizmoShaderSource,
-        std::strlen(kGizmoShaderSource),
-        "TransformGizmo",
-        nullptr,
-        nullptr,
-        "ps_main",
-        "ps_5_0",
-        0,
-        0,
-        &psBlob,
-        &errorBlob);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to compile gizmo PS";
-        if (errorBlob != nullptr) {
-            std::cerr << ": " << static_cast<const char*>(errorBlob->GetBufferPointer());
-            errorBlob->Release();
-        }
-        std::cerr << '\n';
-        releaseCom(vsBlob);
-        m_impl->failed = true;
-        return false;
-    }
-    releaseCom(errorBlob);
-
-    hr = device->CreateVertexShader(
-        vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &m_impl->vs);
-    if (FAILED(hr)) {
-        releaseCom(vsBlob);
-        releaseCom(psBlob);
-        return fail();
-    }
-    hr = device->CreatePixelShader(
-        psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &m_impl->ps);
-    releaseCom(psBlob);
-    if (FAILED(hr)) {
-        releaseCom(vsBlob);
-        return fail();
-    }
-
-    const D3D11_INPUT_ELEMENT_DESC layoutDesc[] = {
-        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"COLOR",
-         0,
-         DXGI_FORMAT_R32G32B32A32_FLOAT,
-         0,
-         D3D11_APPEND_ALIGNED_ELEMENT,
-         D3D11_INPUT_PER_VERTEX_DATA,
-         0},
-        {"TEXCOORD", 0, DXGI_FORMAT_R32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
-    };
-    hr = device->CreateInputLayout(
-        layoutDesc, 3, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &m_impl->layout);
-    releaseCom(vsBlob);
-    if (FAILED(hr)) {
-        return fail();
-    }
 
     const GizmoGeometry geometry = buildGizmoMesh();
     const auto& vertices = geometry.vertices;
@@ -356,7 +232,7 @@ bool TransformGizmoPass::ensure(ID3D11Device* device) {
 }
 
 void TransformGizmoPass::draw(
-    ID3D11DeviceContext* context,
+    ID3D11DeviceContext* context, ShaderProgram program,
     const Mat4& viewProj,
     const TransformGizmoInstance& gizmo,
     float worldScale) const {
@@ -386,11 +262,11 @@ void TransformGizmoPass::draw(
 
     const UINT stride = sizeof(GizmoVertex);
     const UINT offset = 0;
-    context->IASetInputLayout(m_impl->layout);
+    context->IASetInputLayout(program.layout);
     context->IASetVertexBuffers(0, 1, &m_impl->vb, &stride, &offset);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    context->VSSetShader(m_impl->vs, nullptr, 0);
-    context->PSSetShader(m_impl->ps, nullptr, 0);
+    context->VSSetShader(program.vertex, nullptr, 0);
+    context->PSSetShader(program.pixel, nullptr, 0);
     context->VSSetConstantBuffers(0, 1, &m_impl->frameCb);
     context->RSSetState(m_impl->rasterizer);
     context->OMSetDepthStencilState(m_impl->depthState, 0);

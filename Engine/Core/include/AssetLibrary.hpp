@@ -17,6 +17,7 @@ using AssetReader = std::function<AssetReadResult(std::string_view, std::string&
 // Persistence callback must not reenter or mutate the asset library/renderer.
 using AssetImportWriter = std::function<bool(const AssetImportSettings&, std::string&)>;
 [[nodiscard]] AssetReader fileAssetReader(const std::filesystem::path& projectRoot);
+[[nodiscard]] AssetReader fileShaderReader(const std::filesystem::path& executableRoot);
 
 struct PreparedAssetImport {
     std::string path;
@@ -33,6 +34,8 @@ class AssetLibrary {
 public:
     void setReader(AssetReader reader);
     void clear();
+    void invalidateMaterial(std::string_view path);
+    [[nodiscard]] const MaterialData* material(std::string_view path);
     [[nodiscard]] const MeshData* mesh(std::string_view path);
     [[nodiscard]] const TextureData* texture(std::string_view path);
     // Null overrides reads saved metadata, with missing metadata using defaults.
@@ -54,6 +57,7 @@ private:
     AssetReader m_reader;
     Cache<MeshData> m_meshes;
     Cache<TextureData> m_textures;
+    Cache<MaterialData> m_materials;
     std::vector<std::string> m_errors;
 };
 }

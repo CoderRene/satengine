@@ -1,0 +1,10 @@
+file(SHA256 "${LAYOUT}" hash)
+string(REPLACE "|" ";" entries "${ENTRIES}")
+set(manifest "SatShaders 1\n${hash}\n")
+foreach(entry IN LISTS entries)
+    get_filename_component(name "${entry}" NAME)
+    string(APPEND manifest "${name}\n")
+endforeach()
+file(WRITE "${SHADER_DIR}/ShaderManifest" "${manifest}")
+file(WRITE "${GENERATED}/ShaderManifest.hpp"
+    "#pragma once\nnamespace sat { inline constexpr char kShaderLayoutHash[] = \"${hash}\"; }\n")

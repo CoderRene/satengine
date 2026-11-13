@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <limits>
 #include <locale>
+#include <iostream>
 #include <sstream>
 #include <system_error>
 #include <utility>
@@ -32,9 +33,18 @@ bool finite(const DVec3& value) {
 std::string serializeScene(const Scene& scene) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "SatScene 5\n" << scene.entities().size() << '\n';
+    out << "SatScene 9\n" << scene.entities().size() << '\n';
     writePhysicsSettings(out, scene.physicsSettings);
     writeAudioSettings(out, scene.audioSettings);
+    const auto& ambient = scene.lightingSettings;
+    out << ambient.ambientColor[0] << ' ' << ambient.ambientColor[1] << ' '
+        << ambient.ambientColor[2] << ' ' << ambient.ambientIntensity << '\n';
+    out << std::quoted(ambient.environmentPath) << ' ' << ambient.environmentIntensity << ' '
+        << ambient.directionalShadows << ' ' << ambient.shadowResolution << ' ' << ambient.shadowRadius << '\n';
+    const auto& bloom = ambient.bloom;
+    out << bloom.enabled << ' ' << bloom.threshold << ' ' << bloom.softKnee << ' '
+        << bloom.intensity << ' ' << bloom.radius << ' ' << bloom.tint[0] << ' '
+        << bloom.tint[1] << ' ' << bloom.tint[2] << ' ' << bloom.highlightClamp << ' ' << bloom.quality << '\n';
     for (const auto& entity : scene.entities()) {
         const auto& t = entity.transform;
         const auto& c = entity.camera;
@@ -45,7 +55,7 @@ std::string serializeScene(const Scene& scene) {
             << t.rotation.x << ' ' << t.rotation.y << ' ' << t.rotation.z << ' '
             << t.scale.x << ' ' << t.scale.y << ' ' << t.scale.z << '\n'
             << entity.hasMesh << ' ' << static_cast<int>(entity.mesh.primitive) << ' '
-            << std::quoted(entity.mesh.meshPath) << ' ' << std::quoted(entity.mesh.texturePath) << '\n'
+            << std::quoted(entity.mesh.meshPath) << ' ' << std::quoted(entity.mesh.materialPath) << '\n'
             << entity.hasCamera << ' ' << c.isMain << ' ' << c.fieldOfView << ' '
             << c.nearClip << ' ' << c.farClip;
         for (float channel : c.clearColor) {
@@ -57,6 +67,11 @@ std::string serializeScene(const Scene& scene) {
         }
         writePhysicsComponents(out, entity);
         writeAudioComponents(out, entity);
+        const auto& light = entity.light;
+        out << entity.hasLight << ' ' << static_cast<int>(light.type) << ' '
+            << light.color[0] << ' ' << light.color[1] << ' ' << light.color[2] << ' '
+            << light.intensity << ' ' << light.range << ' ' << light.innerConeDegrees << ' '
+            << light.outerConeDegrees << '\n';
     }
     return out.str();
 }
@@ -72,7 +87,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
     std::string magic;
     int version = 0;
     std::size_t count = 0;
-    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > 5) || count > kMaxEntities) {
+    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > 9) || count > kMaxEntities) {
         return fail("Invalid scene header, version or entity count.");
     }
     Scene candidate;
@@ -83,6 +98,41 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
     if (version >= 4 && !readAudioSettings(in, candidate.audioSettings, version >= 5)) {
         return fail("Invalid audio settings.");
     }
+    const auto readColor = [&](float (&color)[3]) {
+        for (float& value : color) {
+            if (!(in >> value) || !std::isfinite(value) || value < 0 || value > 1) { return false; }
+        }
+        return true;
+    };
+    auto& ambient = candidate.lightingSettings;
+    if (version >= 6 && (!readColor(ambient.ambientColor) || !(in >> ambient.ambientIntensity) ||
+        !std::isfinite(ambient.ambientIntensity) || ambient.ambientIntensity < 0)) {
+        return fail("Invalid ambient lighting settings.");
+    }
+    if (version >= 7 && (!(in >> std::quoted(ambient.environmentPath) >> ambient.environmentIntensity
+        >> ambient.directionalShadows) ||
+        (!ambient.environmentPath.empty() && !isTextureAssetPath(ambient.environmentPath)) ||
+        !std::isfinite(ambient.environmentIntensity) || ambient.environmentIntensity < 0)) {
+        return fail("Invalid environment lighting settings.");
+    }
+    if (version >= 8 && (!(in >> ambient.shadowResolution >> ambient.shadowRadius) ||
+        (ambient.shadowResolution != 512 && ambient.shadowResolution != 1024 &&
+         ambient.shadowResolution != 2048 && ambient.shadowResolution != 4096) ||
+        !std::isfinite(ambient.shadowRadius) || ambient.shadowRadius < 5.0f || ambient.shadowRadius > 200.0f)) {
+        return fail("Invalid directional shadow quality settings.");
+    }
+    auto& bloom = ambient.bloom;
+    const auto readRange = [&](float& value, float minimum, float maximum) {
+        return (in >> value) && std::isfinite(value) && value >= minimum && value <= maximum;
+    };
+    if (version >= 9 && (!(in >> bloom.enabled) || !readRange(bloom.threshold, 0, 100) ||
+        !readRange(bloom.softKnee, 0, 1) || !readRange(bloom.intensity, 0, 10) ||
+        !readRange(bloom.radius, 0, 64) || !readColor(bloom.tint) ||
+        !readRange(bloom.highlightClamp, 0, 65504) || !(in >> bloom.quality) ||
+        bloom.quality < 0 || bloom.quality > 2)) {
+        return fail("Invalid bloom settings.");
+    }
+    std::size_t droppedTextures = 0;
     bool hasMain = false;
     for (std::size_t index = 0; index < count; ++index) {
         std::string name;
@@ -93,13 +143,15 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
         auto& t = e.transform;
         auto& c = e.camera;
         int primitive = 0;
+        std::string legacyTexture;
+        auto& surfacePath = version >= 6 ? e.mesh.materialPath : legacyTexture;
         if (!(in >> t.position.x >> t.position.y >> t.position.z
                  >> t.rotation.x >> t.rotation.y >> t.rotation.z
                  >> t.scale.x >> t.scale.y >> t.scale.z
                  >> e.hasMesh >> primitive) ||
-            (version >= 2 && (!(in >> std::quoted(e.mesh.meshPath) >> std::quoted(e.mesh.texturePath)) ||
+            (version >= 2 && (!(in >> std::quoted(e.mesh.meshPath) >> std::quoted(surfacePath)) ||
                 (!e.mesh.meshPath.empty() && !isMeshAssetPath(e.mesh.meshPath)) ||
-                (!e.mesh.texturePath.empty() && !isTextureAssetPath(e.mesh.texturePath)))) ||
+                (!surfacePath.empty() && !(version >= 6 ? isMaterialAssetPath(surfacePath) : isTextureAssetPath(surfacePath))))) ||
             !(in >> e.hasCamera >> c.isMain
                  >> c.fieldOfView >> c.nearClip >> c.farClip) ||
             !finite(t.position) || !finite(t.rotation) || !finite(t.scale) || primitive != 0 ||
@@ -130,10 +182,29 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
         }
         if (version >= 3 && !readPhysicsComponents(in, e, error)) { return false; }
         if (version >= 4 && !readAudioComponents(in, e, error, version >= 5)) { return false; }
+        if (!legacyTexture.empty()) { ++droppedTextures; }
+        if (version >= 6) {
+            int type = 0;
+            auto& light = e.light;
+            if (!(in >> e.hasLight >> type) || type < 0 || type > 2 || !readColor(light.color) ||
+                !(in >> light.intensity >> light.range >> light.innerConeDegrees >> light.outerConeDegrees) ||
+                !std::isfinite(light.intensity) || light.intensity < 0 ||
+                !std::isfinite(light.range) || light.range <= 0 ||
+                !std::isfinite(light.innerConeDegrees) || !std::isfinite(light.outerConeDegrees) ||
+                light.innerConeDegrees < 0 || light.outerConeDegrees < light.innerConeDegrees ||
+                light.outerConeDegrees >= 90) {
+                return fail("Invalid light on entity " + e.name);
+            }
+            light.type = static_cast<LightType>(type);
+        }
     }
     in >> std::ws;
     if (!in.eof()) {
         return fail("Unexpected data after the scene.");
+    }
+    if (droppedTextures != 0) {
+        std::cerr << "Scene load warning: discarded " << droppedTextures
+            << " legacy texture references. Assign .satmat materials to restore them.\n";
     }
     scene = std::move(candidate);
     return true;

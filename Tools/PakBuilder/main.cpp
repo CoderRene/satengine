@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
             if (!file) { throw std::runtime_error("Cannot write test key"); }
             return 0;
         }
-        if (argc != 4) { throw std::runtime_error("Usage: SatPakBuilder project-root output.pak key.bin"); }
+        if (argc < 4) { throw std::runtime_error("Usage: SatPakBuilder project-root output.pak key.bin [compiled-shader-dir [project-shader-dir [shader-path ...]]]"); }
         const std::filesystem::path keyPath = argv[3];
         const bool grouped = std::filesystem::is_directory(keyPath);
         const std::filesystem::path root = argv[1];
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
         for (const auto& entity : scene.entities()) {
             if (!entity.hasMesh) { continue; }
             if ((!entity.mesh.meshPath.empty() && assets.mesh(entity.mesh.meshPath) == nullptr) ||
-                (!entity.mesh.texturePath.empty() && assets.texture(entity.mesh.texturePath) == nullptr)) {
+                (!entity.mesh.materialPath.empty() && assets.material(entity.mesh.materialPath) == nullptr)) {
                 throw std::runtime_error("Entity " + entity.name + ": " + assets.errors().back());
             }
         }
@@ -69,6 +69,9 @@ int main(int argc, char** argv) {
         for (const char* folder : {"Scripts", "Assets"}) {
             if (!std::filesystem::exists(root / folder)) { continue; }
             for (const auto& file : std::filesystem::recursive_directory_iterator(root / folder)) {
+                // Finder metadata can appear beside project files on shared drives.
+                const auto name = file.path().filename().u8string();
+                if (name.starts_with(u8"._") || name == u8".DS_Store") { continue; }
                 if (file.is_symlink()) { throw std::runtime_error("Symlinks are not supported in pak inputs"); }
                 if (file.is_regular_file() && (std::string_view(folder) == "Assets" || file.path().extension() == ".lua")) {
                     files.push_back(file.path());
@@ -79,7 +82,7 @@ int main(int argc, char** argv) {
         for (const auto& path : files) {
             const auto encoded = path.lexically_relative(root).generic_u8string();
             std::string name(encoded.begin(), encoded.end());
-            if (name.ends_with(".satimport.tmp")) { continue; }
+            if (name.ends_with(".satimport.tmp") || name.ends_with(".satmat.tmp")) { continue; }
             if (name.ends_with(".satimport")) {
                 const auto source = std::string_view(name).substr(0, name.size() - std::string_view(".satimport").size());
                 if (!sat::isMeshAssetPath(source) && !sat::isTextureAssetPath(source) && !sat::isAudioAssetPath(source)) {
@@ -92,6 +95,7 @@ int main(int argc, char** argv) {
                 (sat::isTextureAssetPath(name) && assets.texture(name) == nullptr)) {
                 throw std::runtime_error(assets.errors().back());
             }
+            if (sat::isShaderAssetPath(name)) { continue; }
             std::string bytes = read(path);
             if (name.ends_with(".satimport")) {
                 sat::AssetImportSettings settings;
@@ -138,13 +142,63 @@ int main(int argc, char** argv) {
             };
             if (entity.hasMesh) {
                 validatePath(entity.mesh.meshPath);
-                validatePath(entity.mesh.texturePath);
+                validatePath(entity.mesh.materialPath);
             }
             if (entity.hasAudioSource) {
                 validatePath(entity.audioSource.clipPath);
             }
         }
+        std::vector<std::string> projectShaders;
+        for (int i = 6; i < argc; ++i) {
+            const auto encoded = std::filesystem::path(argv[i]).generic_u8string();
+            std::string path(encoded.begin(), encoded.end());
+            if (!sat::isShaderAssetPath(path)) { throw std::runtime_error("Invalid project shader path: " + path); }
+            projectShaders.push_back(std::move(path));
+        }
+        const auto& environment = scene.lightingSettings.environmentPath;
+        if (!environment.empty() && std::none_of(entries.begin(), entries.end(),
+            [&](const sat::PakEntry& entry) { return entry.name == environment; })) {
+            throw std::runtime_error("Missing environment texture: " + environment);
+        }
+        for (const auto& entry : entries) {
+            if (sat::isMaterialAssetPath(entry.name)) {
+                const auto* material = assets.material(entry.name);
+                if (!material) { throw std::runtime_error(assets.errors().back()); }
+                if (material->shader == sat::MaterialShader::Custom &&
+                    std::find(projectShaders.begin(), projectShaders.end(), material->shaderPath) == projectShaders.end()) {
+                    throw std::runtime_error(entry.name + ": missing compiled shader " + material->shaderPath);
+                }
+                for (const auto* path : {&material->baseColorTexture, &material->metallicRoughnessTexture,
+                                        &material->normalTexture, &material->emissiveTexture}) {
+                    if (!path->empty() && std::none_of(entries.begin(), entries.end(),
+                        [&](const sat::PakEntry& candidate) { return candidate.name == *path; })) {
+                        throw std::runtime_error(entry.name + ": missing texture " + *path);
+                    }
+                }
+            }
+        }
+        if (argc >= 5) {
+            if (!grouped) { throw std::runtime_error("Compiled shaders require grouped archive keys"); }
+            for (const auto& file : std::filesystem::directory_iterator(argv[4])) {
+                if (!file.is_regular_file()) { continue; }
+                const auto name = "Shaders/" + file.path().filename().string();
+                if (std::any_of(entries.begin(), entries.end(), [&](const auto& entry) { return entry.name == name; })) {
+                    throw std::runtime_error("Reserved shader path: " + name);
+                }
+                entries.push_back({name, read(file.path())});
+            }
+        }
         std::string error;
+        for (const auto& path : projectShaders) {
+            const auto encoded = std::u8string(path.begin(), path.end());
+            auto compiled = std::filesystem::path(argv[5]) / std::filesystem::path(encoded);
+            compiled += ".dxbc";
+            auto bytes = read(compiled);
+            if (bytes.empty() || bytes.size() > 1024 * 1024) {
+                throw std::runtime_error("Empty or oversized compiled project shader: " + path);
+            }
+            entries.push_back({"Shaders/Project/" + path + ".dxbc", std::move(bytes)});
+        }
         const std::filesystem::path base = argv[2];
         std::string combinedManifest;
         for (const std::string group : {"scripts", "textures", "audio", "assets"}) {
@@ -157,7 +211,7 @@ int main(int argc, char** argv) {
             std::vector<sat::PakEntry> selected;
             for (auto& entry : entries) {
                 if (entry.name.empty()) { continue; }
-                std::string category = "scripts";
+                std::string category = entry.name.starts_with("Shaders/") ? "assets" : "scripts";
                 if (entry.name.starts_with("Assets/")) {
                     auto extension = std::filesystem::path(entry.name).extension().string();
                     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });

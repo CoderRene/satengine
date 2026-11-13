@@ -155,6 +155,17 @@ protected:
             return sat::AssetReadResult::Missing;
         };
         setAssetReader(readAsset);
+        setShaderReader([this](std::string_view path, std::string& bytes, std::string& shaderError) {
+            if (!path.starts_with("Shaders/")) { return sat::AssetReadResult::Missing; }
+            const auto source = m_assets[2].find(path);
+            if (source.empty()) { return sat::AssetReadResult::Missing; }
+            if (source.size() > 1024 * 1024) {
+                shaderError = "Packed shader exceeds 1 MiB";
+                return sat::AssetReadResult::Error;
+            }
+            bytes.assign(source);
+            return sat::AssetReadResult::Found;
+        });
         m_audio.setAssetReader(readAsset);
         std::vector<sat::LuaScriptSource> scripts;
         for (const auto& entry : m_archive.entries()) {

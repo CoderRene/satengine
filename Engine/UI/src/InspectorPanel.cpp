@@ -2,6 +2,7 @@
 
 #include "Scene.hpp"
 #include "module/PhysicsInspector.hpp"
+#include "module/CursorWrap.hpp"
 #include "Project.hpp"
 #include "AssetData.hpp"
 
@@ -22,13 +23,13 @@ struct InspectorPanel::Impl {
     std::vector<std::string> availableScripts;
     std::string scanError;
     std::vector<std::string> meshes;
-    std::vector<std::string> textures;
+    std::vector<std::string> materials;
     std::vector<std::string> clips;
     std::string assetError;
 
     void refreshAssets() {
         meshes.clear();
-        textures.clear();
+        materials.clear();
         clips.clear();
         assetError.clear();
         if (!project->isOpen()) { return; }
@@ -40,14 +41,14 @@ struct InspectorPanel::Impl {
                 const auto encoded = current->path().lexically_relative(project->root()).generic_u8string();
                 const std::string path(encoded.begin(), encoded.end());
                 if (isMeshAssetPath(path)) { meshes.push_back(path); }
-                if (isTextureAssetPath(path)) { textures.push_back(path); }
+                if (isMaterialAssetPath(path)) { materials.push_back(path); }
                 if (isAudioAssetPath(path)) { clips.push_back(path); }
             }
             if (!error) { current.increment(error); }
         }
         if (error) { assetError = error.message(); }
         std::sort(meshes.begin(), meshes.end());
-        std::sort(textures.begin(), textures.end());
+        std::sort(materials.begin(), materials.end());
         std::sort(clips.begin(), clips.end());
     }
 
@@ -127,7 +128,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
         Transform& visible = liveEntity ? liveEntity->transform : entity->transform;
         const auto editAxis = [&](const char* label, ImGuiDataType type, auto& authored, auto& live, float speed) {
-            if (!ImGui::DragScalar(label, type, &live, speed)) { return; }
+            if (!dragScalar(label, type, &live, speed)) { return; }
             authored = live;
             changed = true;
         };
@@ -155,9 +156,9 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
 
     if (entity->hasCamera &&
         ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
-        changed |= ImGui::DragFloat("Field of View", &entity->camera.fieldOfView, 0.1f, 1.0f, 179.0f);
-        changed |= ImGui::DragFloat("Near Clip", &entity->camera.nearClip, 0.01f, 0.001f, 1000.0f);
-        changed |= ImGui::DragFloat("Far Clip", &entity->camera.farClip, 1.0f, 0.1f, 100000.0f);
+        changed |= dragFloat("Field of View", &entity->camera.fieldOfView, 0.1f, 1.0f, 179.0f);
+        changed |= dragFloat("Near Clip", &entity->camera.nearClip, 0.01f, 0.001f, 1000.0f);
+        changed |= dragFloat("Far Clip", &entity->camera.farClip, 1.0f, 0.1f, 100000.0f);
         changed |= ImGui::ColorEdit4("Clear Color", entity->camera.clearColor);
         bool isMain = entity->camera.isMain;
         if (ImGui::Checkbox("Main Camera", &isMain)) {
@@ -180,7 +181,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
 
     if (entity->hasMesh && ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
         changed |= m_impl->assetPicker("Geometry", "Built-in Cube", entity->mesh.meshPath, m_impl->meshes);
-        changed |= m_impl->assetPicker("Texture", "None", entity->mesh.texturePath, m_impl->textures);
+        changed |= m_impl->assetPicker("Material", "Default", entity->mesh.materialPath, m_impl->materials);
     }
 
     if (entity->hasMesh && ImGui::Button("Remove Mesh")) {
@@ -217,18 +218,18 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
     if (entity->hasAudioSource && ImGui::CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
         auto& source = entity->audioSource;
         changed |= m_impl->assetPicker("Clip", "None", source.clipPath, m_impl->clips);
-        changed |= ImGui::DragFloat("Volume", &source.volume, 0.01f, 0.0f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-        changed |= ImGui::DragFloat("Pitch", &source.pitch, 0.01f, 0.01f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        changed |= dragFloat("Volume", &source.volume, 0.01f, 0.0f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        changed |= dragFloat("Pitch", &source.pitch, 0.01f, 0.01f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         changed |= ImGui::Checkbox("Loop", &source.loop);
         changed |= ImGui::Checkbox("Play on Start", &source.playOnStart);
         changed |= ImGui::Checkbox("Spatial", &source.spatial);
         if (source.spatial) {
-            changed |= ImGui::DragFloat("Minimum Distance (m)", &source.minDistance, 0.1f,
+            changed |= dragFloat("Minimum Distance (m)", &source.minDistance, 0.1f,
                 0.01f, std::max(0.01f, source.maxDistance), "%.2f", ImGuiSliderFlags_AlwaysClamp);
-            changed |= ImGui::DragFloat("Maximum Distance (m)", &source.maxDistance, 0.1f,
+            changed |= dragFloat("Maximum Distance (m)", &source.maxDistance, 0.1f,
                 source.minDistance, std::max(100000.0f, source.minDistance), "%.2f", ImGuiSliderFlags_AlwaysClamp);
-            changed |= ImGui::DragFloat("Rolloff", &source.rolloff, 0.01f, 0.0f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-            changed |= ImGui::DragFloat("Doppler Factor", &source.dopplerFactor, 0.01f, 0.0f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            changed |= dragFloat("Rolloff", &source.rolloff, 0.01f, 0.0f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            changed |= dragFloat("Doppler Factor", &source.dopplerFactor, 0.01f, 0.0f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
         }
         int bus = static_cast<int>(source.bus);
         if (ImGui::Combo("Bus", &bus, "SFX\0Music\0UI\0")) {
@@ -242,6 +243,28 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
             changed = true;
         }
     }
+    if (entity->hasLight && ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+        auto& light = entity->light;
+        int type = static_cast<int>(light.type);
+        if (ImGui::Combo("Light Type", &type, "Directional\0Point\0Spot\0")) {
+            light.type = static_cast<LightType>(type);
+            changed = true;
+        }
+        changed |= ImGui::ColorEdit3("Light Color", light.color);
+        changed |= dragFloat("Intensity", &light.intensity, 0.01f, 0.0f, 10000.0f,
+            "%.3f", ImGuiSliderFlags_AlwaysClamp);
+        if (light.type != LightType::Directional) {
+            changed |= dragFloat("Range", &light.range, 0.1f, 0.01f, 100000.0f,
+                "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        }
+        if (light.type == LightType::Spot) {
+            changed |= ImGui::SliderFloat("Inner Cone", &light.innerConeDegrees, 0.0f,
+                light.outerConeDegrees, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
+            changed |= ImGui::SliderFloat("Outer Cone", &light.outerConeDegrees, light.innerConeDegrees,
+                89.9f, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
+        }
+        if (ImGui::Button("Remove Light")) { entity->hasLight = false; changed = true; }
+    }
     if (entity->hasAudioListener && ImGui::CollapsingHeader("Audio Listener", ImGuiTreeNodeFlags_DefaultOpen)) {
         if (ImGui::Button("Remove Audio Listener")) {
             entity->hasAudioListener = false;
@@ -254,6 +277,11 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
         ImGui::OpenPopup("AddComponent");
     }
     if (ImGui::BeginPopup("AddComponent")) {
+        if (ImGui::MenuItem("Light", nullptr, false, !entity->hasLight)) {
+            entity->hasLight = true;
+            entity->light = {};
+            changed = true;
+        }
         if (ImGui::MenuItem("Audio Source", nullptr, false, !entity->hasAudioSource)) {
             entity->hasAudioSource = true;
             entity->audioSource = {};

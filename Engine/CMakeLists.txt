@@ -1,5 +1,6 @@
 add_library(SatAssets STATIC
     Core/src/AssetData.cpp
+    Core/src/MaterialData.cpp
     Core/src/AssetImportSettings.cpp
     Core/src/AssetImporter.cpp
     Core/src/AssetLibrary.cpp
@@ -199,12 +200,15 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(glfw)
 
+include("${PROJECT_SOURCE_DIR}/cmake/SatShaders.cmake")
+
 # This target must not include/link editor panels, project tools, or ImGui.
 add_library(SatRuntime STATIC
     Core/src/Application.cpp
     Core/src/Window.cpp
     Renderer/src/Renderer.cpp
     Renderer/src/module/MeshPass.cpp
+    Renderer/src/module/ShaderLibrary.cpp
     Renderer/src/module/GpuAssetCache.cpp
     Renderer/src/module/SelectionOutlinePass.cpp
     Renderer/src/module/CameraFrustumPass.cpp
@@ -215,7 +219,16 @@ target_include_directories(SatRuntime PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/src"
 )
 target_link_libraries(SatRuntime PUBLIC SatScene SatScripting glfw)
-target_link_libraries(SatRuntime PRIVATE d3d11 dxgi d3dcompiler dwmapi)
+target_link_libraries(SatRuntime PRIVATE d3d11 dxgi dwmapi)
+add_dependencies(SatRuntime SatShaders)
+target_include_directories(SatRuntime PRIVATE "${shader_generated}")
+if(SAT_SHADER_HOT_RELOAD)
+    target_sources(SatRuntime PRIVATE "$<$<NOT:$<CONFIG:Release>>:${CMAKE_CURRENT_SOURCE_DIR}/Renderer/src/module/ShaderHotReload.cpp>")
+    target_include_directories(SatRuntime PRIVATE "${slang_SOURCE_DIR}/include")
+    target_compile_definitions(SatRuntime PRIVATE
+        "$<$<NOT:$<CONFIG:Release>>:SAT_SHADER_HOT_RELOAD=1;SAT_SHADER_SOURCE_DIR=\"${shader_source}\">")
+    target_link_libraries(SatRuntime PRIVATE "$<$<NOT:$<CONFIG:Release>>:${sat_slang_lib}>")
+endif()
 
 if(NOT SAT_BUILD_EDITOR)
     return()
@@ -224,8 +237,7 @@ endif()
 # Only the editor downloads and compiles ImGui.
 FetchContent_Declare(imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG docking
-    GIT_SHALLOW TRUE
+    GIT_TAG cf53467ab0db7a783f04b32dd9160e6aa5b720ef
 )
 if(POLICY CMP0169)
     cmake_policy(SET CMP0169 OLD)
@@ -235,6 +247,8 @@ if(NOT imgui_POPULATED)
     FetchContent_Populate(imgui)
 endif()
 
+include("${PROJECT_SOURCE_DIR}/cmake/ImGuiShaders.cmake")
+
 add_library(SatEditor STATIC
     Core/src/RecentProjects.cpp
     Platform/src/FileDialog.cpp
@@ -243,7 +257,23 @@ add_library(SatEditor STATIC
     Platform/src/GameBuilder.cpp
     UI/src/UiLayer.cpp
     UI/src/module/AssetImportPanel.cpp
+    UI/src/module/BuildStatusWindow.cpp
+    UI/src/module/CursorWrap.cpp
+    UI/src/module/CursorWrap.hpp
+    UI/src/module/EditorDiagnostics.cpp
+    UI/src/module/EditorDock.cpp
+    UI/src/module/EditorFrame.cpp
+    UI/src/module/EditorMenuBar.cpp
+    UI/src/module/EditorPanels.cpp
+    UI/src/module/EditorPrompts.cpp
+    UI/src/module/EditorSession.cpp
+    UI/src/module/EditorStartup.cpp
+    UI/src/module/EditorTheme.cpp
+    UI/src/module/NewProjectModal.cpp
     UI/src/module/PhysicsInspector.cpp
+    UI/src/module/PlaySession.cpp
+    UI/src/module/SceneSettingsWindows.cpp
+    UI/src/module/SceneViewGather.cpp
     UI/src/HierarchyPanel.cpp
     UI/src/InspectorPanel.cpp
     UI/src/ContentPanel.cpp
@@ -253,7 +283,7 @@ add_library(SatEditor STATIC
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
+    ${imgui_dx11_generated}
     UI/include/LuaLogPanel.hpp
     UI/src/LuaLogPanel.cpp
 )
@@ -275,5 +305,7 @@ file(TO_CMAKE_PATH "${SAT_ENGINE_SOURCE_DIR}" SAT_ENGINE_SOURCE_DIR)
 set(SAT_LUA_DEFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Scripting/LuaDefs")
 file(TO_CMAKE_PATH "${SAT_LUA_DEFS_DIR}" SAT_LUA_DEFS_DIR)
 configure_file(Core/include/EnginePaths.hpp.in generated/EnginePaths.hpp @ONLY)
+add_dependencies(SatEditor SatEditorShaders)
+target_include_directories(SatEditor PRIVATE "${imgui_SOURCE_DIR}/backends")
 target_link_libraries(SatEditor PUBLIC SatRuntime)
 target_link_libraries(SatEditor PRIVATE d3d11 ole32 uuid shell32)

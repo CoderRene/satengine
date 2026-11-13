@@ -14,6 +14,7 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -24,7 +25,7 @@
 namespace sat {
 namespace {
 
-constexpr float kCameraIconSize = 32.0f;
+constexpr float kEntityIconSize = 32.0f;
 
 std::uintptr_t loadIconTexture(Renderer& renderer, const char* assetRelativePath) {
     const std::string absPath = std::string(SAT_ENGINE_ASSETS_DIR) + "/" + assetRelativePath;
@@ -57,7 +58,7 @@ void destroyIconTexture(Renderer& renderer, std::uintptr_t& texture) {
     }
 }
 
-void drawCameraIcons(
+EntityId drawEntityIcons(
     ImDrawList* draw,
     const ImVec2& imageMin,
     const Mat4& view,
@@ -66,15 +67,23 @@ void drawCameraIcons(
     float viewH,
     const Scene& scene,
     int selectedIndex,
-    std::uintptr_t cameraIcon, DVec3 renderOrigin) {
-    if (draw == nullptr || cameraIcon == 0) {
-        return;
-    }
+    std::uintptr_t cameraIcon, const std::array<std::uintptr_t, 3>& lightIcons, DVec3 renderOrigin,
+    const ImVec2* clickPosition) {
+    EntityId clickedLight = kInvalidEntityId;
 
-    const ImTextureRef iconTex((ImTextureID)cameraIcon);
     const auto& entities = scene.entities();
     for (std::size_t i = 0; i < entities.size(); ++i) {
-        if (!entities[i].hasCamera) {
+        const auto& entity = entities[i];
+        const auto camera = entity.hasCamera ? cameraIcon : 0;
+        std::uintptr_t light = 0;
+        if (entity.hasLight) {
+            switch (entity.light.type) {
+            case LightType::Directional: light = lightIcons[0]; break;
+            case LightType::Point: light = lightIcons[1]; break;
+            case LightType::Spot: light = lightIcons[2]; break;
+            }
+        }
+        if (camera == 0 && light == 0) {
             continue;
         }
 
@@ -91,11 +100,21 @@ void drawCameraIcons(
             continue;
         }
 
-        const ImVec2 min(
-            imageMin.x + sx - kCameraIconSize * 0.5f,
-            imageMin.y + sy - kCameraIconSize * 0.5f);
-        const ImVec2 max(min.x + kCameraIconSize, min.y + kCameraIconSize);
-        draw->AddImage(iconTex, min, max);
+        const float width = camera != 0 && light != 0 ? 2 * kEntityIconSize : kEntityIconSize;
+        const ImVec2 min(imageMin.x + sx - width * 0.5f, imageMin.y + sy - kEntityIconSize * 0.5f);
+        const ImVec2 max(min.x + width, min.y + kEntityIconSize);
+        if (camera != 0) {
+            draw->AddImage(ImTextureRef((ImTextureID)camera), min, ImVec2(min.x + kEntityIconSize, max.y));
+        }
+        if (light != 0) {
+            const ImVec2 lightMin(max.x - kEntityIconSize, min.y);
+            draw->AddImage(ImTextureRef((ImTextureID)light), lightMin, max);
+            // Later icons draw on top and take precedence when they overlap.
+            if (clickPosition && clickPosition->x >= lightMin.x && clickPosition->x < max.x &&
+                clickPosition->y >= lightMin.y && clickPosition->y < max.y) {
+                clickedLight = entity.id();
+            }
+        }
 
         if (static_cast<int>(i) == selectedIndex) {
             draw->AddRect(
@@ -107,6 +126,7 @@ void drawCameraIcons(
                 2.0f);
         }
     }
+    return clickedLight;
 }
 
 Mat4 cameraPickWorld(const Vec3& position) {
@@ -247,6 +267,7 @@ struct ViewportPanel::Impl {
     int sceneViewWidth = 0;
     int sceneViewHeight = 0;
     std::uintptr_t cameraIcon = 0;
+    std::array<std::uintptr_t, 3> lightIcons{};
 
     struct EditorCamera {
         DVec3 position{-5.12, 3.38, -5.12};
@@ -510,7 +531,7 @@ struct ViewportPanel::Impl {
                     const Mat4 view =
                         lookAt(Vec3{}, forward, Vec3{0.0f, 1.0f, 0.0f});
                     const Mat4 projection = perspective(60.0f, viewW / viewH, 0.1f, 1000.0f);
-                    drawCameraIcons(
+                    const EntityId clickedLight = drawEntityIcons(
                         ImGui::GetWindowDrawList(),
                         imageMin,
                         view,
@@ -519,7 +540,7 @@ struct ViewportPanel::Impl {
                         viewH,
                         visibleScene,
                         visibleIndex ? static_cast<int>(*visibleIndex) : -1,
-                        cameraIcon, cam.position);
+                        cameraIcon, lightIcons, cam.position, leftClicked ? &io.MousePos : nullptr);
 
                     const float mouseX = io.MousePos.x - imageMin.x;
                     const float mouseY = io.MousePos.y - imageMin.y;
@@ -551,28 +572,30 @@ struct ViewportPanel::Impl {
                                     gizmoTransform = visibleSelection->transform;
                                 }
                             } else {
-                                EntityId bestEntity = kInvalidEntityId;
+                                EntityId bestEntity = clickedLight;
                                 float bestT = 1.0e30f;
-                                for (const Entity& entity : visibleScene.entities()) {
-                                    float t = 0.0f;
-                                    bool hit = false;
-                                    if (entity.hasMesh) {
-                                        const Mat4 world =
-                                            matrixFromTransform(entity.transform, cam.position);
-                                        Vec3 minimum{-0.5f, -0.5f, -0.5f};
-                                        Vec3 maximum{0.5f, 0.5f, 0.5f};
-                                        if (entity.mesh.meshPath.empty() ||
-                                            renderer->meshBounds(entity.mesh.meshPath, minimum, maximum)) {
-                                            hit = intersectRayBounds(mouseRay, world, t, minimum, maximum);
+                                if (clickedLight == kInvalidEntityId) {
+                                    for (const Entity& entity : visibleScene.entities()) {
+                                        float t = 0.0f;
+                                        bool hit = false;
+                                        if (entity.hasMesh) {
+                                            const Mat4 world =
+                                                matrixFromTransform(entity.transform, cam.position);
+                                            Vec3 minimum{-0.5f, -0.5f, -0.5f};
+                                            Vec3 maximum{0.5f, 0.5f, 0.5f};
+                                            if (entity.mesh.meshPath.empty() ||
+                                                renderer->meshBounds(entity.mesh.meshPath, minimum, maximum)) {
+                                                hit = intersectRayBounds(mouseRay, world, t, minimum, maximum);
+                                            }
+                                        } else if (entity.hasCamera) {
+                                            const Mat4 world =
+                                                cameraPickWorld(toVec3(entity.transform.position - cam.position));
+                                            hit = intersectRayBounds(mouseRay, world, t);
                                         }
-                                    } else if (entity.hasCamera) {
-                                        const Mat4 world =
-                                            cameraPickWorld(toVec3(entity.transform.position - cam.position));
-                                        hit = intersectRayBounds(mouseRay, world, t);
-                                    }
-                                    if (hit && t < bestT) {
-                                        bestT = t;
-                                        bestEntity = entity.id();
+                                        if (hit && t < bestT) {
+                                            bestT = t;
+                                            bestEntity = entity.id();
+                                        }
                                     }
                                 }
                                 selectionActivated = true;
@@ -643,11 +666,19 @@ ViewportPanel::ViewportPanel(Scene& scene, Renderer& renderer, GLFWwindow& windo
     m_impl->renderer = &renderer;
     m_impl->window = &window;
     m_impl->cameraIcon = loadIconTexture(renderer, "Icons/video_camera_ic.png");
+    m_impl->lightIcons = {
+        loadIconTexture(renderer, "Icons/sun_ic.png"),
+        loadIconTexture(renderer, "Icons/light_ic.png"),
+        loadIconTexture(renderer, "Icons/spotlight_ic.png"),
+    };
 }
 
 ViewportPanel::~ViewportPanel() {
     if (m_impl->renderer != nullptr) {
         destroyIconTexture(*m_impl->renderer, m_impl->cameraIcon);
+        for (auto& icon : m_impl->lightIcons) {
+            destroyIconTexture(*m_impl->renderer, icon);
+        }
     }
 }
 

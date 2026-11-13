@@ -12,6 +12,14 @@
 namespace sat {
 // Device-thread only. Owns asset GPU resources and decoded CPU cache.
 // Reset at project/source changes, before rendering with the new source.
+struct GpuMaterial {
+    AlphaMode alphaMode = AlphaMode::Opaque;
+    std::string shaderPath;
+    ID3D11Buffer* constants = nullptr;
+    ID3D11ShaderResourceView* views[4]{};
+    ID3D11SamplerState* sampler = nullptr;
+};
+
 class GpuAssetCache {
 public:
     GpuAssetCache();
@@ -19,6 +27,9 @@ public:
     GpuAssetCache(const GpuAssetCache&) = delete;
     GpuAssetCache& operator=(const GpuAssetCache&) = delete;
     void setReader(AssetReader reader);
+    void invalidateMaterial(std::string_view path);
+    [[nodiscard]] const GpuMaterial* material(std::string_view path, bool fallback = true) const;
+    [[nodiscard]] ID3D11ShaderResourceView* environment(std::string_view path) const;
     void prepare(ID3D11Device* device, const SceneDrawList& drawList);
     [[nodiscard]] bool reimport(ID3D11Device* device, std::string_view path, const AssetImportSettings* settings,
         const AssetImportWriter& writer, std::string& error);

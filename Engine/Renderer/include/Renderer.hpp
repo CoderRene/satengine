@@ -40,7 +40,12 @@ public:
 
     // Window/device thread only. Clears CPU/GPU caches and prior diagnostics.
     // Reader captures must outlive the renderer or the next setAssetReader().
+    void invalidateMaterial(std::string_view path);
+    // Set before the first frame. Captured reader sources must outlive rendering.
+    void setShaderReader(AssetReader reader);
+    [[nodiscard]] bool initializeShaders();
     void setAssetReader(AssetReader reader);
+    void setProjectShaderSource(AssetReader reader);
     // Frame-boundary/device-thread import. Stage CPU/GPU data, invoke optional
     // persistence callback, then replace only this asset. Failure preserves it.
     [[nodiscard]] bool reimportAsset(std::string_view path, const AssetImportSettings* settings,
@@ -57,6 +62,9 @@ public:
     [[nodiscard]] std::uintptr_t sceneColorTexture() const;
     [[nodiscard]] int gameViewWidth() const;
     [[nodiscard]] int gameViewHeight() const;
+
+    // Borrowed SRV for editor draw data. Valid through the current frame.
+    [[nodiscard]] std::uintptr_t materialThumbnail(std::string_view path);
 
     [[nodiscard]] std::uintptr_t createTexture(const unsigned char* rgba, int width, int height);
     void destroyTexture(std::uintptr_t texture);

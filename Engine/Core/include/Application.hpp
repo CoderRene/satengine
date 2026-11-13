@@ -20,6 +20,7 @@ protected:
     [[nodiscard]] const Input& input() const { return m_input; }
     // Configure during onStart(). Captured sources must live through run().
     void setAssetReader(AssetReader reader) { m_assetReader = std::move(reader); }
+    void setShaderReader(AssetReader reader) { m_shaderReader = std::move(reader); }
     void requestStop() { m_stopRequested = true; }
     virtual void onStart() {}
     virtual void onUpdate(float deltaSeconds) { (void)deltaSeconds; }
@@ -28,6 +29,7 @@ protected:
 private:
     Scene m_scene;
     AssetReader m_assetReader;
+    AssetReader m_shaderReader;
     Input m_input;
     bool m_stopRequested = false;
 };

@@ -181,6 +181,10 @@ void Scene::addCamera() {
     camera.hasCamera = true;
 }
 
+void Scene::addLight() {
+    createEntity("Light").hasLight = true;
+}
+
 void Scene::addCube() {
     ++m_cubeCount;
     std::string name = (m_cubeCount == 1) ? "Cube" : ("Cube " + std::to_string(m_cubeCount));

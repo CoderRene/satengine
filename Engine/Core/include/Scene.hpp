@@ -32,13 +32,50 @@ struct CameraComponent {
     bool isMain = false;
 };
 
+enum class LightType { Directional, Point, Spot };
+
+// Direction follows the entity rotation's +Z axis. Range is in world units.
+// Spot cone angles are half-angles in degrees. Colors and intensity are linear.
+struct LightComponent {
+    LightType type = LightType::Directional;
+    float color[3] = {1.0f, 1.0f, 1.0f};
+    float intensity = 1.0f;
+    float range = 10.0f;
+    float innerConeDegrees = 20.0f;
+    float outerConeDegrees = 35.0f;
+};
+
+struct BloomSettings {
+    bool enabled = true;
+    float threshold = 1.0f;
+    float softKnee = 0.0f;
+    float intensity = 0.15f;
+    float radius = 6.0f;
+    float tint[3] = {1.0f, 1.0f, 1.0f};
+    float highlightClamp = 65504.0f;
+    int quality = 1;
+
+    bool operator==(const BloomSettings&) const = default;
+};
+
+struct LightingSettings {
+    BloomSettings bloom;
+    float ambientColor[3] = {1.0f, 1.0f, 1.0f};
+    float ambientIntensity = 0.3f;
+    std::string environmentPath;
+    float environmentIntensity = 1.0f;
+    bool directionalShadows = true;
+    int shadowResolution = 2048;
+    float shadowRadius = 35.0f;
+};
+
 struct MeshComponent {
     enum class Primitive { Cube };
     Primitive primitive = Primitive::Cube;
-    // Empty mesh path selects the built-in cube; texture path empty means white.
+    // Empty paths select the built-in cube and the default material.
     // Both paths are relative to the project root, under Assets/.
     std::string meshPath;
-    std::string texturePath;
+    std::string materialPath;
 };
 
 // Paths are relative to the project's Scripts folder. Disabled components do not run.
@@ -63,6 +100,8 @@ struct Entity {
     CameraComponent camera;
     bool hasMesh = false;
     MeshComponent mesh;
+    bool hasLight = false;
+    LightComponent light;
     std::vector<ScriptComponent> scripts;
     bool hasRigidBody = false;
     RigidBodyComponent rigidBody;
@@ -86,6 +125,7 @@ public:
     Scene();
     PhysicsSettings physicsSettings;
     AudioSettings audioSettings;
+    LightingSettings lightingSettings;
 
     // Window-thread only. Copies preserve identity for snapshots; newly created
     // entities always get fresh IDs. IDs are not serialized. Load replaces them.
@@ -118,6 +158,7 @@ public:
     [[nodiscard]] bool attachScript(std::size_t index, std::string path);
     void addCamera();
     void addCube();
+    void addLight();
     [[nodiscard]] bool remove(std::size_t index);
     [[nodiscard]] bool rename(std::size_t index, std::string name);
     [[nodiscard]] bool setMainCamera(std::size_t index);

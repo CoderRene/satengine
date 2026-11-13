@@ -19,14 +19,18 @@ std::size_t cost(const TextureData& texture) {
     return bytes;
 }
 }
-AssetReader fileAssetReader(const std::filesystem::path& projectRoot) {
-    return [root = projectRoot](std::string_view path, std::string& bytes, std::string& error) {
+namespace {
+AssetReader directoryReader(const std::filesystem::path& projectRoot, bool shader) {
+    return [root = projectRoot, shader](std::string_view path, std::string& bytes, std::string& error) {
         error.clear();
         bytes.clear();
         const bool metadata = path.ends_with(".satimport");
         const auto assetPath = metadata ? path.substr(0, path.size() - std::string_view(".satimport").size()) : path;
-        if (!isValidAssetPath(assetPath) || root.empty()) {
-            error = "Asset path must be relative to the open project's Assets/ folder";
+        const bool validShader = path.starts_with("Shaders/") && path.size() > 8 &&
+            path.substr(8).find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.") ==
+                std::string_view::npos && path.substr(8) != "." && path.substr(8) != "..";
+        if (!(shader ? validShader : isValidAssetPath(assetPath)) || root.empty()) {
+            error = shader ? "Invalid shader path" : "Asset path must be relative to the open project's Assets/ folder";
             return AssetReadResult::Error;
         }
         std::error_code ec;
@@ -48,7 +52,8 @@ AssetReader fileAssetReader(const std::filesystem::path& projectRoot) {
         std::ifstream file(candidate, std::ios::binary | std::ios::ate);
         if (!file) { error = "Cannot open asset"; return AssetReadResult::Error; }
         const auto size = file.tellg();
-        const std::size_t limit = path.ends_with(".satimport") ? 4096 : kMaxAssetBytes;
+        const std::size_t limit = shader ? 1024 * 1024 : metadata ? 4096 :
+            isMaterialAssetPath(assetPath) ? 8192 : isShaderAssetPath(assetPath) ? 1024 * 1024 : kMaxAssetBytes;
         if (size < 0 || size > static_cast<std::streamoff>(limit)) { error = "Asset exceeds read limit"; return AssetReadResult::Error; }
         bytes.resize(static_cast<std::size_t>(size));
         file.seekg(0);
@@ -56,9 +61,37 @@ AssetReader fileAssetReader(const std::filesystem::path& projectRoot) {
         return AssetReadResult::Found;
     };
 }
+} // namespace
+AssetReader fileAssetReader(const std::filesystem::path& projectRoot) {
+    return directoryReader(projectRoot, false);
+}
+AssetReader fileShaderReader(const std::filesystem::path& executableRoot) {
+    return directoryReader(executableRoot, true);
+}
 void AssetLibrary::setReader(AssetReader reader) { clear(); m_reader = std::move(reader); }
 void AssetLibrary::clear() {
-    m_meshes.clear(); m_textures.clear(); m_errors.clear(); m_cachedBytes = 0; m_limitReported = false;
+    m_meshes.clear(); m_textures.clear(); m_materials.clear(); m_errors.clear(); m_cachedBytes = 0; m_limitReported = false;
+}
+void AssetLibrary::invalidateMaterial(std::string_view path) {
+    if (const auto found = m_materials.find(path); found != m_materials.end()) { m_materials.erase(found); }
+    std::erase_if(m_errors, [&](const std::string& message) {
+        return message.starts_with(path) && std::string_view(message).substr(path.size(), 2) == ": ";
+    });
+}
+const MaterialData* AssetLibrary::material(std::string_view path) {
+    if (const auto found = m_materials.find(path); found != m_materials.end()) {
+        return found->second.valid ? &found->second.data : nullptr;
+    }
+    if (m_meshes.size() + m_textures.size() + m_materials.size() >= 4096) {
+        if (!m_limitReported) { m_errors.emplace_back("Asset cache limit exceeded (4096 paths)"); m_limitReported = true; }
+        return nullptr;
+    }
+    auto& entry = m_materials.try_emplace(std::string(path)).first->second;
+    std::string bytes, error;
+    entry.valid = isMaterialAssetPath(path) && m_reader &&
+        m_reader(path, bytes, error) == AssetReadResult::Found && decodeMaterial(bytes, entry.data, error);
+    if (!entry.valid) { m_errors.push_back(std::string(path) + ": " + (error.empty() ? "Cannot read material" : error)); }
+    return entry.valid ? &entry.data : nullptr;
 }
 bool AssetLibrary::stage(std::string_view path, const AssetImportSettings* overrides,
     PreparedAssetImport& prepared, std::string& error) {
@@ -67,7 +100,7 @@ bool AssetLibrary::stage(std::string_view path, const AssetImportSettings* overr
     if (!isMesh && !isTextureAssetPath(path)) { error = "Unsupported or invalid asset path"; return false; }
     if (!m_reader) { error = "No asset source configured"; return false; }
     const bool present = isMesh ? m_meshes.contains(path) : m_textures.contains(path);
-    if (!present && m_meshes.size() + m_textures.size() >= 4096) { error = "Asset cache limit exceeded (4096 paths)"; return false; }
+    if (!present && m_meshes.size() + m_textures.size() + m_materials.size() >= 4096) { error = "Asset cache limit exceeded (4096 paths)"; return false; }
     PreparedAssetImport candidate;
     candidate.path = path;
     candidate.isMesh = isMesh;
@@ -142,7 +175,7 @@ const MeshData* AssetLibrary::mesh(std::string_view path) {
     std::string error;
     if (!isMeshAssetPath(path)) { error = "Unsupported or invalid mesh asset path"; }
     else if (stage(path, nullptr, prepared, error)) { commit(std::move(prepared)); return &m_meshes.find(path)->second.data; }
-    if (m_meshes.size() + m_textures.size() < 4096) { m_meshes.try_emplace(std::string(path)); m_errors.push_back(std::string(path) + ": " + error); }
+    if (m_meshes.size() + m_textures.size() + m_materials.size() < 4096) { m_meshes.try_emplace(std::string(path)); m_errors.push_back(std::string(path) + ": " + error); }
     else if (!m_limitReported) { m_errors.emplace_back("Asset cache limit exceeded (4096 paths)"); m_limitReported = true; }
     return nullptr;
 }
@@ -152,7 +185,7 @@ const TextureData* AssetLibrary::texture(std::string_view path) {
     std::string error;
     if (!isTextureAssetPath(path)) { error = "Unsupported or invalid texture asset path"; }
     else if (stage(path, nullptr, prepared, error)) { commit(std::move(prepared)); return &m_textures.find(path)->second.data; }
-    if (m_meshes.size() + m_textures.size() < 4096) { m_textures.try_emplace(std::string(path)); m_errors.push_back(std::string(path) + ": " + error); }
+    if (m_meshes.size() + m_textures.size() + m_materials.size() < 4096) { m_textures.try_emplace(std::string(path)); m_errors.push_back(std::string(path) + ": " + error); }
     else if (!m_limitReported) { m_errors.emplace_back("Asset cache limit exceeded (4096 paths)"); m_limitReported = true; }
     return nullptr;
 }

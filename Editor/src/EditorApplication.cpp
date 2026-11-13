@@ -7,7 +7,17 @@
 #include "UiLayer.hpp"
 #include "Window.hpp"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
 #include <GLFW/glfw3.h>
+
+#include <filesystem>
+#include <iterator>
 
 namespace sat {
 
@@ -21,6 +31,11 @@ int EditorApplication::run() {
     Renderer renderer(window.nativeHandle());
     if (!renderer.valid()) {
         return 1;
+    }
+    wchar_t executable[32768]{};
+    const DWORD length = GetModuleFileNameW(nullptr, executable, static_cast<DWORD>(std::size(executable)));
+    if (length > 0 && length < std::size(executable)) {
+        renderer.setShaderReader(fileShaderReader(std::filesystem::path(executable).parent_path()));
     }
     Scene scene;
     Project project;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ShaderLibrary.hpp"
+
 #include "SceneDraw.hpp"
 
 struct ID3D11Device;
@@ -18,7 +20,7 @@ public:
     [[nodiscard]] bool ensure(ID3D11Device* device);
     void release();
     void draw(
-        ID3D11DeviceContext* context,
+        ID3D11DeviceContext* context, ShaderProgram program,
         const Mat4& viewProj,
         const TransformGizmoInstance& gizmo,
         float worldScale) const;

@@ -1,5 +1,7 @@
 #include "SelectionOutlinePass.hpp"
 
+#include "ShaderLayout.hpp"
+
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -8,7 +10,6 @@
 #endif
 
 #include <d3d11.h>
-#include <d3dcompiler.h>
 
 #include <cstring>
 #include <iostream>
@@ -25,59 +26,14 @@ void releaseCom(T*& object) {
     }
 }
 
-struct OutlineFrameCb {
-    float viewProj[16] = {
-        1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-    };
-};
 
-struct OutlineObjectCb {
-    float world[16] = {
-        1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-    };
-    float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-};
+
+
 
 constexpr float kOutlineScale = 1.06f;
 constexpr float kOutlineColor[4] = {1.0f, 0.55f, 0.12f, 1.0f};
 
-constexpr const char* kOutlineShaderSource = R"(
-cbuffer Frame : register(b0)
-{
-    float4x4 viewProj;
-};
 
-cbuffer Object : register(b1)
-{
-    float4x4 world;
-    float4 color;
-};
-
-struct VSIn
-{
-    float3 position : POSITION;
-};
-
-struct VSOut
-{
-    float4 position : SV_Position;
-    float4 color : COLOR;
-};
-
-VSOut vs_main(VSIn input)
-{
-    VSOut output;
-    float4 worldPos = mul(world, float4(input.position, 1.0f));
-    output.position = mul(viewProj, worldPos);
-    output.color = color;
-    return output;
-}
-
-float4 ps_main(VSOut input) : SV_Target
-{
-    return input.color;
-}
-)";
 
 Mat4 scaleUniform(float s) {
     Mat4 out{};
@@ -92,9 +48,6 @@ Mat4 scaleUniform(float s) {
 } // namespace
 
 struct SelectionOutlinePass::Impl {
-    ID3D11VertexShader* vs = nullptr;
-    ID3D11PixelShader* ps = nullptr;
-    ID3D11InputLayout* layout = nullptr;
     ID3D11Buffer* frameCb = nullptr;
     ID3D11Buffer* objectCb = nullptr;
     ID3D11RasterizerState* backCull = nullptr;
@@ -121,9 +74,6 @@ void SelectionOutlinePass::release() {
     releaseCom(m_impl->backCull);
     releaseCom(m_impl->objectCb);
     releaseCom(m_impl->frameCb);
-    releaseCom(m_impl->layout);
-    releaseCom(m_impl->ps);
-    releaseCom(m_impl->vs);
     delete m_impl;
     m_impl = nullptr;
 }
@@ -149,83 +99,8 @@ bool SelectionOutlinePass::ensure(ID3D11Device* device) {
         return false;
     };
 
-    ID3DBlob* vsBlob = nullptr;
-    ID3DBlob* psBlob = nullptr;
-    ID3DBlob* errorBlob = nullptr;
-    HRESULT hr = D3DCompile(
-        kOutlineShaderSource,
-        std::strlen(kOutlineShaderSource),
-        "SelectionOutline",
-        nullptr,
-        nullptr,
-        "vs_main",
-        "vs_5_0",
-        0,
-        0,
-        &vsBlob,
-        &errorBlob);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to compile outline VS";
-        if (errorBlob != nullptr) {
-            std::cerr << ": " << static_cast<const char*>(errorBlob->GetBufferPointer());
-            errorBlob->Release();
-        }
-        std::cerr << '\n';
-        m_impl->failed = true;
-        return false;
-    }
-    releaseCom(errorBlob);
+    HRESULT hr = S_OK;
 
-    hr = D3DCompile(
-        kOutlineShaderSource,
-        std::strlen(kOutlineShaderSource),
-        "SelectionOutline",
-        nullptr,
-        nullptr,
-        "ps_main",
-        "ps_5_0",
-        0,
-        0,
-        &psBlob,
-        &errorBlob);
-    if (FAILED(hr)) {
-        std::cerr << "Failed to compile outline PS";
-        if (errorBlob != nullptr) {
-            std::cerr << ": " << static_cast<const char*>(errorBlob->GetBufferPointer());
-            errorBlob->Release();
-        }
-        std::cerr << '\n';
-        releaseCom(vsBlob);
-        m_impl->failed = true;
-        return false;
-    }
-    releaseCom(errorBlob);
-
-    hr = device->CreateVertexShader(
-        vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &m_impl->vs);
-    if (FAILED(hr)) {
-        releaseCom(vsBlob);
-        releaseCom(psBlob);
-        return fail();
-    }
-
-    hr = device->CreatePixelShader(
-        psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &m_impl->ps);
-    releaseCom(psBlob);
-    if (FAILED(hr)) {
-        releaseCom(vsBlob);
-        return fail();
-    }
-
-    const D3D11_INPUT_ELEMENT_DESC layoutDesc[] = {
-        {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-    };
-    hr = device->CreateInputLayout(
-        layoutDesc, 1, vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &m_impl->layout);
-    releaseCom(vsBlob);
-    if (FAILED(hr)) {
-        return fail();
-    }
 
     D3D11_BUFFER_DESC cbDesc{};
     cbDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -303,7 +178,7 @@ bool SelectionOutlinePass::ensure(ID3D11Device* device) {
 }
 
 void SelectionOutlinePass::draw(
-    ID3D11DeviceContext* context,
+    ID3D11DeviceContext* context, ShaderProgram program,
     const Mat4& viewProj,
     const MeshInstance& selected,
     const GpuMesh& geometry) const {
@@ -320,13 +195,13 @@ void SelectionOutlinePass::draw(
     context->Unmap(m_impl->frameCb, 0);
 
     const UINT offset = 0;
-    context->IASetInputLayout(m_impl->layout);
+    context->IASetInputLayout(program.layout);
     context->IASetVertexBuffers(
         0, 1, &geometry.vertexBuffer, &geometry.vertexStride, &offset);
     context->IASetIndexBuffer(geometry.indexBuffer, geometry.indexFormat, 0);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    context->VSSetShader(m_impl->vs, nullptr, 0);
-    context->PSSetShader(m_impl->ps, nullptr, 0);
+    context->VSSetShader(program.vertex, nullptr, 0);
+    context->PSSetShader(program.pixel, nullptr, 0);
     context->VSSetConstantBuffers(0, 1, &m_impl->frameCb);
     context->VSSetConstantBuffers(1, 1, &m_impl->objectCb);
     context->PSSetConstantBuffers(1, 1, &m_impl->objectCb);

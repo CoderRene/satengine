@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Math.hpp"
+#include "Scene.hpp"
 
 #include <string_view>
 
@@ -33,11 +33,10 @@ enum class MeshPrimitive : unsigned char {
 
 struct MeshInstance {
     Mat4 world{};
-    float color[4] = {0.75f, 0.75f, 0.78f, 1.0f};
     MeshPrimitive primitive = MeshPrimitive::Cube;
     // Borrowed from scene components, valid through the render submission.
     std::string_view meshPath;
-    std::string_view texturePath;
+    std::string_view materialPath;
 };
 
 struct CameraFrustumInstance {
@@ -54,7 +53,29 @@ struct DebugLine {
     Vec3 a{}, b{}, color{0,1,0};
 };
 
+struct LightInstance {
+    Vec3 position;
+    Vec3 direction;
+    Vec3 radiance;
+    LightType type = LightType::Directional;
+    float range = 0;
+    float innerCos = 1;
+    float outerCos = 1;
+};
+
+[[nodiscard]] LightInstance makeLightInstance(const Entity& entity, DVec3 renderOrigin);
+[[nodiscard]] Vec3 ambientRadiance(const LightingSettings& settings);
+
 struct SceneDrawList {
+    std::string_view environmentPath;
+    float environmentIntensity = 1.0f;
+    bool directionalShadows = true;
+    int shadowResolution = 2048;
+    float shadowRadius = 35.0f;
+    BloomSettings bloom;
+    const LightInstance* lights = nullptr;
+    int lightCount = 0;
+    Vec3 ambient{0.3f, 0.3f, 0.3f};
     const DebugLine* debugLines = nullptr;
     int debugLineCount = 0;
     Vec3 gridOffset{};

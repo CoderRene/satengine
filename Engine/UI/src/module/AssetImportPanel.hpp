@@ -1,9 +1,10 @@
 #pragma once
 
-#include "AssetImportSettings.hpp"
+#include "AssetData.hpp"
 
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace sat {
 class Project;
@@ -16,7 +17,7 @@ public:
     void select(std::string path);
     void clear();
     [[nodiscard]] bool active() const { return !m_path.empty(); }
-    [[nodiscard]] bool dirty() const { return m_edited != m_saved; }
+    [[nodiscard]] bool dirty() const { return m_edited != m_saved || m_material != m_savedMaterial; }
     [[nodiscard]] const std::string& path() const { return m_path; }
     void request(std::function<void()> action);
     void draw(bool readOnly);
@@ -24,11 +25,16 @@ public:
 private:
     [[nodiscard]] bool apply();
     void revert();
+    void drawMaterial(bool readOnly);
     Project& m_project;
     Renderer& m_renderer;
     std::string m_path;
     std::string m_error;
     std::string m_info;
+    MaterialData m_material;
+    MaterialData m_savedMaterial;
+    std::vector<std::string> m_texturePaths;
+    std::vector<std::string> m_shaderPaths;
     AssetImportSettings m_saved;
     AssetImportSettings m_edited;
     bool m_valid = true;

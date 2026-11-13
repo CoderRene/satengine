@@ -1,5 +1,7 @@
 #include "GpuAssetCache.hpp"
 
+#include "ShaderLayout.hpp"
+
 #include <wrl/client.h>
 
 #include <algorithm>
@@ -7,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -26,7 +29,12 @@ struct MeshResource {
 };
 struct TextureResource {
     ComPtr<ID3D11ShaderResourceView> view;
+    ComPtr<ID3D11ShaderResourceView> srgb;
     std::size_t sampler = 0;
+};
+struct MaterialResource {
+    ComPtr<ID3D11Buffer> constants;
+    GpuMaterial view;
 };
 bool createMesh(ID3D11Device* device, const MeshData& data, MeshResource& resource, std::string& error) {
     D3D11_BUFFER_DESC desc{};
@@ -53,7 +61,7 @@ bool createTexture(ID3D11Device* device, const TextureData& data, TextureResourc
     desc.Height = static_cast<UINT>(data.height);
     desc.MipLevels = static_cast<UINT>(data.mips.size() + 1);
     desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_IMMUTABLE;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
@@ -66,7 +74,11 @@ bool createTexture(ID3D11Device* device, const TextureData& data, TextureResourc
     }
     ComPtr<ID3D11Texture2D> texture;
     HRESULT hr = device->CreateTexture2D(&desc, initial.data(), texture.GetAddressOf());
-    if (SUCCEEDED(hr)) { hr = device->CreateShaderResourceView(texture.Get(), nullptr, resource.view.GetAddressOf()); }
+    D3D11_SHADER_RESOURCE_VIEW_DESC view{};
+    view.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    view.Texture2D.MipLevels = desc.MipLevels;
+    if (SUCCEEDED(hr)) { hr = device->CreateShaderResourceView(texture.Get(), &view, resource.view.GetAddressOf()); }
     if (FAILED(hr)) { error = "Cannot create GPU texture (HRESULT " + std::to_string(hr) + ")"; return false; }
     resource.sampler = static_cast<std::size_t>(data.filter) * 2 + static_cast<std::size_t>(data.wrap);
     return true;
@@ -77,6 +89,10 @@ struct GpuAssetCache::Impl {
     std::unordered_map<std::string, MeshResource, StringHash, std::equal_to<>> meshes;
     std::unordered_map<std::string, TextureResource, StringHash, std::equal_to<>> textures;
     std::array<ComPtr<ID3D11SamplerState>, 6> samplers;
+    std::unordered_map<std::string, MaterialResource, StringHash, std::equal_to<>> materials;
+    std::array<TextureResource, 3> defaults;
+    bool defaultsReady = false;
+    bool defaultsFailed = false;
     std::vector<std::string> errors;
     std::size_t reportedCpuErrors = 0;
     bool limitReported = false;
@@ -86,7 +102,7 @@ struct GpuAssetCache::Impl {
         for (; reportedCpuErrors < source.size(); ++reportedCpuErrors) { errors.push_back(source[reportedCpuErrors]); }
     }
     bool hasSpace() {
-        if (meshes.size() + textures.size() < 4096) { return true; }
+        if (meshes.size() + textures.size() + materials.size() < 4096) { return true; }
         if (!limitReported) { errors.emplace_back("GPU asset cache limit exceeded (4096 paths)"); limitReported = true; }
         return false;
     }
@@ -125,22 +141,122 @@ struct GpuAssetCache::Impl {
         }
         destination = std::move(candidate);
     }
+    bool ensureDefaults(ID3D11Device* device) {
+        if (defaultsReady || defaultsFailed) { return defaultsReady; }
+        const unsigned char pixels[3][4] = {{255, 255, 255, 255}, {128, 128, 255, 255}, {0, 0, 0, 255}};
+        std::string error;
+        TextureData data;
+        data.width = data.height = 1;
+        for (std::size_t i = 0; i < defaults.size(); ++i) {
+            data.pixels.assign(pixels[i], pixels[i] + 4);
+            if (!createTexture(device, data, defaults[i], error)) {
+                defaultsFailed = true;
+                errors.push_back("Default material: " + error);
+                return false;
+            }
+        }
+        defaultsReady = true;
+        return true;
+    }
+    ID3D11ShaderResourceView* colorView(ID3D11Device* device, TextureResource& texture) {
+        if (!texture.view) { return nullptr; }
+        if (!texture.srgb) {
+            D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+            texture.view->GetDesc(&desc);
+            desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+            ComPtr<ID3D11Resource> resource;
+            texture.view->GetResource(resource.GetAddressOf());
+            if (FAILED(device->CreateShaderResourceView(resource.Get(), &desc, texture.srgb.GetAddressOf()))) {
+                return nullptr;
+            }
+        }
+        return texture.srgb.Get();
+    }
+    void loadMaterial(ID3D11Device* device, std::string_view path) {
+        if (materials.contains(path) || (!path.empty() && !hasSpace()) || !ensureDefaults(device)) { return; }
+        auto& material = materials.try_emplace(std::string(path)).first->second;
+        const MaterialData fallback;
+        const auto* data = path.empty() ? &fallback : library.material(path);
+        if (!data) { reportCpuErrors(); return; }
+
+        std::size_t samplerIndex = 4;
+        ID3D11ShaderResourceView* views[] = {
+            defaults[0].view.Get(), defaults[0].view.Get(), defaults[1].view.Get(), defaults[2].view.Get()
+        };
+        const std::string* paths[] = {&data->baseColorTexture, &data->metallicRoughnessTexture,
+            &data->normalTexture, &data->emissiveTexture};
+        bool hasEmissiveTexture = false;
+        bool samplerSelected = false;
+        for (std::size_t i = 0; i < std::size(paths); ++i) {
+            if (paths[i]->empty()) { continue; }
+            loadTexture(device, *paths[i]);
+            const auto found = textures.find(*paths[i]);
+            if (found == textures.end() || !found->second.view) { continue; }
+            auto* view = i == 0 || i == 3 ? colorView(device, found->second) : found->second.view.Get();
+            if (!view) {
+                errors.push_back(*paths[i] + ": cannot create sRGB texture view");
+                continue;
+            }
+            views[i] = view;
+            hasEmissiveTexture |= i == 3;
+            if (!samplerSelected) {
+                samplerIndex = found->second.sampler;
+                samplerSelected = true;
+            }
+        }
+        std::string error;
+        if (!ensureSampler(device, samplerIndex, error)) {
+            errors.push_back(std::string(path) + ": " + error);
+            return;
+        }
+        const MaterialCb parameters{
+            {data->baseColor[0], data->baseColor[1], data->baseColor[2], data->baseColor[3]},
+            {data->emissive[0], data->emissive[1], data->emissive[2]}, data->normalScale,
+            data->metallic, data->roughness, hasEmissiveTexture ? 1.0f : 0.0f,
+            data->shader == MaterialShader::Unlit ? 1.0f : 0.0f,
+            static_cast<float>(data->alphaMode), data->alphaCutoff, data->specularStrength, 0.0f
+        };
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = sizeof(parameters);
+        desc.Usage = D3D11_USAGE_IMMUTABLE;
+        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        D3D11_SUBRESOURCE_DATA initial{};
+        initial.pSysMem = &parameters;
+        if (FAILED(device->CreateBuffer(&desc, &initial, material.constants.GetAddressOf()))) {
+            errors.push_back(std::string(path) + ": cannot create material constant buffer");
+            return;
+        }
+        material.view = {data->alphaMode, data->shaderPath, material.constants.Get(), {views[0], views[1], views[2], views[3]}, samplers[samplerIndex].Get()};
+    }
 };
 GpuAssetCache::GpuAssetCache() : m_impl(std::make_unique<Impl>()) {}
 GpuAssetCache::~GpuAssetCache() = default;
 void GpuAssetCache::setReader(AssetReader reader) {
+    m_impl->materials.clear(); m_impl->defaults = {};
+    m_impl->defaultsReady = m_impl->defaultsFailed = false;
     m_impl->meshes.clear(); m_impl->textures.clear(); m_impl->samplers = {};
     m_impl->errors.clear(); m_impl->reportedCpuErrors = 0; m_impl->limitReported = false;
     m_impl->library.setReader(std::move(reader));
 }
 void GpuAssetCache::prepare(ID3D11Device* device, const SceneDrawList& drawList) {
     if (device == nullptr || drawList.meshes == nullptr) { return; }
+    if (!drawList.environmentPath.empty()) {
+        m_impl->loadTexture(device, drawList.environmentPath);
+        const auto found = m_impl->textures.find(drawList.environmentPath);
+        if (found != m_impl->textures.end()) { (void)m_impl->colorView(device, found->second); }
+    }
+    m_impl->loadMaterial(device, {});
     for (int i = 0; i < drawList.meshCount; ++i) {
         const auto& instance = drawList.meshes[i];
         if (!instance.meshPath.empty()) { m_impl->loadMesh(device, instance.meshPath); }
-        if (!instance.texturePath.empty()) { m_impl->loadTexture(device, instance.texturePath); }
+        if (!instance.materialPath.empty()) { m_impl->loadMaterial(device, instance.materialPath); }
     }
 }
+ID3D11ShaderResourceView* GpuAssetCache::environment(std::string_view path) const {
+    const auto found = m_impl->textures.find(path);
+    return found == m_impl->textures.end() ? nullptr : found->second.srgb.Get();
+}
+
 bool GpuAssetCache::reimport(ID3D11Device* device, std::string_view path, const AssetImportSettings* settings,
     const AssetImportWriter& writer, std::string& error) {
     if (!device) { error = "No graphics device for asset import"; return false; }
@@ -170,13 +286,31 @@ bool GpuAssetCache::reimport(ID3D11Device* device, std::string_view path, const 
     // writer leaves active CPU/GPU resources untouched. Commit only moves data.
     if (writer && !writer(prepared.settings, error)) { return cancel(); }
     if (prepared.isMesh) { m_impl->meshes.find(path)->second = std::move(mesh); }
-    else { m_impl->textures.find(path)->second = std::move(texture); }
+    else {
+        m_impl->materials.clear();
+        m_impl->textures.find(path)->second = std::move(texture);
+    }
     m_impl->library.commit(std::move(prepared));
     m_impl->reportedCpuErrors = m_impl->library.errors().size();
     std::erase_if(m_impl->errors, [&](const std::string& message) {
         return message.starts_with(path) && std::string_view(message).substr(path.size(), 2) == ": ";
     });
     return true;
+}
+void GpuAssetCache::invalidateMaterial(std::string_view path) {
+    if (const auto found = m_impl->materials.find(path); found != m_impl->materials.end()) {
+        m_impl->materials.erase(found);
+    }
+    m_impl->library.invalidateMaterial(path);
+    m_impl->reportedCpuErrors = m_impl->library.errors().size();
+    std::erase_if(m_impl->errors, [&](const std::string& message) {
+        return message.starts_with(path) && std::string_view(message).substr(path.size(), 2) == ": ";
+    });
+}
+const GpuMaterial* GpuAssetCache::material(std::string_view path, bool fallback) const {
+    auto found = m_impl->materials.find(path);
+    if (fallback && (found == m_impl->materials.end() || !found->second.constants)) { found = m_impl->materials.find(""); }
+    return found != m_impl->materials.end() && found->second.constants ? &found->second.view : nullptr;
 }
 const GpuMesh* GpuAssetCache::mesh(std::string_view path) const {
     const auto found = m_impl->meshes.find(path);
