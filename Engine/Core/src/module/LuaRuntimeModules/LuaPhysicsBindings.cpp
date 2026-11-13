@@ -147,47 +147,33 @@ void registerPhysicsBindings(lua_State *state, Scene &scene,
   const luaL_Reg bindings[] = {
       // @lua fun sat.physics.frameId(entity: EntityId): integer
       {"frameId", guarded<frameId>},
-      // @lua fun sat.physics.linearVelocity(entity: EntityId): number, number,
-      // number
+      // @lua fun sat.physics.linearVelocity(entity: EntityId): number, number, number
       {"linearVelocity", guarded<velocity>},
-      // @lua fun sat.physics.angularVelocity(entity: EntityId): number, number,
-      // number
+      // @lua fun sat.physics.angularVelocity(entity: EntityId): number, number, number
       {"angularVelocity", guarded<angular>},
-      // @lua fun sat.physics.setLinearVelocity(entity: EntityId, x: number, y:
-      // number, z: number)
+      // @lua fun sat.physics.setLinearVelocity(entity: EntityId, x: number, y: number, z: number)
       {"setLinearVelocity", guarded<setVelocity>},
-      // @lua fun sat.physics.setAngularVelocity(entity: EntityId, x: number, y:
-      // number, z: number)
+      // @lua fun sat.physics.setAngularVelocity(entity: EntityId, x: number, y: number, z: number)
       {"setAngularVelocity",
        guarded<vectorOperation<&PhysicsSystem::setAngularVelocity>>},
-      // @lua fun sat.physics.addForce(entity: EntityId, x: number, y: number,
-      // z: number)
+      // @lua fun sat.physics.addForce(entity: EntityId, x: number, y: number, z: number)
       {"addForce", guarded<vectorOperation<&PhysicsSystem::addForce>>},
-      // @lua fun sat.physics.addTorque(entity: EntityId, x: number, y: number,
-      // z: number)
+      // @lua fun sat.physics.addTorque(entity: EntityId, x: number, y: number, z: number)
       {"addTorque", guarded<vectorOperation<&PhysicsSystem::addTorque>>},
-      // @lua fun sat.physics.addImpulse(entity: EntityId, x: number, y: number,
-      // z: number)
+      // @lua fun sat.physics.addImpulse(entity: EntityId, x: number, y: number, z: number)
       {"addImpulse", guarded<vectorOperation<&PhysicsSystem::addImpulse>>},
-      // @lua fun sat.physics.addAngularImpulse(entity: EntityId, x: number, y:
-      // number, z: number)
+      // @lua fun sat.physics.addAngularImpulse(entity: EntityId, x: number, y: number, z: number)
       {"addAngularImpulse",
        guarded<vectorOperation<&PhysicsSystem::addAngularImpulse>>},
-      // @lua fun sat.physics.teleport(entity: EntityId, x: number, y: number,
-      // z: number, rx: number, ry: number, rz: number, clearVelocity?: boolean)
+      // @lua fun sat.physics.teleport(entity: EntityId, x: number, y: number, z: number, rx: number, ry: number, rz: number, clearVelocity?: boolean)
       {"teleport", guarded<teleport>},
-      // @lua fun sat.physics.moveKinematic(entity: EntityId, x: number, y:
-      // number, z: number, rx: number, ry: number, rz: number)
+      // @lua fun sat.physics.moveKinematic(entity: EntityId, x: number, y: number, z: number, rx: number, ry: number, rz: number)
       {"moveKinematic", guarded<kinematic>},
-      // @lua fun sat.physics.gravityAt(x: number, y: number, z: number):
-      // number, number, number
+      // @lua fun sat.physics.gravityAt(x: number, y: number, z: number): number, number, number
       {"gravityAt", guarded<gravity>},
-      // @lua fun sat.physics.upAt(x: number, y: number, z: number): number?,
-      // number?, number?
+      // @lua fun sat.physics.upAt(x: number, y: number, z: number): number?, number?, number?
       {"upAt", guarded<up>},
-      // @lua fun sat.physics.raycast(x: number, y: number, z: number, dx:
-      // number, dy: number, dz: number, distance: number, ignore?: EntityId,
-      // includeTriggers?: boolean): table?
+      // @lua fun sat.physics.raycast(x: number, y: number, z: number, dx: number, dy: number, dz: number, distance: number, ignore?: EntityId, includeTriggers?: boolean): table?
       {"raycast", guarded<raycast>},
       {nullptr, nullptr}};
   lua_pushlightuserdata(state, &scene);

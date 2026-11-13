@@ -1,6 +1,7 @@
 #include "SceneFile.hpp"
 
 #include "Scene.hpp"
+#include "module/SceneAudioFile.hpp"
 #include "module/ScenePhysicsFile.hpp"
 #include "AssetData.hpp"
 
@@ -31,8 +32,9 @@ bool finite(const DVec3& value) {
 std::string serializeScene(const Scene& scene) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "SatScene 3\n" << scene.entities().size() << '\n';
+    out << "SatScene 5\n" << scene.entities().size() << '\n';
     writePhysicsSettings(out, scene.physicsSettings);
+    writeAudioSettings(out, scene.audioSettings);
     for (const auto& entity : scene.entities()) {
         const auto& t = entity.transform;
         const auto& c = entity.camera;
@@ -54,6 +56,7 @@ std::string serializeScene(const Scene& scene) {
             out << script.enabled << ' ' << std::quoted(script.path) << '\n';
         }
         writePhysicsComponents(out, entity);
+        writeAudioComponents(out, entity);
     }
     return out.str();
 }
@@ -69,13 +72,16 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
     std::string magic;
     int version = 0;
     std::size_t count = 0;
-    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > 3) || count > kMaxEntities) {
+    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > 5) || count > kMaxEntities) {
         return fail("Invalid scene header, version or entity count.");
     }
     Scene candidate;
     candidate.clear();
     if (version >= 3 && !readPhysicsSettings(in, candidate.physicsSettings)) {
         return fail("Invalid physics settings.");
+    }
+    if (version >= 4 && !readAudioSettings(in, candidate.audioSettings, version >= 5)) {
+        return fail("Invalid audio settings.");
     }
     bool hasMain = false;
     for (std::size_t index = 0; index < count; ++index) {
@@ -123,6 +129,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
             e.scripts.back().enabled = enabled;
         }
         if (version >= 3 && !readPhysicsComponents(in, e, error)) { return false; }
+        if (version >= 4 && !readAudioComponents(in, e, error, version >= 5)) { return false; }
     }
     in >> std::ws;
     if (!in.eof()) {

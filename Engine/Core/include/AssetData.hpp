@@ -14,6 +14,7 @@ namespace sat {
 [[nodiscard]] bool isValidAssetPath(std::string_view path);
 [[nodiscard]] bool isMeshAssetPath(std::string_view path);
 [[nodiscard]] bool isTextureAssetPath(std::string_view path);
+[[nodiscard]] bool isAudioAssetPath(std::string_view path);
 inline constexpr std::size_t kMaxAssetBytes = 64 * 1024 * 1024;
 
 // Left-handed positions, +Y up, +Z forward. UV origin is top-left.

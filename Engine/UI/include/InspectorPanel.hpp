@@ -6,6 +6,7 @@ namespace sat {
 
 class Scene;
 class Project;
+struct Entity;
 
 class InspectorPanel {
 public:
@@ -15,7 +16,7 @@ public:
     InspectorPanel(const InspectorPanel&) = delete;
     InspectorPanel& operator=(const InspectorPanel&) = delete;
 
-    void onImGuiRender(int selectedIndex);
+    void onImGuiRender(int selectedIndex, Entity* liveEntity);
 
 private:
     struct Impl;

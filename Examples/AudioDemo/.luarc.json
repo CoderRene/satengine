@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+  "runtime": {
+    "version": "Lua 5.4"
+  },
+  "workspace": {
+    "library": [
+      "LuaDefs"
+    ],
+    "checkThirdParty": false,
+    "useGitIgnore": false
+  },
+  "diagnostics": {
+    "globals": [
+      "sat",
+      "self",
+      "onStart",
+      "onUpdate",
+      "onStop"
+    ]
+  }
+}

@@ -22,7 +22,10 @@ IMPORTANT: Make the code as optimize as possible. As performance as possible.
 
 ## Formatting
 
-- Follow the surrounding code and repository formatter configuration.
+- Match the existing code formatting in files you edit and in new files you create: indentation, brace style, spacing, line breaks, include layout, and naming as already used nearby.
+- For new files, copy the style of the closest existing file in the same area (same folder or sibling module), not a personal or default agent style.
+- Prefer the surrounding / sibling file's style over any personal or default agent style. Do not reformat unrelated code or impose a new convention.
+- Follow the repository formatter configuration when one exists; otherwise copy the local pattern in the touched or sibling file.
 - Use braces for control-flow bodies.
 - Keep functions focused; extract helpers when they clarify intent, isolate an invariant, or remove duplication.
 - Avoid unrelated formatting changes and drive-by refactors.

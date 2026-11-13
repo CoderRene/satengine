@@ -1,6 +1,7 @@
 #include "Application.hpp"
 #include "PakArchive.hpp"
 #include "GamePakKeys.hpp"
+#include "AudioSystem.hpp"
 #include "LuaRuntime.hpp"
 #include "PhysicsSystem.hpp"
 #include "SceneFile.hpp"
@@ -105,7 +106,7 @@ private:
 
 class LuaGame final : public sat::Application {
 public:
-    LuaGame() : m_physics(scene()), m_scripts(scene(), &input(), nullptr, &m_physics) {}
+    LuaGame() : m_physics(scene()), m_audio(scene()), m_scripts(scene(), &input(), nullptr, &m_physics, &m_audio) {}
     [[nodiscard]] bool failed() const { return m_failed; }
 protected:
     void onStart() override {
@@ -137,7 +138,7 @@ protected:
             requestStop();
             return;
         }
-        setAssetReader([this](std::string_view path, std::string& bytes, std::string& assetError) {
+        const sat::AssetReader readAsset = [this](std::string_view path, std::string& bytes, std::string& assetError) {
             for (const auto& archive : m_assets) {
                 const auto source = archive.find(path);
                 if (!source.empty() || std::any_of(archive.entries().begin(), archive.entries().end(),
@@ -152,7 +153,9 @@ protected:
             }
             assetError.clear();
             return sat::AssetReadResult::Missing;
-        });
+        };
+        setAssetReader(readAsset);
+        m_audio.setAssetReader(readAsset);
         std::vector<sat::LuaScriptSource> scripts;
         for (const auto& entry : m_archive.entries()) {
             if (entry.name.starts_with("Scripts/") && entry.name.ends_with(".lua")) {
@@ -183,6 +186,7 @@ private:
     sat::PakArchive m_archive;
     std::array<sat::PakArchive, 3> m_assets;
     sat::PhysicsSystem m_physics;
+    sat::AudioSystem m_audio;
     sat::LuaRuntime m_scripts;
     bool m_failed = false;
 };

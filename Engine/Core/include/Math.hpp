@@ -11,6 +11,8 @@ struct Vec3 {
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
+
+    bool operator==(const Vec3&) const = default;
 };
 
 // Absolute/simulation world positions. Narrow to Vec3 only at the render boundary.
@@ -18,6 +20,8 @@ struct DVec3 {
     double x = 0.0;
     double y = 0.0;
     double z = 0.0;
+
+    bool operator==(const DVec3&) const = default;
 };
 
 struct Mat4 {

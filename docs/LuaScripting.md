@@ -8,8 +8,11 @@ Scripts run only when attached to an entity. Files in `Scripts/`, including
    right-click menu). An empty entity has a Transform and no mesh, camera or scripts.
 2. Select the entity. In Inspector, choose **Add Component** to add a **Mesh
    (Cube)**, **Camera**, or **Lua Script** from the project's `Scripts/` directory.
-3. Click **Play**. Only enabled attached scripts receive callbacks. **Stop**
-   restores the scene from before Play.
+3. Click **Play**. Enabled attached scripts run in the Game view's copy of the
+   scene. Entity edits from Scene, Hierarchy, and Inspector also update that
+   running copy. When you click
+   **Stop**, choose **Save Changes** to write your editor edits to Scene.sat or
+   **Discard Changes** to restore the scene from before Play.
 
 Inspector supports multiple different scripts on an entity, an Enabled checkbox
 for each script, and removal of mesh/camera/script components. A script may be
@@ -40,9 +43,10 @@ end
 Scripts start in entity/component order. A script's top-level code runs before
 its onStart; then each instance receives updates in the same order. The active
 component roster is fixed for a Play session, except that destroyed owners retire
-their components. Newly created entities do not automatically run scripts. Editor
-changes are disabled during Play. Restarting Play creates fresh instances. On error, updates stop, successful
-instances receive onStop, and the editor restores the original scene. Startup
+their components. Newly created entities do not automatically run scripts.
+Restarting Play creates fresh instances from the authored scene. On error,
+updates stop, successful instances receive onStop, and pending editor edits
+still prompt for a save decision. Startup
 failure does not call onStop on the failing instance. The first error is retained;
 tracebacks identify the owning entity and script. Window-thread use only.
 
@@ -82,8 +86,8 @@ All entity APIs, including camera selection and `self.entity`, use these IDs. Cr
 growth, and destruction/reordering of other entities preserve surviving IDs.
 Destroyed IDs never identify a replacement entity. Do not perform arithmetic on
 IDs or persist them in project files: scene loads create fresh runtime IDs.
-Scene copies used for editor Play snapshots preserve identities; Stop restores
-the authored snapshot, and runtime-created entities disappear.
+Scene copies used for editor Play preserve existing entity identities. Stop
+discards the runtime copy, including entities created by scripts.
 
 `getEntities()` returns a snapshot, so it is safe to iterate that array while
 creating or destroying entities. Storage/enumeration order may change after a
@@ -152,8 +156,7 @@ to switch; `getMainCamera` returns nil when no live camera is marked main,
 including after that camera is removed or its entity is destroyed. Property
 reads/writes use direct component access through stable-ID lookup and create no
 Lua tables. Main-camera queries use the scene's existing linear scan. Changes
-feed the next render-data update and are included when the host saves the scene;
-editor Stop restores its Play snapshot.
+feed the next Game view render. Editor saves use the authored scene.
 
 ```lua
 if not sat.hasMesh(self.entity) then
@@ -165,8 +168,8 @@ sat.setScriptEnabled(sat.findEntity("Target"), "target.lua", false)
 ## Saving and building
 
 The top bar shows an amber **Unsaved changes** indicator after scene edits.
-A successful save clears it; a failed save leaves it visible. Play-mode changes
-are excluded because Stop restores the saved editor scene.
+A successful save clears it. During Play, the indicator tracks editor edits,
+and the save prompt appears when Play ends with pending edits.
 
 **File > Save Scene** saves entities, transforms, mesh/camera components and
 script attachments to the project's versioned `Scene.sat` file. The editor also

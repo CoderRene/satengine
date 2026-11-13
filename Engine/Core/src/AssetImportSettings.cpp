@@ -27,11 +27,19 @@ bool parseImportSettings(std::string_view text, AssetImportSettings& settings, s
     int wrap = 0;
     AssetImportSettings candidate;
     if (text.size() > 4096 || !(input >> magic >> version >> candidate.scale >> candidate.rightHanded >> candidate.flipV
-        >> candidate.maximumSize >> filter >> wrap >> candidate.mipmaps) || magic != "SatImport" || version != 1 ||
+        >> candidate.maximumSize >> filter >> wrap >> candidate.mipmaps) || magic != "SatImport" || (version != 1 && version != 2) ||
         !std::isfinite(candidate.scale) || candidate.scale <= 0 || candidate.maximumSize < 32 || candidate.maximumSize > 4096 ||
         (candidate.maximumSize & (candidate.maximumSize - 1)) != 0 || filter < 0 || filter > 2 || wrap < 0 || wrap > 1) {
         error = "Invalid SatImport settings or unsupported version";
         return false;
+    }
+    if (version == 2) {
+        int audioMode = 0;
+        if (!(input >> audioMode) || audioMode < 0 || audioMode > 2) {
+            error = "Invalid audio import mode";
+            return false;
+        }
+        candidate.audioLoadMode = static_cast<AudioLoadMode>(audioMode);
     }
     input >> std::ws;
     if (!input.eof()) { error = "Unexpected data after import settings"; return false; }
@@ -43,10 +51,12 @@ bool parseImportSettings(std::string_view text, AssetImportSettings& settings, s
 std::string serializeImportSettings(const AssetImportSettings& settings) {
     std::ostringstream output;
     output.imbue(std::locale::classic());
-    output << "SatImport 1\n" << std::setprecision(std::numeric_limits<float>::max_digits10)
+    const bool extended = settings.audioLoadMode != AudioLoadMode::Auto;
+    output << (extended ? "SatImport 2\n" : "SatImport 1\n") << std::setprecision(std::numeric_limits<float>::max_digits10)
         << settings.scale << ' ' << settings.rightHanded << ' ' << settings.flipV << '\n'
         << settings.maximumSize << ' ' << static_cast<int>(settings.filter) << ' '
         << static_cast<int>(settings.wrap) << ' ' << settings.mipmaps << '\n';
+    if (extended) { output << static_cast<int>(settings.audioLoadMode) << '\n'; }
     return output.str();
 }
 bool loadImportSettings(const std::filesystem::path& source, AssetImportSettings& settings, std::string& error) {

@@ -1,4 +1,5 @@
 #include "PakArchive.hpp"
+#include "AssetImportSettings.hpp"
 #include "AssetLibrary.hpp"
 #include "Scene.hpp"
 #include "SceneFile.hpp"
@@ -81,7 +82,7 @@ int main(int argc, char** argv) {
             if (name.ends_with(".satimport.tmp")) { continue; }
             if (name.ends_with(".satimport")) {
                 const auto source = std::string_view(name).substr(0, name.size() - std::string_view(".satimport").size());
-                if (!sat::isMeshAssetPath(source) && !sat::isTextureAssetPath(source)) {
+                if (!sat::isMeshAssetPath(source) && !sat::isTextureAssetPath(source) && !sat::isAudioAssetPath(source)) {
                     throw std::runtime_error("Import metadata has no supported source: " + name);
                 }
                 const auto sourcePath = root / std::filesystem::path(std::u8string(source.begin(), source.end()));
@@ -92,6 +93,13 @@ int main(int argc, char** argv) {
                 throw std::runtime_error(assets.errors().back());
             }
             std::string bytes = read(path);
+            if (name.ends_with(".satimport")) {
+                sat::AssetImportSettings settings;
+                std::string error;
+                if (!sat::parseImportSettings(bytes, settings, error)) {
+                    throw std::runtime_error(name + ": " + error);
+                }
+            }
             if (name.starts_with("Scripts/")) {
                 const std::string label = "@" + name;
                 if (luaL_loadbufferx(state.get(), bytes.data(), bytes.size(), label.c_str(), "t") != LUA_OK) {
@@ -111,7 +119,7 @@ int main(int argc, char** argv) {
                     throw std::runtime_error("Import metadata source spelling does not match a packed asset: " + entry.name);
                 }
             }
-            if (sat::isMeshAssetPath(entry.name) || sat::isTextureAssetPath(entry.name)) {
+            if (sat::isMeshAssetPath(entry.name) || sat::isTextureAssetPath(entry.name) || sat::isAudioAssetPath(entry.name)) {
                 const auto metadata = entry.name + ".satimport";
                 if (std::filesystem::exists(root / std::filesystem::path(std::u8string(metadata.begin(), metadata.end()))) &&
                     std::none_of(entries.begin(), entries.end(), [&](const sat::PakEntry& candidate) { return candidate.name == metadata; })) {
@@ -122,12 +130,18 @@ int main(int argc, char** argv) {
         // Windows file lookup can accept a case mismatch that an archive lookup
         // cannot. Validate the exact packed spelling before writing any archive.
         for (const auto& entity : scene.entities()) {
-            if (!entity.hasMesh) { continue; }
-            for (const auto* path : {&entity.mesh.meshPath, &entity.mesh.texturePath}) {
-                if (!path->empty() && std::none_of(entries.begin(), entries.end(),
-                    [&](const sat::PakEntry& entry) { return entry.name == *path; })) {
-                    throw std::runtime_error("Asset path does not exactly match a packaged file: " + *path);
+            const auto validatePath = [&](const std::string& path) {
+                if (!path.empty() && std::none_of(entries.begin(), entries.end(),
+                    [&](const sat::PakEntry& entry) { return entry.name == path; })) {
+                    throw std::runtime_error("Asset path does not exactly match a packaged file: " + path);
                 }
+            };
+            if (entity.hasMesh) {
+                validatePath(entity.mesh.meshPath);
+                validatePath(entity.mesh.texturePath);
+            }
+            if (entity.hasAudioSource) {
+                validatePath(entity.audioSource.clipPath);
             }
         }
         std::string error;

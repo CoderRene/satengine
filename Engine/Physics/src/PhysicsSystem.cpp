@@ -365,6 +365,34 @@ struct PhysicsSystem::Impl {
     }
     return true;
   }
+  bool configureBody(Body &b, const Entity &e) {
+    b.entity = e.id();
+    b.synced = e.transform;
+    b.motion = e.hasRigidBody ? e.rigidBody.motion : BodyMotion::Static;
+    b.velocity =
+        b.motion == BodyMotion::Static ? DVec3{} : e.rigidBody.linearVelocity;
+    b.angular = e.rigidBody.angularVelocity;
+    if (!finite(b.velocity) || !finite(b.angular) ||
+        !std::isfinite(e.rigidBody.mass) || e.rigidBody.mass <= 0 ||
+        !std::isfinite(e.rigidBody.gravityFactor) ||
+        e.rigidBody.gravityFactor < 0 ||
+        !std::isfinite(e.rigidBody.linearDamping) ||
+        e.rigidBody.linearDamping < 0 ||
+        !std::isfinite(e.rigidBody.angularDamping) ||
+        e.rigidBody.angularDamping < 0 ||
+        (b.motion != BodyMotion::Static && b.motion != BodyMotion::Dynamic &&
+         b.motion != BodyMotion::Kinematic) ||
+        !std::isfinite(e.collider.friction) || e.collider.friction < 0 ||
+        !std::isfinite(e.collider.restitution) ||
+        e.collider.restitution < 0 || e.collider.restitution > 1 ||
+        e.rigidBody.allowedDofs > 63) {
+      return fail("Invalid body settings: " + e.name);
+    }
+    if (!buildShape(b, e)) {
+      return false;
+    }
+    return true;
+  }
   bool create(Body &b, World &world) {
     const auto *e = scene.entityById(b.entity);
     const auto &rb = e->rigidBody;
@@ -394,9 +422,17 @@ struct PhysicsSystem::Impl {
     info.mOverrideMassProperties =
         JPH::EOverrideMassProperties::CalculateInertia;
     info.mMassPropertiesOverride.mMass = rb.mass;
-    info.mLinearVelocity = vector(b.velocity - world.state.velocity);
+    const DVec3 relativeVelocity = b.velocity - world.state.velocity;
+    if (!finite(relativeVelocity) || length(relativeVelocity) > settings.maxRelativeSpeed) {
+      return fail("Physics frame relative speed exceeded: " + e->name);
+    }
+    info.mLinearVelocity = vector(relativeVelocity);
     info.mAngularVelocity = vector(b.angular);
-    info.mMaxLinearVelocity = std::numeric_limits<float>::max();
+    // Jolt squares this limit when clamping velocity. float::max() overflows
+    // there and traps in Windows builds with floating-point exceptions enabled.
+    // Keep the solver guard above our supported speed so excess motion is still
+    // reported by the engine's post-step validation rather than silently hidden.
+    info.mMaxLinearVelocity = static_cast<float>(std::max(1.0, settings.maxRelativeSpeed * 2.0));
     auto &api = world.system.GetBodyInterface();
     auto *body = api.CreateBody(info);
     if (!body) {
@@ -634,6 +670,7 @@ bool PhysicsSystem::start() {
         !std::isfinite(s.settings.rebaseDistance) ||
         !(s.settings.maxRelativeSpeed > 0) ||
         !std::isfinite(s.settings.maxRelativeSpeed) ||
+        s.settings.maxRelativeSpeed > kMaxPhysicsRelativeSpeed ||
         s.settings.maxBodies == 0 || s.settings.maxBodies > 100000 ||
         s.settings.maxContactEvents == 0 ||
         s.settings.maxContactEvents > 1048576) {
@@ -665,29 +702,7 @@ bool PhysicsSystem::start() {
         return s.fail("Physics body capacity exceeded");
       }
       Body b;
-      b.entity = e.id();
-      b.synced = e.transform;
-      b.motion = e.hasRigidBody ? e.rigidBody.motion : BodyMotion::Static;
-      b.velocity =
-          b.motion == BodyMotion::Static ? DVec3{} : e.rigidBody.linearVelocity;
-      b.angular = e.rigidBody.angularVelocity;
-      if (!finite(b.velocity) || !finite(b.angular) ||
-          !std::isfinite(e.rigidBody.mass) || e.rigidBody.mass <= 0 ||
-          !std::isfinite(e.rigidBody.gravityFactor) ||
-          e.rigidBody.gravityFactor < 0 ||
-          !std::isfinite(e.rigidBody.linearDamping) ||
-          e.rigidBody.linearDamping < 0 ||
-          !std::isfinite(e.rigidBody.angularDamping) ||
-          e.rigidBody.angularDamping < 0 ||
-          (b.motion != BodyMotion::Static && b.motion != BodyMotion::Dynamic &&
-           b.motion != BodyMotion::Kinematic) ||
-          !std::isfinite(e.collider.friction) || e.collider.friction < 0 ||
-          !std::isfinite(e.collider.restitution) ||
-          e.collider.restitution < 0 || e.collider.restitution > 1 ||
-          e.rigidBody.allowedDofs > 63) {
-        return s.fail("Invalid body settings: " + e.name);
-      }
-      if (!s.buildShape(b, e)) {
+      if (!s.configureBody(b, e)) {
         return false;
       }
       s.indices.emplace(e.id(), s.bodies.size());
@@ -866,6 +881,59 @@ bool PhysicsSystem::moveKinematic(EntityId id, DVec3 p, Vec3 r) {
   t.rotation = r;
   b->target = t;
   return true;
+}
+bool PhysicsSystem::refreshBody(EntityId id, bool resetLinearVelocity,
+                                bool resetAngularVelocity) {
+  auto &s = *m_impl;
+  const auto *entity = s.scene.entityById(id);
+  if (!s.running || !entity) {
+    return false;
+  }
+
+  const auto existing = s.indices.find(id);
+  const bool hasBody = existing != s.indices.end();
+  if (!entity->hasCollider) {
+    if (hasBody) {
+      const auto index = existing->second;
+      s.remove(s.bodies[index]);
+      s.indices.erase(existing);
+      if (index + 1 != s.bodies.size()) {
+        s.bodies[index] = std::move(s.bodies.back());
+        s.indices.at(s.bodies[index].entity) = index;
+      }
+      s.bodies.pop_back();
+    }
+    return true;
+  }
+  if (!hasBody && s.bodies.size() == s.settings.maxBodies) {
+    s.error = "Physics body capacity exceeded";
+    return false;
+  }
+
+  Body replacement;
+  if (!s.configureBody(replacement, *entity)) {
+    // Invalid editor input leaves the existing body running.
+    s.running = true;
+    return false;
+  }
+  if (hasBody) {
+    auto &body = s.bodies[existing->second];
+    if (replacement.motion != BodyMotion::Static && body.motion != BodyMotion::Static) {
+      if (!resetLinearVelocity) { replacement.velocity = body.velocity; }
+      if (!resetAngularVelocity) { replacement.angular = body.angular; }
+    }
+    s.remove(body);
+    body = std::move(replacement);
+  } else {
+    const auto inserted = s.indices.emplace(id, s.bodies.size()).first;
+    try {
+      s.bodies.push_back(std::move(replacement));
+    } catch (...) {
+      s.indices.erase(inserted);
+      throw;
+    }
+  }
+  return s.reconcile(s.settings.fixedSeconds);
 }
 bool PhysicsSystem::step(double dt) {
   auto &s = *m_impl;

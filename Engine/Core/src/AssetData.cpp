@@ -80,6 +80,11 @@ bool isTextureAssetPath(std::string_view path) {
     return isValidAssetPath(path) && (extensionIs(path, ".png") || extensionIs(path, ".jpg") || extensionIs(path, ".jpeg"));
 }
 
+bool isAudioAssetPath(std::string_view path) {
+    return isValidAssetPath(path) && (extensionIs(path, ".wav") || extensionIs(path, ".ogg") ||
+        extensionIs(path, ".mp3") || extensionIs(path, ".flac"));
+}
+
 bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error) {
     return decodeObj(bytes, mesh, error, true, true);
 }

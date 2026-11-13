@@ -179,7 +179,10 @@ bool drawPhysicsSettings(PhysicsSettings &s) {
   }
   changed |= number("Interaction distance (m)", s.interactionDistance, 1);
   changed |= number("Rebase distance (m)", s.rebaseDistance, 1);
-  changed |= number("Maximum relative speed (m/s)", s.maxRelativeSpeed, 1);
+  if (number("Maximum relative speed (m/s)", s.maxRelativeSpeed, 1)) {
+    s.maxRelativeSpeed = std::min(s.maxRelativeSpeed, kMaxPhysicsRelativeSpeed);
+    changed = true;
+  }
   int bodies = static_cast<int>(s.maxBodies),
       events = static_cast<int>(s.maxContactEvents);
   if (ImGui::InputInt("Body capacity", &bodies)) {

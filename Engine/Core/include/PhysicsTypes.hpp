@@ -19,6 +19,8 @@ struct ColliderPrimitive {
     Vec3 halfExtents{0.5f, 0.5f, 0.5f};
     float radius = 0.5f;
     float halfHeight = 0.5f; // Capsule cylinder half-height, local Y axis.
+
+    bool operator==(const ColliderPrimitive&) const = default;
 };
 
 struct ColliderComponent {
@@ -26,6 +28,8 @@ struct ColliderComponent {
     bool trigger = false;
     float friction = 0.5f;
     float restitution = 0.0f;
+
+    bool operator==(const ColliderComponent&) const = default;
 };
 
 struct RigidBodyComponent {
@@ -40,6 +44,8 @@ struct RigidBodyComponent {
     std::uint8_t allowedDofs = 63;
     DVec3 linearVelocity{}; // Initial universe velocity, meters/second.
     Vec3 angularVelocity{}; // Initial world angular velocity, radians/second.
+
+    bool operator==(const RigidBodyComponent&) const = default;
 };
 
 struct GravitySourceComponent {
@@ -48,7 +54,13 @@ struct GravitySourceComponent {
     double minimumRadius = 1.0;
     Vec3 acceleration{0.0f, -9.81f, 0.0f}; // Source-local uniform acceleration.
     double influenceRadius = 0.0; // Uniform fields only; zero means global.
+
+    bool operator==(const GravitySourceComponent&) const = default;
 };
+
+// Relative speed only; universe velocity is unrestricted by this solver guard.
+// Leaves headroom for squaring Jolt's higher internal speed limit in float math.
+inline constexpr double kMaxPhysicsRelativeSpeed = 1.0e15;
 
 struct PhysicsSettings {
     double fixedSeconds = 1.0 / 60.0;

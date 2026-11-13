@@ -119,7 +119,18 @@ Entity& Scene::createEntity(std::string name) {
     Entity entity;
     entity.name = std::move(name);
     entity.m_id = nextEntityId();
-    const auto inserted = m_entityIndices.emplace(entity.m_id, m_entities.size()).first;
+    return insertEntity(std::move(entity));
+}
+
+void Scene::addEntityCopy(const Entity& entity) {
+    (void)insertEntity(entity);
+}
+
+Entity& Scene::insertEntity(Entity entity) {
+    const auto [inserted, added] = m_entityIndices.emplace(entity.m_id, m_entities.size());
+    if (!added) {
+        throw std::logic_error("Entity ID already exists in scene");
+    }
     try {
         m_entities.push_back(std::move(entity));
     } catch (...) {

@@ -50,6 +50,10 @@ public:
   [[nodiscard]] bool running() const;
   [[nodiscard]] const std::string &error() const;
   [[nodiscard]] bool step(double seconds);
+  // Rebuild this body's configuration from Scene, retaining velocities unless
+  // the authored initial velocities changed.
+  [[nodiscard]] bool refreshBody(EntityId entity, bool resetLinearVelocity,
+                                 bool resetAngularVelocity);
   [[nodiscard]] std::span<const PhysicsEvent> events() const;
   [[nodiscard]] std::size_t frameCount() const;
   [[nodiscard]] std::optional<PhysicsFrameState>

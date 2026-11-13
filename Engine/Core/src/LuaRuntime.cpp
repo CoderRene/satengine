@@ -10,7 +10,9 @@
 
 #include "ScriptLog.hpp"
 #include "Scene.hpp"
+#include "AudioSystem.hpp"
 #include "PhysicsSystem.hpp"
+#include "module/LuaRuntimeModules/LuaAudioBindings.hpp"
 #include "module/LuaRuntimeModules/LuaPhysicsBindings.hpp"
 #include "Input.hpp"
 
@@ -41,9 +43,12 @@ void instructionLimit(lua_State* state, lua_Debug*) {
 } // namespace
 
 struct LuaRuntime::Impl {
-    explicit Impl(Scene& scene, const Input* input, ScriptLog* log, PhysicsSystem* physics)
-    : m_scene(scene), m_input(input), m_log(log), m_physics(physics) {}
-    ~Impl() { close(); }
+    explicit Impl(Scene& scene, const Input* input, ScriptLog* log, PhysicsSystem* physics, AudioSystem* audio)
+    : m_scene(scene), m_input(input), m_log(log), m_physics(physics), m_audio(audio) {}
+    ~Impl() {
+        close();
+        if (m_audio && m_sharedTime == &m_time) { m_audio->stop(); }
+    }
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
     Impl(Impl&&) = delete;
@@ -53,6 +58,7 @@ struct LuaRuntime::Impl {
     const Input* m_input;
     ScriptLog* m_log = nullptr;
     PhysicsSystem* m_physics = nullptr;
+    AudioSystem* m_audio = nullptr;
     double m_physicsDebt = 0;
     PhysicsSettings m_physicsSettings;
     lua_State* m_state = nullptr;
@@ -192,8 +198,8 @@ struct LuaRuntime::Impl {
     }
 };
 
-LuaRuntime::LuaRuntime(Scene& scene, const Input* input, ScriptLog* log, PhysicsSystem* physics)
-    : m_impl(std::make_unique<Impl>(scene, input, log, physics)) {}
+LuaRuntime::LuaRuntime(Scene& scene, const Input* input, ScriptLog* log, PhysicsSystem* physics, AudioSystem* audio)
+    : m_impl(std::make_unique<Impl>(scene, input, log, physics, audio)) {}
 LuaRuntime::~LuaRuntime() = default;
 
 bool LuaRuntime::start(const std::filesystem::path& projectRoot) {
@@ -213,7 +219,6 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
     impl.m_time = {};
     impl.m_physicsDebt = 0;
     impl.m_physicsSettings = impl.m_scene.physicsSettings;
-    if (impl.m_physics && !impl.m_physics->start()) { return impl.fail(impl.m_physics->error()); }
     for (std::size_t index = 0; index < scripts.size(); ++index) {
         if (scripts[index].bytecode != scripts.front().bytecode) {
             return impl.fail("Cannot mix source and bytecode script bundles");
@@ -245,6 +250,12 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
                 attachments.push_back({entity.id(), entity.name, component.path});
             }
         }
+    }
+    if (impl.m_physics && !impl.m_physics->start()) { return impl.fail(impl.m_physics->error()); }
+    if (impl.m_audio && !impl.m_audio->start()) {
+        impl.fail(impl.m_audio->error());
+        stop();
+        return false;
     }
     impl.m_messages.m_targets.reserve(attachments.size());
     for (const auto& attachment : attachments) {
@@ -289,7 +300,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
             }
             source = ownedSource;
         }
-        auto instance = std::make_unique<LuaRuntime>(impl.m_scene, impl.m_input, impl.m_log, impl.m_physics);
+        auto instance = std::make_unique<LuaRuntime>(impl.m_scene, impl.m_input, impl.m_log, impl.m_physics, impl.m_audio);
         instance->m_impl->m_sharedTime = &impl.m_time;
         instance->m_impl->m_sharedMessages = &impl.m_messages;
         instance->m_impl->m_targetIndex = targetIndex;
@@ -335,6 +346,7 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
     lua_newtable(state);
     lua::registerSceneBindings(state, impl.m_scene, impl.m_physics);
     lua::registerPhysicsBindings(state, impl.m_scene, impl.m_physics);
+    lua::registerAudioBindings(state, impl.m_scene, impl.m_audio);
     lua::registerMathBindings(state);
     lua::registerInputBindings(state, impl.m_input);
     lua::registerLogBindings(state, impl.m_log);
@@ -439,6 +451,7 @@ bool LuaRuntime::update(float deltaSeconds) {
             }
         }
     }
+    if (impl.m_audio) { impl.m_audio->update(deltaSeconds, impl.m_physics, time.m_timeScale); }
     return true;
 }
 
@@ -456,7 +469,10 @@ void LuaRuntime::stop() {
         impl.callback("onStop");
     }
     impl.close();
-    if (impl.m_physics && impl.m_sharedTime == &impl.m_time) { impl.m_physics->stop(); }
+    if (impl.m_sharedTime == &impl.m_time) {
+        if (impl.m_audio) { impl.m_audio->stop(); }
+        if (impl.m_physics) { impl.m_physics->stop(); }
+    }
 }
 bool LuaRuntime::running() const { return m_impl->m_running; }
 const std::string& LuaRuntime::error() const { return m_impl->m_error; }

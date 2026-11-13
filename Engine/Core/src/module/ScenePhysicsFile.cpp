@@ -37,7 +37,8 @@ bool readPhysicsSettings(std::istream &in, PhysicsSettings &s) {
          positive(s.fixedSeconds) && s.fixedSeconds <= 1 &&
          s.maxCatchUpSteps > 0 && s.maxCatchUpSteps <= 64 &&
          positive(s.interactionDistance) && positive(s.rebaseDistance) &&
-         positive(s.maxRelativeSpeed) && s.maxBodies > 0 &&
+         positive(s.maxRelativeSpeed) &&
+         s.maxRelativeSpeed <= kMaxPhysicsRelativeSpeed && s.maxBodies > 0 &&
          s.maxBodies <= 100000 && s.maxContactEvents > 0 &&
          s.maxContactEvents <= 1048576;
 }

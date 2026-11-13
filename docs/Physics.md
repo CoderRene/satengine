@@ -25,7 +25,7 @@ component; simulated velocities are runtime state.
 and rebase distances, relative-speed limit, and capacities. Settings are frozen
 for a Play session. **Show Colliders** in the scene viewport displays depth-tested
 outlines; selected shapes are orange, triggers blue, and solids green. Physics
-runs only during Play and in the standalone player. Stop restores authored data.
+runs only during Play and in the standalone player. Stop discards simulated state.
 
 ## Gravity and up
 

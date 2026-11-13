@@ -1,5 +1,8 @@
 #pragma once
 
+#include "AssetImportSettings.hpp"
+#include "AudioSystem.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -19,12 +22,14 @@ public:
     ContentPanel(const ContentPanel&) = delete;
     ContentPanel& operator=(const ContentPanel&) = delete;
 
-    void onImGuiRender();
+    void onImGuiRender(bool playMode);
+    void stopAudioPreview();
     void setSelectionHandler(std::function<void(std::string)> handler) { m_select = std::move(handler); }
-    void setSelectedAsset(std::string path) { m_selectedAsset = std::move(path); }
+    void setSelectedAsset(std::string path);
 
 private:
     void syncToProject();
+    void drawAudioControls();
     void drawBreadcrumb();
     void drawFolderList();
     void navigateInto(const std::filesystem::path& folderName);
@@ -39,6 +44,11 @@ private:
     std::uintptr_t m_returnIcon = 0;
     std::function<void(std::string)> m_select;
     std::string m_selectedAsset;
+    Scene m_previewScene;
+    AudioSystem m_preview{m_previewScene};
+    EntityId m_previewEntity = kInvalidEntityId;
+    AssetImportSettings m_audioImport;
+    std::string m_audioError;
     float m_zoom = 0.0f; // 0 = list, 1 = large icons
 };
 

@@ -10,6 +10,7 @@
 #include "HierarchyPanel.hpp"
 #include "InspectorPanel.hpp"
 #include "Math.hpp"
+#include "AudioSystem.hpp"
 #include "LuaRuntime.hpp"
 #include "Project.hpp"
 #include "PhysicsSystem.hpp"
@@ -33,12 +34,15 @@
 
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -46,9 +50,82 @@
 
 namespace sat {
 
+namespace {
+
+template <typename T>
+void applyEdit(const T& before, const T& after, T& live) {
+    if (before != after) {
+        live = after;
+    }
+}
+
+template <typename Vector>
+void applyVectorEdit(const Vector& before, const Vector& after, Vector& live) {
+    applyEdit(before.x, after.x, live.x);
+    applyEdit(before.y, after.y, live.y);
+    applyEdit(before.z, after.z, live.z);
+}
+
+void applyEntityEdits(const Entity& before, const Entity& after, Entity& live) {
+    applyEdit(before.name, after.name, live.name);
+    applyVectorEdit(before.transform.position, after.transform.position, live.transform.position);
+    applyVectorEdit(before.transform.rotation, after.transform.rotation, live.transform.rotation);
+    applyVectorEdit(before.transform.scale, after.transform.scale, live.transform.scale);
+    applyEdit(before.hasCamera, after.hasCamera, live.hasCamera);
+    applyEdit(before.camera.fieldOfView, after.camera.fieldOfView, live.camera.fieldOfView);
+    applyEdit(before.camera.nearClip, after.camera.nearClip, live.camera.nearClip);
+    applyEdit(before.camera.farClip, after.camera.farClip, live.camera.farClip);
+    for (int channel = 0; channel < 4; ++channel) {
+        applyEdit(before.camera.clearColor[channel], after.camera.clearColor[channel], live.camera.clearColor[channel]);
+    }
+    applyEdit(before.camera.isMain, after.camera.isMain, live.camera.isMain);
+    applyEdit(before.hasMesh, after.hasMesh, live.hasMesh);
+    applyEdit(before.mesh.meshPath, after.mesh.meshPath, live.mesh.meshPath);
+    applyEdit(before.mesh.texturePath, after.mesh.texturePath, live.mesh.texturePath);
+    applyEdit(before.mesh.primitive, after.mesh.primitive, live.mesh.primitive);
+    if (before.scripts != after.scripts) {
+        // Preserve runtime changes to script entries left alone by the editor.
+        for (const auto& script : before.scripts) {
+            const auto authored = std::ranges::find(after.scripts, script.path, &ScriptComponent::path);
+            const auto runtime = std::ranges::find(live.scripts, script.path, &ScriptComponent::path);
+            if (authored == after.scripts.end()) {
+                if (runtime != live.scripts.end()) { live.scripts.erase(runtime); }
+            } else if (authored->enabled != script.enabled && runtime != live.scripts.end()) {
+                runtime->enabled = authored->enabled;
+            }
+        }
+        for (const auto& script : after.scripts) {
+            if (std::ranges::find(before.scripts, script.path, &ScriptComponent::path) == before.scripts.end() &&
+                std::ranges::find(live.scripts, script.path, &ScriptComponent::path) == live.scripts.end()) {
+                live.scripts.push_back(script);
+            }
+        }
+    }
+    applyEdit(before.hasRigidBody, after.hasRigidBody, live.hasRigidBody);
+    if (before.hasRigidBody != after.hasRigidBody || before.rigidBody != after.rigidBody) {
+        live.rigidBody = after.rigidBody;
+    }
+    applyEdit(before.hasCollider, after.hasCollider, live.hasCollider);
+    if (before.hasCollider != after.hasCollider || before.collider != after.collider) {
+        live.collider = after.collider;
+    }
+    applyEdit(before.hasGravitySource, after.hasGravitySource, live.hasGravitySource);
+    if (before.hasGravitySource != after.hasGravitySource || before.gravitySource != after.gravitySource) {
+        live.gravitySource = after.gravitySource;
+    }
+    applyEdit(before.hasAudioSource, after.hasAudioSource, live.hasAudioSource);
+    if (before.hasAudioSource != after.hasAudioSource || before.audioSource != after.audioSource) {
+        live.audioSource = after.audioSource;
+    }
+    applyEdit(before.hasAudioListener, after.hasAudioListener, live.hasAudioListener);
+}
+
+} // namespace
+
 struct UiLayer::Impl {
     Impl(Scene& scene, Project& project, const Input& input)
-    : project(project), scene(scene), physics(scene), scripts(scene, &input, &scriptLog, &physics),
+    : project(project), scene(scene), physics(gameScene), audio(gameScene),
+      scripts(gameScene, &input, &scriptLog, &physics, &audio),
       savedSceneRevision(scene.editRevision()) {
         if (project.isOpen()) { recordLoadedScene(); }
     }
@@ -73,10 +150,15 @@ struct UiLayer::Impl {
     std::unique_ptr<ViewportPanel> viewport;
     std::unique_ptr<LuaLogPanel> luaLog;
 
+    // The Game view and runtime own a copy of the authored scene for each Play session.
+    Scene gameScene;
+    std::optional<Scene> appliedScene;
     ScriptLog scriptLog;
     PhysicsSystem physics;
+    AudioSystem audio;
     LuaRuntime scripts;
-    Scene editScene;
+    std::optional<Scene> prePlayScene;
+    std::function<void()> afterPlayDecision;
     bool playMode = false;
     bool focusGameView = false;
     bool focusLuaLog = false;
@@ -85,9 +167,16 @@ struct UiLayer::Impl {
     std::uint64_t savedSceneRevision;
     bool hasSavedScene = false;
 
+    [[nodiscard]] bool playDecisionPending() const {
+        return !playMode && prePlayScene.has_value();
+    }
+
+    [[nodiscard]] const Scene& sceneForGameView() const {
+        return playMode ? gameScene : scene;
+    }
+
     [[nodiscard]] bool hasUnsavedChanges() const {
-        const Scene& authoredScene = playMode ? editScene : scene;
-        return authoredScene.editRevision() != savedSceneRevision ||
+        return scene.editRevision() != savedSceneRevision ||
             (project.isOpen() && !hasSavedScene);
     }
 
@@ -100,11 +189,73 @@ struct UiLayer::Impl {
 
     bool saveScene() {
         if (!project.isOpen()) { return true; }
-        const Scene& authoredScene = playMode ? editScene : scene;
-        if (!project.saveScene(authoredScene, sceneError)) { return false; }
-        savedSceneRevision = authoredScene.editRevision();
+        if (!project.saveScene(scene, sceneError)) { return false; }
+        savedSceneRevision = scene.editRevision();
         hasSavedScene = true;
         return true;
+    }
+
+    // Compare authored revisions so simulation changes never enter the saved scene.
+    void applySceneEdits() {
+        if (!playMode || scene.editRevision() == appliedScene->editRevision()) { return; }
+
+        if (scene.destructionRevision() != appliedScene->destructionRevision()) {
+            for (const Entity& before : appliedScene->entities()) {
+                if (!scene.entityById(before.id())) {
+                    (void)gameScene.destroyEntity(before.id());
+                }
+            }
+        }
+        for (const Entity& after : scene.entities()) {
+            const Entity* before = appliedScene->entityById(after.id());
+            if (!before) {
+                gameScene.addEntityCopy(after);
+            } else if (Entity* live = gameScene.entityById(after.id())) {
+                applyEntityEdits(*before, after, *live);
+                if (before->hasAudioSource && !after.hasAudioSource) {
+                    (void)audio.stopSound(after.id());
+                } else if (after.hasAudioSource) {
+                    if (before->audioSource.volume != after.audioSource.volume) {
+                        (void)audio.setVolume(after.id(), after.audioSource.volume);
+                    }
+                    if (before->audioSource.pitch != after.audioSource.pitch) {
+                        (void)audio.setPitch(after.id(), after.audioSource.pitch);
+                    }
+                }
+            } else {
+                continue;
+            }
+            const auto& scale = after.transform.scale;
+            const bool colliderResized = before && after.hasCollider && before->transform.scale != scale &&
+                scale.x > 0 && scale.x == scale.y && scale.x == scale.z;
+            const bool bodyChanged = before && (before->hasCollider != after.hasCollider ||
+                before->hasRigidBody != after.hasRigidBody ||
+                (after.hasCollider && (before->collider != after.collider || before->rigidBody != after.rigidBody)));
+            if (physics.running() && (colliderResized || bodyChanged || (!before && after.hasCollider))) {
+                if (!physics.refreshBody(after.id(),
+                        !before || before->rigidBody.linearVelocity != after.rigidBody.linearVelocity,
+                        !before || before->rigidBody.angularVelocity != after.rigidBody.angularVelocity)) {
+                    sceneError = physics.error();
+                }
+            }
+            if (after.hasCamera && after.camera.isMain &&
+                (!before || !before->hasCamera || !before->camera.isMain)) {
+                (void)gameScene.setMainCameraById(after.id());
+            }
+        }
+        if (audio.running()) {
+            const auto& before = appliedScene->audioSettings;
+            const auto& after = scene.audioSettings;
+            if (before.masterVolume != after.masterVolume) {
+                audio.setMasterVolume(after.masterVolume);
+            }
+            for (std::size_t index = 0; index < kAudioBusCount; ++index) {
+                if (before.busVolumes[index] != after.busVolumes[index]) {
+                    (void)audio.setBusVolume(static_cast<AudioBus>(index), after.busVolumes[index]);
+                }
+            }
+        }
+        *appliedScene = scene;
     }
 
     void stopPlay() {
@@ -116,14 +267,32 @@ struct UiLayer::Impl {
             scriptLog.error(scripts.error());
             focusLuaLog = true;
         }
-        scene = std::move(editScene);
+        gameScene.clear();
+        appliedScene.reset();
         playMode = false;
         focusGameView = false;
         if (viewport) {
             viewport->resetInteraction();
         }
+        if (scene.editRevision() == prePlayScene->editRevision()) {
+            prePlayScene.reset();
+        }
+    }
+
+    void discardPlayEdits() {
+        scene = std::move(*prePlayScene);
+        prePlayScene.reset();
         if (hierarchy) {
             hierarchy->setSelectedIndex(-1);
+        }
+    }
+
+    void afterStoppingPlay(std::function<void()> action) {
+        stopPlay();
+        if (playDecisionPending()) {
+            afterPlayDecision = std::move(action);
+        } else {
+            action();
         }
     }
 
@@ -131,14 +300,17 @@ struct UiLayer::Impl {
         assetImports->request([this] { startPlayNow(); });
     }
     void startPlayNow() {
-        if (playMode || !project.isOpen()) {
+        if (playMode || playDecisionPending() || !project.isOpen()) {
             return;
         }
         if (viewport) { viewport->resetInteraction(); }
         if (!saveScene()) {
             return;
         }
-        editScene = scene;
+        content->stopAudioPreview();
+        prePlayScene = scene;
+        appliedScene = scene;
+        gameScene = scene;
         scriptLog.clear();
         playMode = true;
         if (viewport) {
@@ -153,44 +325,46 @@ struct UiLayer::Impl {
     GameBuilder builder{std::filesystem::path(SAT_ENGINE_SOURCE_DIR)};
     bool showBuildStatus = false;
     bool showPhysicsSettings = false;
+    bool showAudioSettings = false;
     bool openNewProjectModal = false;
     std::filesystem::path newProjectParent;
     char newProjectName[128] = {};
 
     void openProject(const std::filesystem::path& folder) {
-        assetImports->request([this, folder] { (void)openProjectNow(folder); });
+        assetImports->request([this, folder] { openProjectNow(folder); });
     }
-    bool openProjectNow(const std::filesystem::path& folder) {
+    void openProjectNow(const std::filesystem::path& folder) {
         Project opened;
         if (!opened.open(folder)) {
             recent.remove(folder);
-            return false;
+            return;
         }
         if (project.isOpen() && opened.root() == project.root()) {
-            return true;
+            return;
         }
         Scene loaded;
         if (!opened.loadScene(loaded, sceneError)) {
-            return false;
+            return;
         }
-        stopPlay();
-        if (viewport) { viewport->resetInteraction(); }
-        if (!saveScene()) {
-            return false;
-        }
-        assetImports->clear();
-        content->setSelectedAsset({});
-        project = std::move(opened);
-        scene = std::move(loaded);
-        recordLoadedScene();
-        renderer->setAssetReader(fileAssetReader(project.root()));
-        if (hierarchy) { hierarchy->setSelectedIndex(-1); }
-        if (viewport) { viewport->resetInteraction(); }
-        recent.add(project.root());
-        if (!syncLuaToolingFor(project)) {
-            std::cerr << "Warning: failed to sync LuaDefs into the project (Cursor linting may not work)\n";
-        }
-        return true;
+        afterStoppingPlay([this, opened = std::move(opened), loaded = std::move(loaded)]() mutable {
+            if (viewport) { viewport->resetInteraction(); }
+            if (!saveScene()) {
+                return;
+            }
+            assetImports->clear();
+            content->setSelectedAsset({});
+            project = std::move(opened);
+            scene = std::move(loaded);
+            recordLoadedScene();
+            renderer->setAssetReader(fileAssetReader(project.root()));
+            audio.setAssetReader(fileAssetReader(project.root()));
+            if (hierarchy) { hierarchy->setSelectedIndex(-1); }
+            if (viewport) { viewport->resetInteraction(); }
+            recent.add(project.root());
+            if (!syncLuaToolingFor(project)) {
+                std::cerr << "Warning: failed to sync LuaDefs into the project (Cursor linting may not work)\n";
+            }
+        });
     }
 
     bool syncLuaToolingFor(const Project& opened) const {
@@ -289,6 +463,7 @@ UiLayer::UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& proj
     }
 
     renderer.setAssetReader(fileAssetReader(m_impl->project.root()));
+    m_impl->audio.setAssetReader(fileAssetReader(m_impl->project.root()));
     m_impl->hierarchy = std::make_unique<HierarchyPanel>(m_impl->scene);
     m_impl->inspector = std::make_unique<InspectorPanel>(m_impl->scene, m_impl->project);
     m_impl->assetImports = std::make_unique<AssetImportPanel>(m_impl->project, renderer);
@@ -298,7 +473,10 @@ UiLayer::UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& proj
         m_impl->assetImports->request([this, path = std::move(path)] {
             m_impl->viewport->resetInteraction();
             m_impl->hierarchy->setSelectedIndex(-1);
-            if (isMeshAssetPath(path) || isTextureAssetPath(path)) {
+            if (isAudioAssetPath(path)) {
+                m_impl->assetImports->clear();
+                m_impl->content->setSelectedAsset(path);
+            } else if (isMeshAssetPath(path) || isTextureAssetPath(path)) {
                 m_impl->assetImports->select(path);
                 m_impl->content->setSelectedAsset(path);
             } else {
@@ -307,7 +485,7 @@ UiLayer::UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& proj
             }
         });
     });
-    m_impl->viewport = std::make_unique<ViewportPanel>(m_impl->scene, renderer);
+    m_impl->viewport = std::make_unique<ViewportPanel>(m_impl->scene, renderer, *m_impl->window);
     m_impl->luaLog = std::make_unique<LuaLogPanel>(m_impl->scriptLog);
 
     IMGUI_CHECKVERSION();
@@ -343,6 +521,7 @@ UiLayer::UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& proj
 UiLayer::~UiLayer() {
     if (m_impl->viewport) { m_impl->viewport->resetInteraction(); }
     m_impl->stopPlay();
+    if (m_impl->playDecisionPending()) { m_impl->discardPlayEdits(); }
     if (!m_impl->discardSceneOnClose && !m_impl->saveScene()) {
         std::cerr << m_impl->sceneError << '\n';
     }
@@ -372,7 +551,8 @@ void UiLayer::beginFrame() {
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    const bool canSaveScene = m_impl->project.isOpen() && !m_impl->playMode;
+    const bool canSaveScene = m_impl->project.isOpen() && !m_impl->playMode &&
+        !m_impl->playDecisionPending();
     const ImGuiIO& io = ImGui::GetIO();
     if (canSaveScene && io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper &&
         ImGui::IsKeyPressed(ImGuiKey_S, false)) {
@@ -402,18 +582,21 @@ void UiLayer::beginFrame() {
 
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("New Project...")) {
+            const bool canSwitchProject = !m_impl->playDecisionPending();
+            if (ImGui::MenuItem("New Project...", nullptr, false, canSwitchProject)) {
                 const std::filesystem::path folder =
                     openFolderDialog(m_impl->window, "Select Parent Folder");
                 if (!folder.empty()) {
                     m_impl->assetImports->request([this, folder] {
-                        m_impl->newProjectParent = folder;
-                        m_impl->newProjectName[0] = '\0';
-                        m_impl->openNewProjectModal = true;
+                        m_impl->afterStoppingPlay([this, folder] {
+                            m_impl->newProjectParent = folder;
+                            m_impl->newProjectName[0] = '\0';
+                            m_impl->openNewProjectModal = true;
+                        });
                     });
                 }
             }
-            if (ImGui::MenuItem("Open Project...")) {
+            if (ImGui::MenuItem("Open Project...", nullptr, false, canSwitchProject)) {
                 const std::filesystem::path folder =
                     openFolderDialog(m_impl->window, "Open Project Folder");
                 if (!folder.empty()) {
@@ -430,7 +613,7 @@ void UiLayer::beginFrame() {
                     if (m_impl->assetImports->active()) { m_impl->assetImports->select(m_impl->assetImports->path()); }
                 });
             }
-            if (ImGui::BeginMenu("Recent...")) {
+            if (ImGui::BeginMenu("Recent...", canSwitchProject)) {
                 const auto& recent = m_impl->recent.entries();
                 if (recent.empty()) {
                     ImGui::MenuItem("No recent projects", nullptr, false, false);
@@ -458,12 +641,14 @@ void UiLayer::beginFrame() {
         }
 
         if (ImGui::BeginMenu("Scene")) {
+            ImGui::MenuItem("Audio Settings", nullptr, &m_impl->showAudioSettings);
             ImGui::MenuItem("Physics Settings", nullptr, &m_impl->showPhysicsSettings);
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Build")) {
             const bool building = m_impl->builder.status() == GameBuilder::Status::Building;
-            const bool canBuild = m_impl->project.isOpen() && !m_impl->playMode && !building;
+            const bool canBuild = m_impl->project.isOpen() && !m_impl->playMode &&
+                !m_impl->playDecisionPending() && !building;
             if (ImGui::MenuItem("Build Standalone", nullptr, false, canBuild)) {
                 if (m_impl->saveScene()) {
                     const auto obfuscatorFolder = openFolderDialog(m_impl->window,
@@ -490,13 +675,15 @@ void UiLayer::beginFrame() {
             ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f), "* Unsaved changes");
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("%s", m_impl->project.isOpen()
-                    ? "Scene edits have not been saved. Use Ctrl+S or File > Save Scene."
+                    ? (m_impl->playMode || m_impl->playDecisionPending()
+                        ? "Save or discard scene edits after Play."
+                        : "Scene edits have not been saved. Use Ctrl+S or File > Save Scene.")
                     : "Open or create a project to save your scene.");
             }
         }
 
         const bool playing = m_impl->playMode;
-        ImGui::BeginDisabled(!playing && !m_impl->project.isOpen());
+        ImGui::BeginDisabled(!playing && (!m_impl->project.isOpen() || m_impl->playDecisionPending()));
         ImGui::PushStyleColor(ImGuiCol_Button, playing
             ? ImVec4(0.55f, 0.16f, 0.16f, 1.0f)
             : ImVec4(0.12f, 0.40f, 0.23f, 1.0f));
@@ -525,7 +712,7 @@ void UiLayer::beginFrame() {
         ImGui::PopStyleColor(3);
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
             ImGui::SetTooltip("%s", playing
-                ? "Stop the game and restore the editor scene"
+                ? "Stop the game and review scene edits"
                 : (m_impl->project.isOpen()
                     ? "Run enabled entity scripts in the Game view"
                     : "Open or create a project to play"));
@@ -543,9 +730,37 @@ void UiLayer::beginFrame() {
         ImGui::EndMenuBar();
     }
 
+    if (m_impl->showAudioSettings) {
+        if (ImGui::Begin("Audio Settings", &m_impl->showAudioSettings)) {
+            auto& settings = m_impl->scene.audioSettings;
+            ImGui::BeginDisabled(m_impl->playDecisionPending());
+            bool changed = ImGui::DragFloat("Master Volume", &settings.masterVolume, 0.01f, 0.0f, 16.0f,
+                "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            constexpr const char* kBusNames[] = {"SFX", "Music", "UI"};
+            for (std::size_t index = 0; index < kAudioBusCount; ++index) {
+                ImGui::PushID(static_cast<int>(index));
+                ImGui::TextUnformatted(kBusNames[index]);
+                changed |= ImGui::DragFloat("Volume", &settings.busVolumes[index], 0.01f, 0.0f, 16.0f,
+                    "%.2f", ImGuiSliderFlags_AlwaysClamp);
+                changed |= ImGui::Checkbox("Follow Time Scale", &settings.followTimeScale[index]);
+                ImGui::PopID();
+            }
+            changed |= ImGui::DragFloat("Speed of Sound (m/s)", &settings.speedOfSound, 1.0f, 1.0f, 10000.0f,
+                "%.1f", ImGuiSliderFlags_AlwaysClamp);
+            constexpr std::uint32_t kMinVoices = 1;
+            constexpr std::uint32_t kMinVirtual = 0;
+            changed |= ImGui::SliderScalar("Mixed Voices", ImGuiDataType_U32, &settings.maxVoices,
+                &kMinVoices, &kMaxAudioVoices);
+            changed |= ImGui::SliderScalar("Virtual Voices", ImGuiDataType_U32, &settings.maxVirtualVoices,
+                &kMinVirtual, &kMaxAudioVoices);
+            if (changed) { m_impl->scene.markEdited(); }
+            ImGui::EndDisabled();
+        }
+        ImGui::End();
+    }
     if (m_impl->showPhysicsSettings) {
         if (ImGui::Begin("Physics Settings", &m_impl->showPhysicsSettings)) {
-            ImGui::BeginDisabled(m_impl->playMode);
+            ImGui::BeginDisabled(m_impl->playDecisionPending());
             if (drawPhysicsSettings(m_impl->scene.physicsSettings)) { m_impl->scene.markEdited(); }
             ImGui::EndDisabled();
             if (m_impl->playMode) { ImGui::Text("Active local worlds: %zu", m_impl->physics.frameCount()); }
@@ -649,10 +864,10 @@ void UiLayer::beginFrame() {
 
     ImGui::End();
 
-    ImGui::BeginDisabled(m_impl->playMode);
+    const bool sceneReadOnly = m_impl->playDecisionPending();
     if (m_impl->hierarchy) {
         const int previous = m_impl->hierarchy->selectedIndex();
-        m_impl->hierarchy->onImGuiRender(m_impl->playMode);
+        m_impl->hierarchy->onImGuiRender(sceneReadOnly);
         if (m_impl->hierarchy->selectionActivated()) {
             const int selected = m_impl->hierarchy->selectedIndex();
             const Entity* entity = selected >= 0 ? m_impl->scene.entity(static_cast<std::size_t>(selected)) : nullptr;
@@ -666,13 +881,12 @@ void UiLayer::beginFrame() {
             });
         }
     }
-    ImGui::EndDisabled();
 
     if (m_impl->viewport) {
         int selected = m_impl->hierarchy ? m_impl->hierarchy->selectedIndex() : -1;
         const bool focusGame = m_impl->focusGameView;
         m_impl->focusGameView = false;
-        m_impl->viewport->onImGuiRender(selected, m_impl->playMode, focusGame);
+        m_impl->viewport->onImGuiRender(selected, m_impl->sceneForGameView(), sceneReadOnly, focusGame);
         if (m_impl->hierarchy && m_impl->viewport->selectionActivated()) {
             const Entity* entity = selected >= 0 ? m_impl->scene.entity(static_cast<std::size_t>(selected)) : nullptr;
             const EntityId id = entity ? entity->id() : kInvalidEntityId;
@@ -685,18 +899,20 @@ void UiLayer::beginFrame() {
         }
     }
 
-    ImGui::BeginDisabled(m_impl->playMode);
+    ImGui::BeginDisabled(sceneReadOnly);
     if (m_impl->assetImports->active()) {
         m_impl->assetImports->draw(m_impl->playMode);
     } else if (m_impl->inspector) {
         const int selected =
             m_impl->hierarchy ? m_impl->hierarchy->selectedIndex() : -1;
-        m_impl->inspector->onImGuiRender(selected);
+        const Entity* authored = selected >= 0 ? m_impl->scene.entity(static_cast<std::size_t>(selected)) : nullptr;
+        Entity* live = m_impl->playMode && authored ? m_impl->gameScene.entityById(authored->id()) : nullptr;
+        m_impl->inspector->onImGuiRender(selected, live);
     }
     ImGui::EndDisabled();
 
     if (m_impl->content) {
-        m_impl->content->onImGuiRender();
+        m_impl->content->onImGuiRender(m_impl->playMode);
     }
 
     if (m_impl->luaLog) {
@@ -721,7 +937,6 @@ void UiLayer::beginFrame() {
             ImGui::BeginDisabled();
         }
         if (ImGui::Button("Create", ImVec2(120.0f, 0.0f))) {
-            m_impl->stopPlay();
             if (m_impl->viewport) { m_impl->viewport->resetInteraction(); }
             Project created;
             if (m_impl->saveScene() && created.create(
@@ -731,6 +946,7 @@ void UiLayer::beginFrame() {
                     m_impl->assetImports->clear();
                     m_impl->content->setSelectedAsset({});
                     m_impl->project = std::move(created);
+                    m_impl->audio.setAssetReader(fileAssetReader(m_impl->project.root()));
                     m_impl->scene = std::move(loaded);
                     m_impl->recordLoadedScene();
                     m_impl->assetImports->request([this] {
@@ -758,8 +974,18 @@ void UiLayer::beginFrame() {
 }
 
 bool UiLayer::requestClose() {
-    if (m_impl->closeApproved ||
-        (!m_impl->hasUnsavedChanges() && !m_impl->assetImports->dirty())) {
+    if (m_impl->closeApproved) { return true; }
+    if (m_impl->playDecisionPending()) { return false; }
+    if (m_impl->playMode) {
+        m_impl->stopPlay();
+        if (m_impl->playDecisionPending()) {
+            m_impl->afterPlayDecision = [this] {
+                glfwSetWindowShouldClose(m_impl->window, GLFW_TRUE);
+            };
+            return false;
+        }
+    }
+    if (!m_impl->hasUnsavedChanges() && !m_impl->assetImports->dirty()) {
         return true;
     }
     m_impl->assetImports->request([this] {
@@ -779,6 +1005,30 @@ void UiLayer::endFrame() {
     }
 
     m_impl->assetImports->drawPrompt();
+
+    if (m_impl->playDecisionPending() && !ImGui::IsPopupOpen("Play Mode Changes")) {
+        ImGui::OpenPopup("Play Mode Changes");
+    }
+    if (ImGui::BeginPopupModal("Play Mode Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Save the scene edits you made during Play?");
+        if (!m_impl->sceneError.empty()) {
+            ImGui::TextWrapped("%s", m_impl->sceneError.c_str());
+        }
+        if (ImGui::Button("Save Changes") && m_impl->saveScene()) {
+            m_impl->prePlayScene.reset();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Discard Changes")) {
+            m_impl->discardPlayEdits();
+        }
+        const bool resolved = !m_impl->playDecisionPending();
+        if (resolved) { ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+        if (resolved) {
+            auto action = std::exchange(m_impl->afterPlayDecision, {});
+            if (action) { action(); }
+        }
+    }
 
     if (m_impl->openClosePrompt) {
         ImGui::OpenPopup("Unsaved Scene Changes");
@@ -826,7 +1076,8 @@ void UiLayer::endFrame() {
     const int sceneViewWidth = m_impl->viewport ? m_impl->viewport->sceneViewWidth() : 0;
     const int sceneViewHeight = m_impl->viewport ? m_impl->viewport->sceneViewHeight() : 0;
 
-    m_impl->gameRenderData.update(m_impl->scene, gameViewWidth, gameViewHeight);
+    m_impl->applySceneEdits();
+    m_impl->gameRenderData.update(m_impl->sceneForGameView(), gameViewWidth, gameViewHeight);
     const auto& gameCamera = m_impl->gameRenderData.camera();
 
     auto& meshInstances = m_impl->sceneMeshes;
@@ -840,35 +1091,39 @@ void UiLayer::endFrame() {
         (sceneViewHeight > 0)
             ? static_cast<float>(sceneViewWidth) / static_cast<float>(sceneViewHeight)
             : 1.0f;
-    const auto& entities = m_impl->scene.entities();
-    for (std::size_t i = 0; i < entities.size(); ++i) {
+    const bool showLiveScene = m_impl->playMode && m_impl->viewport && m_impl->viewport->showingLiveScene();
+    const Scene& visibleScene = showLiveScene ? m_impl->gameScene : m_impl->scene;
+    const Entity* selected = selectedEntity >= 0 ? m_impl->scene.entity(static_cast<std::size_t>(selectedEntity)) : nullptr;
+    const EntityId selectedId = selected ? selected->id() : kInvalidEntityId;
+    for (const Entity& entity : visibleScene.entities()) {
+        const bool isSelected = entity.id() == selectedId;
         if (m_impl->viewport && m_impl->viewport->showColliders()) {
-            appendColliderLines(entities[i], sceneCamera.renderOrigin, static_cast<int>(i) == selectedEntity, colliderLines);
+            appendColliderLines(entity, sceneCamera.renderOrigin, isSelected, colliderLines);
         }
-        if (entities[i].hasMesh) {
+        if (entity.hasMesh) {
             MeshInstance instance{};
-            instance.world = matrixFromTransform(entities[i].transform, sceneCamera.renderOrigin);
-            instance.meshPath = entities[i].mesh.meshPath;
-            instance.texturePath = entities[i].mesh.texturePath;
-            switch (entities[i].mesh.primitive) {
+            instance.world = matrixFromTransform(entity.transform, sceneCamera.renderOrigin);
+            instance.meshPath = entity.mesh.meshPath;
+            instance.texturePath = entity.mesh.texturePath;
+            switch (entity.mesh.primitive) {
             case MeshComponent::Primitive::Cube:
                 instance.primitive = MeshPrimitive::Cube;
                 break;
             }
-            if (static_cast<int>(i) == selectedEntity) {
+            if (isSelected) {
                 selectedMesh = static_cast<int>(meshInstances.size());
             }
             meshInstances.push_back(instance);
         }
-        if (entities[i].hasCamera) {
+        if (entity.hasCamera) {
             CameraFrustumInstance frustum{};
-            frustum.position = toVec3(entities[i].transform.position - sceneCamera.renderOrigin);
-            frustum.rotation = entities[i].transform.rotation;
-            frustum.fieldOfView = entities[i].camera.fieldOfView;
-            frustum.nearClip = entities[i].camera.nearClip;
-            frustum.farClip = entities[i].camera.farClip;
+            frustum.position = toVec3(entity.transform.position - sceneCamera.renderOrigin);
+            frustum.rotation = entity.transform.rotation;
+            frustum.fieldOfView = entity.camera.fieldOfView;
+            frustum.nearClip = entity.camera.nearClip;
+            frustum.farClip = entity.camera.farClip;
             frustum.aspect = sceneAspect;
-            frustum.selected = (static_cast<int>(i) == selectedEntity);
+            frustum.selected = isSelected;
             frustumInstances.push_back(frustum);
         }
     }
@@ -885,12 +1140,10 @@ void UiLayer::endFrame() {
     sceneDraw.frustumCount = static_cast<int>(frustumInstances.size());
     sceneDraw.drawGrid = true;
     sceneDraw.drawEditorOverlay = true;
-    if (selectedEntity >= 0) {
-        const Entity* selected = m_impl->scene.entity(static_cast<std::size_t>(selectedEntity));
-        if (selected != nullptr) {
-            sceneDraw.showTransformGizmo = true;
-            sceneDraw.gizmo = m_impl->viewport->gizmo(*selected);
-        }
+    const Entity* gizmoEntity = showLiveScene ? visibleScene.entityById(selectedId) : selected;
+    if (m_impl->viewport && gizmoEntity) {
+        sceneDraw.showTransformGizmo = true;
+        sceneDraw.gizmo = m_impl->viewport->gizmo(*gizmoEntity);
     }
 
     m_impl->renderer->renderSceneView(sceneCamera, sceneDraw);

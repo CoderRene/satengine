@@ -25,3 +25,22 @@ function onStop() end
 ---@param message string
 ---@param payload nil|boolean|number|string
 function onMessage(sender, message, payload) end
+
+--- Optional. Called before each fixed physics tick; deltaSeconds is simulated time.
+---@param deltaSeconds number
+function onFixedUpdate(deltaSeconds) end
+
+--- Optional. One event per entity pair, aggregated across compound shapes.
+---@param other EntityId
+function onCollisionEnter(other) end
+---@param other EntityId
+function onCollisionStay(other) end
+--- The counterpart may have been destroyed; check sat.isEntityValid.
+---@param other EntityId
+function onCollisionExit(other) end
+---@param other EntityId
+function onTriggerEnter(other) end
+---@param other EntityId
+function onTriggerStay(other) end
+---@param other EntityId
+function onTriggerExit(other) end

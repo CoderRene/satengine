@@ -1,5 +1,6 @@
 #include "ContentPanel.hpp"
 
+#include "AssetData.hpp"
 #include "EnginePaths.hpp"
 #include "Project.hpp"
 #include "Renderer.hpp"
@@ -93,12 +94,14 @@ ContentPanel::~ContentPanel() {
 
 void ContentPanel::syncToProject() {
     if (!m_project->isOpen()) {
+        setSelectedAsset({});
         m_trackedRoot.clear();
         m_relative.clear();
         return;
     }
 
     if (m_trackedRoot != m_project->root()) {
+        setSelectedAsset({});
         m_trackedRoot = m_project->root();
         m_relative.clear();
     }
@@ -115,13 +118,72 @@ void ContentPanel::navigateUp() {
     m_relative = m_relative.parent_path();
 }
 
-void ContentPanel::onImGuiRender() {
+void ContentPanel::stopAudioPreview() {
+    m_preview.stop();
+}
+
+void ContentPanel::setSelectedAsset(std::string path) {
+    if (path == m_selectedAsset) { return; }
+    stopAudioPreview();
+    m_selectedAsset = std::move(path);
+    m_audioError.clear();
+    m_audioImport = {};
+    if (isAudioAssetPath(m_selectedAsset)) {
+        const auto source = m_project->root() / std::filesystem::path(
+            std::u8string(m_selectedAsset.begin(), m_selectedAsset.end()));
+        if (!loadImportSettings(source, m_audioImport, m_audioError)) {
+            m_audioError = "Cannot read audio import settings: " + m_audioError;
+        }
+    }
+}
+
+void ContentPanel::drawAudioControls() {
+    if (!isAudioAssetPath(m_selectedAsset)) { return; }
+    ImGui::TextUnformatted(m_selectedAsset.c_str());
+    if (ImGui::Button("Preview Audio")) {
+        m_preview.setAssetReader(fileAssetReader(m_project->root()));
+        m_previewScene.clear();
+        auto& entity = m_previewScene.createEntity("Preview");
+        m_previewEntity = entity.id();
+        entity.hasAudioSource = true;
+        entity.audioSource.clipPath = m_selectedAsset;
+        entity.audioSource.spatial = false;
+        entity.audioSource.volume = 0.5f;
+        m_audioError.clear();
+        if (!m_preview.start()) { m_audioError = m_preview.error(); }
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!m_preview.running());
+    if (ImGui::Button("Stop Preview")) { stopAudioPreview(); }
+    ImGui::EndDisabled();
+
+    int mode = static_cast<int>(m_audioImport.audioLoadMode);
+    if (ImGui::Combo("Audio Import", &mode, "Auto\0Decode\0Stream\0")) {
+        auto settings = m_audioImport;
+        settings.audioLoadMode = static_cast<AudioLoadMode>(mode);
+        const auto source = m_project->root() / std::filesystem::path(
+            std::u8string(m_selectedAsset.begin(), m_selectedAsset.end()));
+        if (saveImportSettings(source, settings, m_audioError)) {
+            m_audioImport = settings;
+            stopAudioPreview();
+        }
+    }
+    if (!m_audioError.empty()) { ImGui::TextWrapped("%s", m_audioError.c_str()); }
+}
+
+void ContentPanel::onImGuiRender(bool playMode) {
     syncToProject();
+    if (m_preview.running() && (playMode || !m_preview.isPlaying(m_previewEntity))) {
+        stopAudioPreview();
+    }
 
     ImGui::Begin("Content");
     if (m_project->isOpen()) {
         drawBreadcrumb();
         ImGui::Separator();
+        ImGui::BeginDisabled(playMode);
+        drawAudioControls();
+        ImGui::EndDisabled();
         drawFolderList();
     } else {
         ImGui::TextUnformatted("Create or open a project from File to browse files.");

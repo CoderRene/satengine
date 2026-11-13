@@ -6,6 +6,47 @@
 
 ---@alias EntityId integer Opaque positive entity id from the scene.
 
+---@class SatAudio
+local SatAudio = {}
+
+---@param entity EntityId
+function SatAudio.play(entity) end
+
+---@param entity EntityId
+function SatAudio.stop(entity) end
+
+---@param entity EntityId
+function SatAudio.pause(entity) end
+
+---@param entity EntityId
+function SatAudio.resume(entity) end
+
+---@param entity EntityId
+---@return boolean
+function SatAudio.isPlaying(entity) end
+
+---@param entity EntityId
+---@param volume number
+function SatAudio.setVolume(entity, volume) end
+
+---@param entity EntityId
+---@param pitch number
+function SatAudio.setPitch(entity, pitch) end
+
+---@param path string
+---@param x number
+---@param y number
+---@param z number
+---@param volume number
+function SatAudio.playOneShot(path, x, y, z, volume) end
+
+---@param bus "sfx"|"music"|"ui"
+---@param volume number
+function SatAudio.setBusVolume(bus, volume) end
+
+---@param volume number
+function SatAudio.setMasterVolume(volume) end
+
 ---@class SatInput
 local SatInput = {}
 
@@ -137,6 +178,108 @@ function SatMath.forward(pitch, yaw, roll) end
 ---@return number y
 ---@return number z
 function SatMath.cameraForward(pitch, yaw) end
+
+---@class SatPhysics
+local SatPhysics = {}
+
+---@param entity EntityId
+---@return integer
+function SatPhysics.frameId(entity) end
+
+---@param entity EntityId
+---@return number
+---@return number
+---@return number
+function SatPhysics.linearVelocity(entity) end
+
+---@param entity EntityId
+---@return number
+---@return number
+---@return number
+function SatPhysics.angularVelocity(entity) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.setLinearVelocity(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.setAngularVelocity(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.addForce(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.addTorque(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.addImpulse(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+function SatPhysics.addAngularImpulse(entity, x, y, z) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+---@param rx number
+---@param ry number
+---@param rz number
+---@param clearVelocity? boolean
+function SatPhysics.teleport(entity, x, y, z, rx, ry, rz, clearVelocity?) end
+
+---@param entity EntityId
+---@param x number
+---@param y number
+---@param z number
+---@param rx number
+---@param ry number
+---@param rz number
+function SatPhysics.moveKinematic(entity, x, y, z, rx, ry, rz) end
+
+---@param x number
+---@param y number
+---@param z number
+---@return number
+---@return number
+---@return number
+function SatPhysics.gravityAt(x, y, z) end
+
+---@param x number
+---@param y number
+---@param z number
+---@return number?
+---@return number?
+---@return number?
+function SatPhysics.upAt(x, y, z) end
+
+---@param x number
+---@param y number
+---@param z number
+---@param dx number
+---@param dy number
+---@param dz number
+---@param distance number
+---@param ignore? EntityId
+---@param includeTriggers? boolean
+---@return table?
+function SatPhysics.raycast(x, y, z, dx, dy, dz, distance, ignore?, includeTriggers?) end
 
 ---@class SatTime
 local SatTime = {}
@@ -292,18 +435,26 @@ function SatTime.setTimeScale(scale) end
 ---@field Button8 integer
 
 ---@class sat
+---@field audio SatAudio
 ---@field input SatInput
 ---@field math SatMath
+---@field physics SatPhysics
 ---@field time SatTime
 ---@field Key SatKey
 ---@field MouseButton SatMouseButton
 sat = {}
+
+---@type SatAudio
+sat.audio = {}
 
 ---@type SatInput
 sat.input = {}
 
 ---@type SatMath
 sat.math = {}
+
+---@type SatPhysics
+sat.physics = {}
 
 ---@type SatTime
 sat.time = {}

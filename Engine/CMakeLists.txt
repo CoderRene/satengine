@@ -14,6 +14,7 @@ add_library(SatScene STATIC
     Core/src/Scene.cpp
     Core/src/SceneFile.cpp
     Core/src/module/ScenePhysicsFile.cpp
+    Core/src/module/SceneAudioFile.cpp
     Renderer/src/SceneRenderData.cpp
     Renderer/src/SceneDraw.cpp
     Renderer/src/ColliderLines.cpp
@@ -100,6 +101,7 @@ target_include_directories(SatInput PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Core/inc
 target_compile_features(SatInput PUBLIC cxx_std_20)
 
 add_subdirectory(Physics)
+add_subdirectory(Audio)
 
 add_library(SatScripting STATIC
     Core/src/LuaRuntime.cpp
@@ -111,6 +113,7 @@ add_library(SatScripting STATIC
     Core/src/module/LuaRuntimeModules/LuaMessageBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaMathBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaPhysicsBindings.cpp
+    Core/src/module/LuaRuntimeModules/LuaAudioBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaPackageConfig.cpp
     Core/src/ScriptLog.cpp
     Core/src/module/LuaRuntimeModules/LuaLogBindings.hpp
@@ -119,7 +122,7 @@ add_library(SatScripting STATIC
 target_include_directories(SatScripting PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/src"
 )
-target_link_libraries(SatScripting PUBLIC SatScene SatInput SatPhysics PRIVATE SatLua)
+target_link_libraries(SatScripting PUBLIC SatScene SatInput SatPhysics SatAudio PRIVATE SatLua)
 target_compile_features(SatScripting PUBLIC cxx_std_20)
 
 if(BUILD_TESTING)
@@ -132,6 +135,18 @@ if(BUILD_TESTING)
     target_link_libraries(PhysicsScriptingTests PRIVATE SatScripting)
     add_test(NAME PhysicsScripting COMMAND PhysicsScriptingTests)
     set_tests_properties(PhysicsScripting PROPERTIES TIMEOUT 15)
+    add_executable(AudioTests Audio/tests/AudioTests.cpp)
+    target_link_libraries(AudioTests PRIVATE SatAudio)
+    target_include_directories(AudioTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Audio/src")
+    add_test(NAME Audio COMMAND AudioTests)
+    add_executable(AudioScriptingTests Audio/tests/AudioScriptingTests.cpp)
+    target_link_libraries(AudioScriptingTests PRIVATE SatScripting)
+    add_test(NAME AudioScripting COMMAND AudioScriptingTests)
+    foreach(audio_test AudioTests AudioScriptingTests)
+        target_compile_definitions(${audio_test} PRIVATE SAT_AUDIO_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/Audio/tests/fixtures")
+    endforeach()
+    set_tests_properties(Audio PROPERTIES TIMEOUT 25)
+    set_tests_properties(AudioScripting PROPERTIES TIMEOUT 15)
 endif()
 
 # Optional EmmyLua stub regen from // @lua metadata (not required to build/link).
@@ -144,6 +159,7 @@ if(Python3_Interpreter_FOUND)
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaMessageBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaMathBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaPhysicsBindings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaAudioBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaLogBindings.cpp"
     )
     set(SAT_LUA_DEF_OUTPUT

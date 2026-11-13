@@ -9,6 +9,8 @@
 
 #include <imgui.h>
 
+#include <GLFW/glfw3.h>
+
 #include <stb_image.h>
 
 #include <algorithm>
@@ -234,8 +236,11 @@ void drawSceneOrientationGizmo(
 struct ViewportPanel::Impl {
     Scene* scene = nullptr;
     Renderer* renderer = nullptr;
+    GLFWwindow* window = nullptr;
     bool selectionActivated = false;
     bool showColliders = false;
+    bool showLiveScene = true;
+    bool liveSceneVisible = false;
     TransformTool tool = TransformTool::Move;
     int gameViewWidth = 0;
     int gameViewHeight = 0;
@@ -250,6 +255,8 @@ struct ViewportPanel::Impl {
         float moveSpeed = 8.0f;
         bool looking = false;
         bool draggingPan = false;
+        double lastCursorX = 0.0;
+        double lastCursorY = 0.0;
 
         [[nodiscard]] Vec3 forward() const {
             const float pitch = pitchDegrees * kDegToRad;
@@ -267,14 +274,44 @@ struct ViewportPanel::Impl {
         }
     } editorCamera;
 
-    void focusSelection(int selectedIndex) {
-        const auto* entity = selectedIndex >= 0 ? scene->entity(static_cast<std::size_t>(selectedIndex)) : nullptr;
+    void updateMouseLook(const ImVec2& imageMin, const ImVec2& imageMax) {
+        auto& cam = editorCamera;
+        double x = 0.0;
+        double y = 0.0;
+        glfwGetCursorPos(window, &x, &y);
+        cam.yawDegrees += static_cast<float>(x - cam.lastCursorX) * 0.25f;
+        cam.pitchDegrees = std::clamp(
+            cam.pitchDegrees - static_cast<float>(y - cam.lastCursorY) * 0.25f, -89.0f, 89.0f);
+
+        // GLFW cursor coordinates are window-local. ImGui uses the same origin
+        // in the editor's single-window setup.
+        const auto wrap = [](double value, float minimum, float maximum) {
+            constexpr double kWrapInset = 3.0;
+            if (maximum - minimum <= 2.0 * kWrapInset) { return value; }
+            if (value <= minimum + 1.0) { return maximum - kWrapInset; }
+            if (value >= maximum - 1.0) { return minimum + kWrapInset; }
+            return value;
+        };
+        const double wrappedX = wrap(x, imageMin.x, imageMax.x);
+        const double wrappedY = wrap(y, imageMin.y, imageMax.y);
+        if (wrappedX != x || wrappedY != y) {
+            glfwSetCursorPos(window, wrappedX, wrappedY);
+            // Use the actual warped position so the jump itself adds no rotation.
+            glfwGetCursorPos(window, &x, &y);
+        }
+        cam.lastCursorX = x;
+        cam.lastCursorY = y;
+    }
+
+    void focusSelection(const Entity* entity) {
         if (!entity || gizmoDrag.active()) { return; }
         const Vec3 forward = editorCamera.forward();
         editorCamera.position = entity->transform.position - DVec3{forward.x, forward.y, forward.z} * 10.0;
     }
 
     TransformGizmoDrag gizmoDrag;
+    Transform authoredDragStart;
+    Transform gizmoTransform;
     TransformSpace moveSpace = TransformSpace::Global;
     TransformSpace rotateSpace = TransformSpace::Local;
     GizmoHit hoveredHandle;
@@ -293,20 +330,59 @@ struct ViewportPanel::Impl {
         } else if (hoveredOwner == entity.id()) { result.highlightedHandle = hoveredHandle.handle; }
         return result;
     }
-    void cancelDrag() { (void)gizmoDrag.cancel(*scene); }
+    void setAuthoredTransform(const Transform& transform) {
+        Entity* entity = scene->entityById(gizmoDrag.owner());
+        if (!entity) { return; }
+        switch (tool) {
+        case TransformTool::Move:
+            if (entity->transform.position == transform.position) { return; }
+            entity->transform.position = transform.position;
+            break;
+        case TransformTool::Rotate:
+            if (entity->transform.rotation == transform.rotation) { return; }
+            entity->transform.rotation = transform.rotation;
+            break;
+        case TransformTool::Scale:
+            if (entity->transform.scale == transform.scale) { return; }
+            entity->transform.scale = transform.scale;
+            break;
+        }
+        scene->markEdited();
+    }
 
-    void drawScenePanel(int& selectedIndex, bool playMode) {
+    void cancelDrag() {
+        if (gizmoDrag.active()) {
+            setAuthoredTransform(authoredDragStart);
+            gizmoDrag.finish();
+        }
+    }
+
+    void drawScenePanel(int& selectedIndex, const Scene& gameScene, bool readOnly) {
+        const bool playing = &gameScene != scene;
         if (ImGui::Begin(
                 "Scene",
                 nullptr,
                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+            if (playing) {
+                if (ImGui::Checkbox("Live Game", &showLiveScene)) { cancelDrag(); }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Show the running game from the Scene camera.");
+                }
+            }
+            liveSceneVisible = playing && showLiveScene;
+            const Scene& visibleScene = liveSceneVisible ? gameScene : *scene;
+            const bool canUseGizmo = !readOnly;
+
             const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::GetIO().AppFocusLost;
             if (!focused) { editorCamera.looking = false; editorCamera.draggingPan = false; }
             const Entity* selected = selectedIndex >= 0 ? scene->entity(static_cast<std::size_t>(selectedIndex)) : nullptr;
-            if (gizmoDrag.active() && (playMode || !selected || selected->id() != gizmoDrag.owner() ||
+            const EntityId selectedId = selected ? selected->id() : kInvalidEntityId;
+            const auto visibleIndex = visibleScene.entityIndex(selectedId);
+            const Entity* visibleSelection = visibleIndex ? visibleScene.entity(*visibleIndex) : nullptr;
+            if (gizmoDrag.active() && (!canUseGizmo || !visibleSelection || visibleSelection->id() != gizmoDrag.owner() ||
                 !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || ImGui::GetIO().AppFocusLost)) { cancelDrag(); }
             hoveredHandle = {}; hoveredOwner = kInvalidEntityId;
-            ImGui::BeginDisabled(playMode || gizmoDrag.active());
+            ImGui::BeginDisabled(!canUseGizmo || gizmoDrag.active());
             const TransformTool tools[3] = {TransformTool::Move, TransformTool::Rotate, TransformTool::Scale};
             const char* labels[3] = {"Move (W)", "Rotate (R)", "Scale (T)"};
             for (int i = 0; i < 3; ++i) {
@@ -331,7 +407,7 @@ struct ViewportPanel::Impl {
             ImGui::SameLine();
             ImGui::Checkbox("Show Colliders", &showColliders);
             ImGui::SameLine();
-            if (ImGui::Button("Focus (F)")) { focusSelection(selectedIndex); }
+            if (ImGui::Button("Focus (F)")) { focusSelection(visibleSelection); }
             const ImVec2 sceneSize = ImGui::GetContentRegionAvail();
             const int sceneWidth = static_cast<int>(sceneSize.x);
             const int sceneHeight = static_cast<int>(sceneSize.y);
@@ -364,8 +440,12 @@ struct ViewportPanel::Impl {
                         cam.yawDegrees,
                         cam.pitchDegrees);
 
-                    if (hovered && !gizmoDrag.active() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-                        cam.looking = true;
+                    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                        ImGui::SetWindowFocus();
+                        cam.looking = !gizmoDrag.active();
+                        if (cam.looking) {
+                            glfwGetCursorPos(window, &cam.lastCursorX, &cam.lastCursorY);
+                        }
                     }
                     if (hovered && !gizmoDrag.active() && ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
                         cam.draggingPan = true;
@@ -378,14 +458,7 @@ struct ViewportPanel::Impl {
                     }
 
                     if (cam.looking) {
-                        cam.yawDegrees += io.MouseDelta.x * 0.25f;
-                        cam.pitchDegrees -= io.MouseDelta.y * 0.25f;
-                        if (cam.pitchDegrees > 89.0f) {
-                            cam.pitchDegrees = 89.0f;
-                        }
-                        if (cam.pitchDegrees < -89.0f) {
-                            cam.pitchDegrees = -89.0f;
-                        }
+                        updateMouseLook(imageMin, imageMax);
                     }
 
                     const Vec3 forward = cam.forward();
@@ -402,15 +475,17 @@ struct ViewportPanel::Impl {
                         cam.position = cam.position + forward * (io.MouseWheel * cam.moveSpeed * 0.25f);
                     }
 
-                    if (hovered && !playMode && !cam.looking && !cam.draggingPan && !gizmoDrag.active() && !io.WantTextInput &&
+                    if (hovered && !readOnly && !cam.looking && !cam.draggingPan && !gizmoDrag.active() && !io.WantTextInput &&
                         !io.KeyCtrl && !io.KeyAlt && !io.KeySuper && !io.KeyShift &&
                         ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive()) {
-                        if (ImGui::IsKeyPressed(ImGuiKey_F, false)) { focusSelection(selectedIndex); }
-                        if (ImGui::IsKeyPressed(ImGuiKey_W, false)) { tool = TransformTool::Move; }
-                        if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { tool = TransformTool::Rotate; }
-                        if (ImGui::IsKeyPressed(ImGuiKey_T, false)) { tool = TransformTool::Scale; }
+                        if (ImGui::IsKeyPressed(ImGuiKey_F, false)) { focusSelection(visibleSelection); }
+                        if (canUseGizmo) {
+                            if (ImGui::IsKeyPressed(ImGuiKey_W, false)) { tool = TransformTool::Move; }
+                            if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { tool = TransformTool::Rotate; }
+                            if (ImGui::IsKeyPressed(ImGuiKey_T, false)) { tool = TransformTool::Scale; }
+                        }
                     }
-                    if (hovered && cam.looking && !gizmoDrag.active() && !io.WantTextInput) {
+                    if (cam.looking && !gizmoDrag.active() && !io.WantTextInput) {
                         Vec3 move{};
                         if (ImGui::IsKeyDown(ImGuiKey_W)) {
                             move = move + forward;
@@ -442,8 +517,8 @@ struct ViewportPanel::Impl {
                         projection,
                         viewW,
                         viewH,
-                        *scene,
-                        selectedIndex,
+                        visibleScene,
+                        visibleIndex ? static_cast<int>(*visibleIndex) : -1,
                         cameraIcon, cam.position);
 
                     const float mouseX = io.MousePos.x - imageMin.x;
@@ -452,53 +527,57 @@ struct ViewportPanel::Impl {
                     const bool cameraBusy = cam.looking || cam.draggingPan;
 
                     const bool sceneFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.AppFocusLost;
-                    const Entity* selectedEntity = selectedIndex >= 0 ? scene->entity(static_cast<std::size_t>(selectedIndex)) : nullptr;
                     if (gizmoDrag.active()) {
-                        if (playMode || !sceneFocused || !selectedEntity || selectedEntity->id() != gizmoDrag.owner() ||
+                        if (!canUseGizmo || !sceneFocused || !visibleSelection || visibleSelection->id() != gizmoDrag.owner() ||
                             !gizmoDrag.viewportMatches(viewW, viewH) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
                             cancelDrag();
                         } else {
-                            (void)gizmoDrag.update(*scene, mouseX, mouseY);
+                            if (gizmoDrag.update(gizmoTransform, mouseX, mouseY)) {
+                                setAuthoredTransform(gizmoTransform);
+                            }
                             if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) { gizmoDrag.finish(); }
                         }
                     }
-                    if (!playMode && !cameraBusy && sceneFocused) {
-                        if (selectedEntity && hovered) {
-                            hoveredOwner = selectedEntity->id();
-                            hoveredHandle = pickTransformGizmo(gizmo(*selectedEntity), view, projection, viewW, viewH, mouseX, mouseY);
+                    if (!readOnly && !cameraBusy && sceneFocused) {
+                        if (canUseGizmo && visibleSelection && hovered) {
+                            hoveredOwner = visibleSelection->id();
+                            hoveredHandle = pickTransformGizmo(gizmo(*visibleSelection), view, projection, viewW, viewH, mouseX, mouseY);
                         }
                         if (!gizmoDrag.active() && leftClicked) {
-                            if (selectedEntity && hoveredHandle.handle >= 0) {
-                                (void)gizmoDrag.begin(selectedEntity->id(), selectedEntity->transform, tool, space(), hoveredHandle,
-                                    view, projection, viewW, viewH, mouseX, mouseY, cam.position);
+                            if (selected && visibleSelection && hoveredHandle.handle >= 0) {
+                                if (gizmoDrag.begin(selected->id(), visibleSelection->transform, tool, space(), hoveredHandle,
+                                        view, projection, viewW, viewH, mouseX, mouseY, cam.position)) {
+                                    authoredDragStart = selected->transform;
+                                    gizmoTransform = visibleSelection->transform;
+                                }
                             } else {
-                                int bestEntity = -1;
+                                EntityId bestEntity = kInvalidEntityId;
                                 float bestT = 1.0e30f;
-                                const auto& entities = scene->entities();
-                                for (std::size_t i = 0; i < entities.size(); ++i) {
+                                for (const Entity& entity : visibleScene.entities()) {
                                     float t = 0.0f;
                                     bool hit = false;
-                                    if (entities[i].hasMesh) {
+                                    if (entity.hasMesh) {
                                         const Mat4 world =
-                                            matrixFromTransform(entities[i].transform, cam.position);
+                                            matrixFromTransform(entity.transform, cam.position);
                                         Vec3 minimum{-0.5f, -0.5f, -0.5f};
                                         Vec3 maximum{0.5f, 0.5f, 0.5f};
-                                        if (entities[i].mesh.meshPath.empty() ||
-                                            renderer->meshBounds(entities[i].mesh.meshPath, minimum, maximum)) {
+                                        if (entity.mesh.meshPath.empty() ||
+                                            renderer->meshBounds(entity.mesh.meshPath, minimum, maximum)) {
                                             hit = intersectRayBounds(mouseRay, world, t, minimum, maximum);
                                         }
-                                    } else if (entities[i].hasCamera) {
+                                    } else if (entity.hasCamera) {
                                         const Mat4 world =
-                                            cameraPickWorld(toVec3(entities[i].transform.position - cam.position));
+                                            cameraPickWorld(toVec3(entity.transform.position - cam.position));
                                         hit = intersectRayBounds(mouseRay, world, t);
                                     }
                                     if (hit && t < bestT) {
                                         bestT = t;
-                                        bestEntity = static_cast<int>(i);
+                                        bestEntity = entity.id();
                                     }
                                 }
                                 selectionActivated = true;
-                                selectedIndex = bestEntity;
+                                const auto authoredIndex = scene->entityIndex(bestEntity);
+                                selectedIndex = authoredIndex ? static_cast<int>(*authoredIndex) : -1;
                             }
                         }
                     }
@@ -522,7 +601,7 @@ struct ViewportPanel::Impl {
         ImGui::End();
     }
 
-    void drawGamePanel(bool focusGameView) {
+    void drawGamePanel(const Scene& gameScene, bool focusGameView) {
         if (focusGameView) {
             ImGui::SetNextWindowFocus();
         }
@@ -535,7 +614,7 @@ struct ViewportPanel::Impl {
             const int gameHeight = static_cast<int>(gameSize.y);
             gameViewWidth = gameWidth;
             gameViewHeight = gameHeight;
-            if (scene->mainCameraIndex() < 0) {
+            if (gameScene.mainCameraIndex() < 0) {
                 ImGui::TextUnformatted("No camera to render the game view.");
             } else if (gameWidth >= 1 && gameHeight >= 1) {
                 renderer->resizeGameView(gameWidth, gameHeight);
@@ -558,10 +637,11 @@ struct ViewportPanel::Impl {
     }
 };
 
-ViewportPanel::ViewportPanel(Scene& scene, Renderer& renderer)
+ViewportPanel::ViewportPanel(Scene& scene, Renderer& renderer, GLFWwindow& window)
     : m_impl(std::make_unique<Impl>()) {
     m_impl->scene = &scene;
     m_impl->renderer = &renderer;
+    m_impl->window = &window;
     m_impl->cameraIcon = loadIconTexture(renderer, "Icons/video_camera_ic.png");
 }
 
@@ -571,13 +651,16 @@ ViewportPanel::~ViewportPanel() {
     }
 }
 
-void ViewportPanel::onImGuiRender(int& selectedIndex, bool playMode, bool focusGameView) {
+void ViewportPanel::onImGuiRender(int& selectedIndex, const Scene& gameScene, bool sceneReadOnly, bool focusGameView) {
     m_impl->selectionActivated = false;
-    m_impl->drawScenePanel(selectedIndex, playMode);
-    m_impl->drawGamePanel(focusGameView);
+    m_impl->liveSceneVisible = false;
+    m_impl->drawScenePanel(selectedIndex, gameScene, sceneReadOnly);
+    m_impl->drawGamePanel(gameScene, focusGameView);
 }
 
 TransformGizmoInstance ViewportPanel::gizmo(const Entity& entity) const { return m_impl->gizmo(entity); }
+
+bool ViewportPanel::showingLiveScene() const { return m_impl->liveSceneVisible; }
 
 bool ViewportPanel::selectionActivated() const { return m_impl->selectionActivated; }
 

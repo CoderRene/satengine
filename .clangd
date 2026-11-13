@@ -26,3 +26,15 @@ CompileFlags:
     - -Ibuild/_deps/jolt-src
     - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/jolt-src"
     - -DJPH_DOUBLE_PRECISION
+    - -IEngine/Audio/include
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Audio/include"
+    - -IEngine/Audio/src
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Audio/src"
+    - -IEngine/Core/src
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Core/src"
+    - -Ibuild/_deps/miniaudio-src
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/miniaudio-src"
+    - -Ibuild/_deps/miniaudio-src/extras
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/miniaudio-src/extras"
+    - -DMA_NO_ENCODING
+    - -DMA_NO_GENERATION

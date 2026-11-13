@@ -4,6 +4,8 @@
 
 #include <memory>
 
+struct GLFWwindow;
+
 namespace sat {
 
 class Scene;
@@ -13,18 +15,19 @@ struct GameViewCamera;
 
 class ViewportPanel {
 public:
-    ViewportPanel(Scene& scene, Renderer& renderer);
+    ViewportPanel(Scene& scene, Renderer& renderer, GLFWwindow& window);
     ~ViewportPanel();
 
     ViewportPanel(const ViewportPanel&) = delete;
     ViewportPanel& operator=(const ViewportPanel&) = delete;
 
-    // selectedIndex is read for overlays/gizmos and written on pick.
+    // selectedIndex refers to the authored scene, including when picking a live entity.
     // When focusGameView is true, the Game window is focused this frame.
-    void onImGuiRender(int& selectedIndex, bool playMode, bool focusGameView);
+    void onImGuiRender(int& selectedIndex, const Scene& gameScene, bool sceneReadOnly, bool focusGameView);
 
     void resetInteraction();
     [[nodiscard]] bool showColliders() const;
+    [[nodiscard]] bool showingLiveScene() const;
     [[nodiscard]] TransformGizmoInstance gizmo(const Entity& entity) const;
     [[nodiscard]] bool selectionActivated() const;
 

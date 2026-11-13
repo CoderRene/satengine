@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AudioTypes.hpp"
 #include "Math.hpp"
 #include "PhysicsTypes.hpp"
 
@@ -44,6 +45,8 @@ struct MeshComponent {
 struct ScriptComponent {
     std::string path;
     bool enabled = true;
+
+    bool operator==(const ScriptComponent&) const = default;
 };
 
 [[nodiscard]] bool isValidScriptPath(std::string_view path);
@@ -69,6 +72,9 @@ struct Entity {
     ColliderComponent collider{.shapes = {}};
     bool hasGravitySource = false;
     GravitySourceComponent gravitySource;
+    bool hasAudioSource = false;
+    AudioSourceComponent audioSource;
+    bool hasAudioListener = false;
 
 private:
     friend class Scene;
@@ -79,6 +85,7 @@ class Scene {
 public:
     Scene();
     PhysicsSettings physicsSettings;
+    AudioSettings audioSettings;
 
     // Window-thread only. Copies preserve identity for snapshots; newly created
     // entities always get fresh IDs. IDs are not serialized. Load replaces them.
@@ -104,6 +111,8 @@ public:
     [[nodiscard]] int mainCameraIndex() const;
 
     Entity& createEntity(std::string name);
+    // Insert an entity from a scene copy with its original ID. The ID must be absent.
+    void addEntityCopy(const Entity& entity);
     void addEmpty();
     void clear();
     [[nodiscard]] bool attachScript(std::size_t index, std::string path);
@@ -114,6 +123,8 @@ public:
     [[nodiscard]] bool setMainCamera(std::size_t index);
 
 private:
+    Entity& insertEntity(Entity entity);
+
     std::vector<Entity> m_entities;
     std::unordered_map<EntityId, std::size_t> m_entityIndices;
     std::uint64_t m_destructionRevision = 0;

@@ -34,9 +34,14 @@ its existing bounding-box picking; this feature changes only gizmo picking.
 
 Release the left mouse button to commit. **Escape** restores the starting
 transform. Changing selection, losing Scene/application focus, hiding or resizing
-its viewport, entering Play, or switching projects cancels an active drag. If the
-entity was destroyed, the drag is abandoned. A click without movement does not
-change the transform. Transform editing is disabled during Play.
+its viewport, starting or stopping Play, or switching projects cancels an active
+drag. If the entity was destroyed, the drag is abandoned. A click without movement does not
+change the transform. During Play, **Live Game** shows the running scene from
+the editor camera. Gizmo and Inspector transform edits appear immediately in
+both the Scene and Game views. During Play the Inspector reads the current
+runtime transform and saves the axes you edit. Scripts and physics continue
+updating the entity on subsequent frames. Use the prompt after Stop to save or discard
+your edits.
 
 Tool shortcuts are suppressed during text editing, with modifier keys, camera
 navigation, and active gizmo drags. Hold **right mouse** to look around and use

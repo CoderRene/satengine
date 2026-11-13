@@ -6,6 +6,7 @@
 
 namespace sat {
 enum class TextureFilter { Point, Bilinear, Trilinear };
+enum class AudioLoadMode { Auto, Decode, Stream };
 enum class TextureWrap { Repeat, Clamp };
 struct AssetImportSettings {
     float scale = 1.0f;
@@ -15,6 +16,7 @@ struct AssetImportSettings {
     TextureFilter filter = TextureFilter::Bilinear;
     TextureWrap wrap = TextureWrap::Repeat;
     bool mipmaps = false;
+    AudioLoadMode audioLoadMode = AudioLoadMode::Auto;
     bool operator==(const AssetImportSettings&) const = default;
 };
 [[nodiscard]] bool parseImportSettings(std::string_view text, AssetImportSettings& settings, std::string& error);

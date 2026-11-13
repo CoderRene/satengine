@@ -239,6 +239,12 @@ bool TransformGizmoDrag::update(Scene& scene, float mouseX, float mouseY) {
     if (!m_active) { return false; }
     Entity* entity = scene.entityById(m_owner);
     if (!entity) { m_active = false; return false; }
+    if (!update(entity->transform, mouseX, mouseY)) { return false; }
+    scene.markEdited();
+    return true;
+}
+bool TransformGizmoDrag::update(Transform& transform, float mouseX, float mouseY) {
+    if (!m_active) { return false; }
     if (!std::isfinite(mouseX) || !std::isfinite(mouseY) || (mouseX == m_lastX && mouseY == m_lastY)) { return false; }
     Transform next = m_start;
     const double pixels = (static_cast<double>(mouseX) - m_startX) * m_screenX + (static_cast<double>(mouseY) - m_startY) * m_screenY;
@@ -285,9 +291,8 @@ bool TransformGizmoDrag::update(Scene& scene, float mouseX, float mouseY) {
     m_lastX = mouseX; m_lastY = mouseY;
     if (!finite(next) || sameTransform(next, m_last)) { return false; }
     m_last = next;
-    if (sameTransform(entity->transform, next)) { return false; }
-    entity->transform = next;
-    scene.markEdited();
+    if (sameTransform(transform, next)) { return false; }
+    transform = next;
     return true;
 }
 bool TransformGizmoDrag::cancel(Scene& scene) {
