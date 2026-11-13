@@ -6,12 +6,26 @@
 #include "LuaToolingSync.hpp"
 #include "Renderer.hpp"
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
 #include <GLFW/glfw3.h>
+#include <imgui.h>
 
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <system_error>
+#include <thread>
 #include <utility>
+
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
 
 namespace sat {
 
@@ -47,6 +61,7 @@ void EditorSession::pollSystems() {
 }
 
 void EditorSession::beginRendererFrame() {
+    m_state->frameStart = std::chrono::steady_clock::now();
     m_state->renderer->newFrame();
 }
 
@@ -56,6 +71,60 @@ void EditorSession::bindWindowTarget() {
 
 void EditorSession::present() {
     m_state->renderer->present();
+}
+
+void EditorSession::paceEditor() {
+    // Play mode stays uncapped so simulation can run as fast as the machine allows.
+    if (m_state->play.active() || m_state->window == nullptr) {
+        return;
+    }
+
+    const ImGuiIO& io = ImGui::GetIO();
+    bool keyDown = false;
+    for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; ++key) {
+        if (ImGui::IsKeyDown(static_cast<ImGuiKey>(key))) {
+            keyDown = true;
+            break;
+        }
+    }
+    const bool pointerActive = io.MouseDown[0] || io.MouseDown[1] || io.MouseDown[2] ||
+        io.MouseWheel != 0.0f || io.MouseWheelH != 0.0f || io.MouseDelta.x != 0.0f ||
+        io.MouseDelta.y != 0.0f || ImGui::IsAnyItemActive() || keyDown;
+    const bool sceneActive = m_state->viewport != nullptr && m_state->viewport->sceneViewInteracting();
+
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetFramebufferSize(m_state->window, &framebufferWidth, &framebufferHeight);
+    const bool visible = glfwGetWindowAttrib(m_state->window, GLFW_FOCUSED) == GLFW_TRUE &&
+        framebufferWidth >= 1 && framebufferHeight >= 1;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (visible && (sceneActive || pointerActive)) {
+        m_state->editActiveUntil = now + std::chrono::milliseconds(200);
+    }
+    // Scene navigation is 60 Hz. Idle and hidden editors tick slower.
+    const bool fast = visible && (sceneActive || now < m_state->editActiveUntil);
+    const auto period = !visible ? std::chrono::microseconds(100000)
+        : (fast ? std::chrono::microseconds(1000000 / 60) : std::chrono::microseconds(1000000 / 30));
+    const auto deadline = m_state->frameStart + period;
+    if (deadline <= now) {
+        return;
+    }
+
+    // sleep_for follows the ~15 ms system tick, so a 16 ms budget lands near 30 Hz.
+    const auto microseconds = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
+    if (microseconds <= 0) {
+        return;
+    }
+    static HANDLE timer = CreateWaitableTimerExW(
+        nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    LARGE_INTEGER due{};
+    due.QuadPart = -microseconds * 10;
+    if (timer != nullptr && SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+        WaitForSingleObject(timer, INFINITE);
+        return;
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(microseconds));
 }
 
 bool EditorSession::canSaveScene() const {

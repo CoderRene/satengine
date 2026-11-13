@@ -258,6 +258,7 @@ struct ViewportPanel::Impl {
     Renderer* renderer = nullptr;
     GLFWwindow* window = nullptr;
     bool selectionActivated = false;
+    bool sceneInteracting = false;
     bool showColliders = false;
     bool showLiveScene = true;
     bool liveSceneVisible = false;
@@ -379,6 +380,7 @@ struct ViewportPanel::Impl {
     }
 
     void drawScenePanel(int& selectedIndex, const Scene& gameScene, bool readOnly) {
+        sceneInteracting = false;
         const bool playing = &gameScene != scene;
         if (ImGui::Begin(
                 "Scene",
@@ -604,6 +606,11 @@ struct ViewportPanel::Impl {
                             }
                         }
                     }
+                    sceneInteracting = cameraBusy || gizmoDrag.active() ||
+                        (hovered && (io.MouseWheel != 0.0f || io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f ||
+                            ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+                            ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+                            ImGui::IsMouseDown(ImGuiMouseButton_Middle)));
                 } else {
                     cancelDrag();
                     editorCamera.looking = false; editorCamera.draggingPan = false;
@@ -694,6 +701,8 @@ TransformGizmoInstance ViewportPanel::gizmo(const Entity& entity) const { return
 bool ViewportPanel::showingLiveScene() const { return m_impl->liveSceneVisible; }
 
 bool ViewportPanel::selectionActivated() const { return m_impl->selectionActivated; }
+
+bool ViewportPanel::sceneViewInteracting() const { return m_impl->sceneInteracting; }
 
 void ViewportPanel::resetInteraction() {
     m_impl->cancelDrag();

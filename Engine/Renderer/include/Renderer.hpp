@@ -62,6 +62,8 @@ public:
     [[nodiscard]] std::uintptr_t sceneColorTexture() const;
     [[nodiscard]] int gameViewWidth() const;
     [[nodiscard]] int gameViewHeight() const;
+    // Bumps when GPU-visible shaders or assets change.
+    [[nodiscard]] std::uint64_t contentRevision() const;
 
     // Borrowed SRV for editor draw data. Valid through the current frame.
     [[nodiscard]] std::uintptr_t materialThumbnail(std::string_view path);
@@ -80,17 +82,6 @@ public:
 
 private:
     struct Impl;
-    struct OffscreenView;
-
-    void releaseOffscreenView(OffscreenView& view);
-    void releaseDebugLines();
-    bool createBackBuffer();
-    bool createDevice(void* hwnd, unsigned flags);
-    bool ensureDebugLines();
-    void resizeOffscreenView(OffscreenView& view, int width, int height, const char* label);
-    void renderOffscreenView(
-        OffscreenView& view, const GameViewCamera& camera, const SceneDrawList& drawList);
-
     std::unique_ptr<Impl> m_impl;
 };
 

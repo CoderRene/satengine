@@ -18,6 +18,7 @@
 #include "SceneRenderData.hpp"
 #include "ViewportPanel.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -67,6 +68,16 @@ struct EditorSession::State {
     bool openNewProjectModal = false;
     std::filesystem::path newProjectParent;
     char newProjectName[128] = {};
+
+    // Edit mode keeps the previous scene and game targets while these match.
+    std::uint64_t sceneViewKey = 0;
+    std::uint64_t gameViewKey = 0;
+    std::uint64_t sceneContentRevision = 0;
+    std::uint64_t gameContentRevision = 0;
+    bool sceneViewValid = false;
+    bool gameViewValid = false;
+    std::chrono::steady_clock::time_point frameStart{};
+    std::chrono::steady_clock::time_point editActiveUntil{};
 };
 
 } // namespace sat

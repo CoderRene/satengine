@@ -207,6 +207,12 @@ add_library(SatRuntime STATIC
     Core/src/Application.cpp
     Core/src/Window.cpp
     Renderer/src/Renderer.cpp
+    Renderer/src/module/RenderSession.cpp
+    Renderer/src/module/RenderDevice.cpp
+    Renderer/src/module/RenderTargets.cpp
+    Renderer/src/module/RenderView.cpp
+    Renderer/src/module/RenderGrid.cpp
+    Renderer/src/module/MaterialThumbnail.cpp
     Renderer/src/module/MeshPass.cpp
     Renderer/src/module/ShaderLibrary.cpp
     Renderer/src/module/GpuAssetCache.cpp

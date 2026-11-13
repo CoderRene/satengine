@@ -34,6 +34,8 @@ public:
     void beginRendererFrame();
     void bindWindowTarget();
     void present();
+    // Edit mode waits out the rest of the frame. Play mode returns immediately.
+    void paceEditor();
 
     [[nodiscard]] bool canSaveScene() const;
     bool saveScene();

@@ -14,8 +14,8 @@ SatEngine is a C++20 game engine (CMake + GLFW). Prefer small, focused changes t
   - `Platform/` — OS / input / platform backends
   - `Renderer/` — graphics API wrappers and render systems
     - `include/` — public D3D-free API (`Renderer.hpp`, `SceneDraw.hpp`, …)
-    - `src/` — facade / orchestration (`Renderer.cpp`)
-    - `src/module/` — private render passes and GPU helpers (headers + sources together)
+    - `src/` — thin facade (`Renderer.cpp`)
+    - `src/module/` — private session, render passes, and GPU helpers (`RenderSession`, `MeshPass`, …)
   - `Assets/` — engine-owned assets and loaders
   - `UI/` — editor / ImGui layer (`include/`, `src/`)
 - `GamePlayer/` — standalone game player executable; links `SatRuntime`
@@ -28,7 +28,7 @@ Use `Engine/<Area>/src/module/` for focused implementation units that are **not*
 
 - Keep each module’s `.hpp` next to its `.cpp` under `src/module/` — do **not** put these headers in `include/`
 - Third-party / graphics API types (D3D11, etc.) may appear only in `src/` and `src/module/`
-- The area facade (e.g. `Renderer`) owns orchestration and includes modules as `"module/Foo.hpp"`
+- The area facade (e.g. `Renderer`, `UiLayer`) stays thin, includes its session as `"module/Foo.hpp"`, and delegates orchestration there
 - Other engine areas follow the same pattern when they grow internal multi-file subsystems
 
 ## Boundaries

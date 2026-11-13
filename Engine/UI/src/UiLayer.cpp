@@ -71,6 +71,7 @@ void UiLayer::endFrame() {
     m_impl->bindWindowTarget();
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
     m_impl->present();
+    m_impl->paceEditor();
 }
 
 } // namespace sat

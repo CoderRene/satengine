@@ -155,9 +155,11 @@ When adding or moving any engine/game source, update the matching `CMakeLists.tx
 
 ## Module folder (`src/module/`)
 
-Use `Engine/<Area>/src/module/` for focused implementation units that are **not** public API (e.g. `MeshPass`, `SelectionOutlinePass`, `TranslateGizmoPass`).
+Use `Engine/<Area>/src/module/` for focused implementation units that are **not** public API (e.g. `RenderSession`, `MeshPass`, `EditorSession`).
 
 - Keep each module’s `.hpp` next to its `.cpp` under `src/module/` — do **not** put these headers in `include/`
 - Third-party / graphics API types (D3D11, etc.) may appear only in `src/` and `src/module/`
-- The area facade (e.g. `Renderer`) owns orchestration and includes modules as `"module/Foo.hpp"`
+- The area facade (e.g. `Renderer`, `UiLayer`) stays thin, includes its session as `"module/Foo.hpp"`, and delegates orchestration there
+- `Renderer` keeps the public API in `include/` and a thin `src/Renderer.cpp`. `Renderer::Impl` inherits `RenderSession`. Device, targets, the view, the grid, and material thumbnails are separate modules next to the passes (`MeshPass`, `SelectionOutlinePass`, `TransformGizmoPass`)
+- `UiLayer` does the same with `EditorSession`. Editor features are sibling modules (`EditorStartup`, `EditorFrame`, `PlaySession`, …)
 - Other engine areas follow the same pattern when they grow internal multi-file subsystems
