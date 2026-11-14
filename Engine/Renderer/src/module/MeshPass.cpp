@@ -1,5 +1,6 @@
 #include "MeshPass.hpp"
 
+#include "CascadedShadowMap.hpp"
 #include "ShaderLayout.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -10,6 +11,7 @@
 #endif
 
 #include <d3d11.h>
+#include <wrl/client.h>
 
 #include "AssetData.hpp"
 
@@ -72,6 +74,14 @@ void fillUnitCube(MeshVertex* vertices, unsigned short* indices) {
 } // namespace
 
 struct MeshPass::Impl {
+    struct ShadowCaster {
+        const MeshInstance* instance;
+        const GpuMesh* mesh;
+        const GpuMaterial* material;
+        Vec3 lightCenter;
+        float radius;
+    };
+
     ID3D11Buffer* vb = nullptr;
     ID3D11Buffer* ib = nullptr;
     ID3D11Buffer* frameCb = nullptr;
@@ -81,12 +91,9 @@ struct MeshPass::Impl {
     Microsoft::WRL::ComPtr<ID3D11BlendState> blend;
     Microsoft::WRL::ComPtr<ID3D11DepthStencilState> transparentDepth;
     std::vector<const MeshInstance*> transparent;
-    Microsoft::WRL::ComPtr<ID3D11DepthStencilView> shadowDepth;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> shadowView;
-    Microsoft::WRL::ComPtr<ID3D11SamplerState> shadowSampler;
+    CascadedShadowMap shadowMap;
+    std::vector<ShadowCaster> shadowCasters;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> environmentSampler;
-    UINT shadowResolutionAttempted = 0;
-    UINT shadowResolution = 0;
     GpuMesh cubeMesh{};
     ID3D11Buffer* lightsCb = nullptr;
     ID3D11Buffer* clusterCb = nullptr;
@@ -184,6 +191,7 @@ bool MeshPass::ensure(ID3D11Device* device) {
     m_impl->cubeMesh.indexCount = 36;
     m_impl->cubeMesh.vertexStride = sizeof(MeshVertex);
     m_impl->cubeMesh.indexFormat = DXGI_FORMAT_R16_UINT;
+    m_impl->cubeMesh.boundsRadius = std::sqrt(3.0f) * 0.5f;
 
     D3D11_BUFFER_DESC cbDesc{};
     cbDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -278,13 +286,15 @@ bool MeshPass::ensure(ID3D11Device* device) {
 
 void MeshPass::draw(
     ID3D11DeviceContext* context, ShaderProgram program,
-    const Mat4& viewProj, Vec3 eye,
-    const SceneDrawList& drawList, bool hdr, ID3D11PixelShader* shadowPixel, ShaderLibrary* shaders) const {
+    const Mat4& view, const Mat4& projection, Vec3 eye,
+    const SceneDrawList& drawList, bool hdr, ID3D11PixelShader* shadowPixel, ShaderLibrary* shaders,
+    DVec3 renderOrigin) const {
     if (m_impl == nullptr || !m_impl->ready || context == nullptr || drawList.meshes == nullptr ||
         drawList.meshCount <= 0) {
         return;
     }
 
+    const Mat4 viewProj = projection * view;
     const int lightCount = drawList.lights ? std::clamp(drawList.lightCount, 0, kMaxLights) : 0;
     auto& order = m_impl->lightOrder;
     order.clear();
@@ -312,72 +322,29 @@ void MeshPass::draw(
     auto* environment = m_assets.environment(drawList.environmentPath);
     frame.environmentIntensity = environment && m_impl->environmentSampler ? drawList.environmentIntensity : 0.0f;
     frame.shadowLight = -1;
-    frame.lightingPadding[0] = frame.lightingPadding[1] = 0;
-    Mat4 shadowMatrix;
-    int shadowIndex = -1;
-    const auto requestedShadowSize = static_cast<UINT>(std::clamp(drawList.shadowResolution, 512, 4096));
-    if (shadowPixel && drawList.directionalShadows) {
+    auto& shadowMap = m_impl->shadowMap;
+    if (drawList.directionalShadows) {
         for (int i = 0; i < lightCount; ++i) {
             const auto& light = order.empty() ? drawList.lights[i] : *order[i];
             if (light.type != LightType::Directional || dot(light.radiance, light.radiance) == 0) { continue; }
-            if (m_impl->shadowResolutionAttempted != requestedShadowSize) {
-                m_impl->shadowResolutionAttempted = requestedShadowSize;
-                Microsoft::WRL::ComPtr<ID3D11Device> device;
-                context->GetDevice(device.GetAddressOf());
-                D3D11_TEXTURE2D_DESC texture{};
-                texture.Width = texture.Height = requestedShadowSize;
-                texture.MipLevels = texture.ArraySize = texture.SampleDesc.Count = 1;
-                texture.Format = DXGI_FORMAT_R32_TYPELESS;
-                texture.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
-                D3D11_DEPTH_STENCIL_VIEW_DESC dsv{};
-                dsv.Format = DXGI_FORMAT_D32_FLOAT;
-                dsv.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
-                D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
-                srv.Format = DXGI_FORMAT_R32_FLOAT;
-                srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                srv.Texture2D.MipLevels = 1;
-                D3D11_SAMPLER_DESC sampler{};
-                sampler.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
-                sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-                sampler.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
-                sampler.MaxAnisotropy = 1;
-                sampler.MaxLOD = D3D11_FLOAT32_MAX;
-                Microsoft::WRL::ComPtr<ID3D11Texture2D> depth;
-                Microsoft::WRL::ComPtr<ID3D11DepthStencilView> depthView;
-                Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> shaderView;
-                Microsoft::WRL::ComPtr<ID3D11SamplerState> comparisonSampler;
-                if (FAILED(device->CreateTexture2D(&texture, nullptr, depth.GetAddressOf())) ||
-                    FAILED(device->CreateDepthStencilView(depth.Get(), &dsv, depthView.GetAddressOf())) ||
-                    FAILED(device->CreateShaderResourceView(depth.Get(), &srv, shaderView.GetAddressOf())) ||
-                    FAILED(device->CreateSamplerState(&sampler, comparisonSampler.GetAddressOf()))) {
-                    std::cerr << "Cannot create directional shadow map at " << requestedShadowSize << " pixels\n";
-                } else {
-                    m_impl->shadowDepth = std::move(depthView);
-                    m_impl->shadowView = std::move(shaderView);
-                    m_impl->shadowSampler = std::move(comparisonSampler);
-                    m_impl->shadowResolution = requestedShadowSize;
+            if (shadowMap.update(context, view, projection, renderOrigin, light.direction, drawList)) {
+                frame.shadowLight = i;
+                frame.cascadeCount = shadowMap.count();
+                frame.cascadeBlend = CascadedShadowMap::kBlendFraction;
+                frame.cascadeNear = shadowMap.nearDepth();
+                if (projection.m[15] == 1.0f) {
+                    frame.orthoDepthScale = 1.0f / projection.m[10];
+                }
+                for (unsigned cascade = 0; cascade < frame.cascadeCount; ++cascade) {
+                    const auto& fitted = shadowMap.cascade(cascade);
+                    std::memcpy(frame.cascadeViewProj[cascade], fitted.viewProj.m, sizeof(fitted.viewProj.m));
+                    frame.cascadeSplits[cascade] = fitted.split;
+                    frame.cascadeTexel[cascade] = fitted.texelSize;
                 }
             }
-            if (!m_impl->shadowDepth) { break; }
-            const float shadowRadius = std::isfinite(drawList.shadowRadius) ?
-                std::clamp(drawList.shadowRadius, 5.0f, 200.0f) : 35.0f;
-            const Vec3 up = std::abs(light.direction.y) < 0.99f ? Vec3{0, 1, 0} : Vec3{1, 0, 0};
-            const Vec3 forward = normalize(Vec3{viewProj.m[3], viewProj.m[7], viewProj.m[11]});
-            const Vec3 center = eye + forward * (shadowRadius * 0.5f);
-            Mat4 lightView = lookAt(center - light.direction * shadowRadius, center, up);
-            const float texel = 2 * shadowRadius / static_cast<float>(m_impl->shadowResolution);
-            lightView.m[12] = std::round(lightView.m[12] / texel) * texel;
-            lightView.m[13] = std::round(lightView.m[13] / texel) * texel;
-            Mat4 orthographic;
-            orthographic.m[0] = orthographic.m[5] = 1 / shadowRadius;
-            orthographic.m[10] = 1 / (2 * shadowRadius);
-            shadowMatrix = orthographic * lightView;
-            shadowIndex = i;
             break;
         }
     }
-    frame.shadowLight = shadowIndex;
-    std::memcpy(frame.shadowViewProj, shadowMatrix.m, sizeof(frame.shadowViewProj));
     std::memcpy(frame.viewProj, viewProj.m, sizeof(frame.viewProj));
     frame.eye[0] = eye.x; frame.eye[1] = eye.y; frame.eye[2] = eye.z;
     frame.viewport[0] = viewport.TopLeftX;
@@ -387,12 +354,6 @@ void MeshPass::draw(
     frame.lightCount = static_cast<unsigned>(lightCount);
     frame.ambient[0] = drawList.ambient.x; frame.ambient[1] = drawList.ambient.y;
     frame.ambient[2] = drawList.ambient.z; frame.ambient[3] = hdr ? 1.0f : 0.0f;
-    MeshFrameCb shadowFrame = frame;
-    if (shadowIndex >= 0) { std::memcpy(shadowFrame.viewProj, shadowMatrix.m, sizeof(shadowFrame.viewProj)); }
-    if (FAILED(context->Map(m_impl->frameCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) { return; }
-    std::memcpy(mapped.pData, &shadowFrame, sizeof(shadowFrame));
-    context->Unmap(m_impl->frameCb, 0);
-
     if (lightCount > 0) {
         if (FAILED(context->Map(m_impl->lightsCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) { return; }
         auto* packed = static_cast<LightsCb*>(mapped.pData);
@@ -467,8 +428,7 @@ void MeshPass::draw(
     ID3D11PixelShader* boundPixel = program.pixel;
     Microsoft::WRL::ComPtr<ID3D11Device> device;
     if (shaders) { context->GetDevice(device.GetAddressOf()); }
-    const auto drawMesh = [&](const MeshInstance& instance, const GpuMaterial* material) {
-        const GpuMesh* mesh = geometry(instance);
+    const auto drawMesh = [&](const MeshInstance& instance, const GpuMaterial* material, const GpuMesh* mesh) {
         if (!material || mesh == nullptr || !mesh->valid()) {
             return;
         }
@@ -513,7 +473,7 @@ void MeshPass::draw(
                 boundPixel = pixel;
             }
         }
-        if (material != boundMaterial) {
+        if (material != boundMaterial && (!shadowPass || material->alphaMode == AlphaMode::Mask)) {
             context->PSSetConstantBuffers(2, 1, &material->constants);
             context->PSSetSamplers(0, 1, &material->sampler);
             context->PSSetShaderResources(0, 4, material->views);
@@ -521,36 +481,81 @@ void MeshPass::draw(
         }
         context->DrawIndexed(mesh->indexCount, 0, 0);
     };
-    if (shadowIndex >= 0) {
-        shadowPass = true;
-        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> previousTarget;
-        Microsoft::WRL::ComPtr<ID3D11DepthStencilView> previousDepth;
-        context->OMGetRenderTargets(1, previousTarget.GetAddressOf(), previousDepth.GetAddressOf());
-        const D3D11_VIEWPORT shadowViewport{0, 0, static_cast<float>(m_impl->shadowResolution),
-            static_cast<float>(m_impl->shadowResolution), 0, 1};
-        context->RSSetViewports(1, &shadowViewport);
-        context->OMSetRenderTargets(0, nullptr, m_impl->shadowDepth.Get());
-        context->ClearDepthStencilView(m_impl->shadowDepth.Get(), D3D11_CLEAR_DEPTH, 1, 0);
+    if (frame.cascadeCount != 0) {
+        auto& casters = m_impl->shadowCasters;
+        casters.clear();
+        casters.reserve(static_cast<std::size_t>(drawList.meshCount));
         for (int i = 0; i < drawList.meshCount; ++i) {
             const auto& instance = drawList.meshes[i];
             const auto* material = m_assets.material(instance.materialPath);
-            if (!material || material->alphaMode == AlphaMode::Blend) { continue; }
-            context->PSSetShader(material->alphaMode == AlphaMode::Mask ? shadowPixel : nullptr, nullptr, 0);
-            drawMesh(instance, material);
+            if (!material || material->alphaMode == AlphaMode::Blend ||
+                (material->alphaMode == AlphaMode::Mask && !shadowPixel)) {
+                continue;
+            }
+            const auto* mesh = geometry(instance);
+            if (!mesh || !mesh->valid()) { continue; }
+
+            const auto& world = instance.world;
+            const Vec3 x{world.m[0], world.m[1], world.m[2]};
+            const Vec3 y{world.m[4], world.m[5], world.m[6]};
+            const Vec3 z{world.m[8], world.m[9], world.m[10]};
+            // Bound the largest squared stretch by the maximum absolute row
+            // sum of the Gram matrix. This is the largest squared scale for TRS.
+            const float xy = std::abs(dot(x, y)), xz = std::abs(dot(x, z)), yz = std::abs(dot(y, z));
+            const float scale = std::sqrt(std::max({dot(x, x) + xy + xz, dot(y, y) + xy + yz, dot(z, z) + xz + yz}));
+            const auto& center = mesh->boundsCenter;
+            const Vec3 worldCenter = transformPoint(world, {center[0], center[1], center[2]});
+            casters.push_back({&instance, mesh, material, shadowMap.lightSpaceCenter(worldCenter), mesh->boundsRadius * scale});
+        }
+
+        shadowPass = true;
+        ID3D11ShaderResourceView* unboundShadow = nullptr;
+        context->PSSetShaderResources(5, 1, &unboundShadow);
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> previousTarget;
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilView> previousDepth;
+        context->OMGetRenderTargets(1, previousTarget.GetAddressOf(), previousDepth.GetAddressOf());
+        const float size = static_cast<float>(shadowMap.resolution());
+        const D3D11_VIEWPORT shadowViewport{0, 0, size, size, 0, 1};
+        context->RSSetViewports(1, &shadowViewport);
+        context->RSSetState(shadowMap.rasterizer());
+        for (unsigned cascade = 0; cascade < frame.cascadeCount; ++cascade) {
+            if (FAILED(context->Map(m_impl->frameCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+                frame.shadowLight = -1;
+                frame.cascadeCount = 0;
+                break;
+            }
+            // The shadow vertex shader only reads the first matrix for position.
+            std::memcpy(mapped.pData, frame.cascadeViewProj[cascade], sizeof(frame.viewProj));
+            context->Unmap(m_impl->frameCb, 0);
+
+            auto* depthView = shadowMap.depthView(cascade);
+            context->OMSetRenderTargets(0, nullptr, depthView);
+            context->ClearDepthStencilView(depthView, D3D11_CLEAR_DEPTH, 1, 0);
+            for (const auto& caster : casters) {
+                if (!shadowMap.overlaps(cascade, caster.lightCenter, caster.radius)) { continue; }
+                auto* pixel = caster.material->alphaMode == AlphaMode::Mask ? shadowPixel : nullptr;
+                if (pixel != boundPixel) {
+                    context->PSSetShader(pixel, nullptr, 0);
+                    boundPixel = pixel;
+                }
+                drawMesh(*caster.instance, caster.material, caster.mesh);
+            }
         }
         auto* target = previousTarget.Get();
         context->OMSetRenderTargets(1, &target, previousDepth.Get());
         context->RSSetViewports(1, &viewport);
+        context->RSSetState(m_impl->rasterizer);
         context->PSSetShader(program.pixel, nullptr, 0);
+        boundPixel = program.pixel;
         shadowPass = false;
         boundMaterial = nullptr;
-        if (FAILED(context->Map(m_impl->frameCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) { return; }
-        std::memcpy(mapped.pData, &frame, sizeof(frame));
-        context->Unmap(m_impl->frameCb, 0);
     }
+    if (FAILED(context->Map(m_impl->frameCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) { return; }
+    std::memcpy(mapped.pData, &frame, sizeof(frame));
+    context->Unmap(m_impl->frameCb, 0);
 
-    ID3D11ShaderResourceView* lightingViews[] = {environment, shadowIndex >= 0 ? m_impl->shadowView.Get() : nullptr};
-    ID3D11SamplerState* lightingSamplers[] = {m_impl->environmentSampler.Get(), m_impl->shadowSampler.Get()};
+    ID3D11ShaderResourceView* lightingViews[] = {environment, frame.cascadeCount != 0 ? shadowMap.shaderView() : nullptr};
+    ID3D11SamplerState* lightingSamplers[] = {m_impl->environmentSampler.Get(), shadowMap.sampler()};
     context->PSSetShaderResources(4, 2, lightingViews);
     context->PSSetSamplers(1, 2, lightingSamplers);
     auto& transparent = m_impl->transparent;
@@ -559,7 +564,7 @@ void MeshPass::draw(
         const auto& instance = drawList.meshes[i];
         const auto* material = m_assets.material(instance.materialPath);
         if (material && material->alphaMode == AlphaMode::Blend) { transparent.push_back(&instance); }
-        else { drawMesh(instance, material); }
+        else { drawMesh(instance, material, geometry(instance)); }
     }
     if (!transparent.empty()) {
         const auto depthAt = [&](const MeshInstance* mesh) {
@@ -575,7 +580,7 @@ void MeshPass::draw(
         context->OMSetBlendState(m_impl->blend.Get(), nullptr, 0xffffffff);
         context->OMSetDepthStencilState(m_impl->transparentDepth.Get(), 0);
         for (const auto* instance : transparent) {
-            drawMesh(*instance, m_assets.material(instance->materialPath));
+            drawMesh(*instance, m_assets.material(instance->materialPath), geometry(*instance));
         }
         context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
     }

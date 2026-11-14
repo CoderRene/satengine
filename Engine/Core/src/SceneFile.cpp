@@ -5,6 +5,7 @@
 #include "module/ScenePhysicsFile.hpp"
 #include "AssetData.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -14,9 +15,11 @@
 #include <sstream>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace sat {
 namespace {
+constexpr int kSceneVersion = 11;
 constexpr std::size_t kMaxSceneBytes = 16 * 1024 * 1024;
 constexpr std::size_t kMaxEntities = 100000;
 constexpr std::size_t kMaxScripts = 128;
@@ -33,14 +36,15 @@ bool finite(const DVec3& value) {
 std::string serializeScene(const Scene& scene) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "SatScene 9\n" << scene.entities().size() << '\n';
+    out << "SatScene " << kSceneVersion << '\n' << scene.entityCount() << '\n';
     writePhysicsSettings(out, scene.physicsSettings);
     writeAudioSettings(out, scene.audioSettings);
     const auto& ambient = scene.lightingSettings;
     out << ambient.ambientColor[0] << ' ' << ambient.ambientColor[1] << ' '
         << ambient.ambientColor[2] << ' ' << ambient.ambientIntensity << '\n';
     out << std::quoted(ambient.environmentPath) << ' ' << ambient.environmentIntensity << ' '
-        << ambient.directionalShadows << ' ' << ambient.shadowResolution << ' ' << ambient.shadowRadius << '\n';
+        << ambient.directionalShadows << ' ' << ambient.shadowResolution << ' ' << ambient.shadowDistance << ' '
+        << ambient.shadowCascadeCount << ' ' << ambient.shadowSplitLambda << '\n';
     const auto& bloom = ambient.bloom;
     out << bloom.enabled << ' ' << bloom.threshold << ' ' << bloom.softKnee << ' '
         << bloom.intensity << ' ' << bloom.radius << ' ' << bloom.tint[0] << ' '
@@ -73,6 +77,11 @@ std::string serializeScene(const Scene& scene) {
             << light.intensity << ' ' << light.range << ' ' << light.innerConeDegrees << ' '
             << light.outerConeDegrees << '\n';
     }
+    // File-local ordinals keep hierarchy links independent of runtime IDs.
+    for (const auto& entity : scene.entities()) {
+        const auto parent = scene.entityIndex(entity.parentId());
+        out << (parent ? *parent + 1 : 0) << '\n';
+    }
     return out.str();
 }
 
@@ -87,7 +96,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
     std::string magic;
     int version = 0;
     std::size_t count = 0;
-    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > 9) || count > kMaxEntities) {
+    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > kSceneVersion) || count > kMaxEntities) {
         return fail("Invalid scene header, version or entity count.");
     }
     Scene candidate;
@@ -115,16 +124,34 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
         !std::isfinite(ambient.environmentIntensity) || ambient.environmentIntensity < 0)) {
         return fail("Invalid environment lighting settings.");
     }
-    if (version >= 8 && (!(in >> ambient.shadowResolution >> ambient.shadowRadius) ||
-        (ambient.shadowResolution != 512 && ambient.shadowResolution != 1024 &&
-         ambient.shadowResolution != 2048 && ambient.shadowResolution != 4096) ||
-        !std::isfinite(ambient.shadowRadius) || ambient.shadowRadius < 5.0f || ambient.shadowRadius > 200.0f)) {
-        return fail("Invalid directional shadow quality settings.");
-    }
-    auto& bloom = ambient.bloom;
     const auto readRange = [&](float& value, float minimum, float maximum) {
         return (in >> value) && std::isfinite(value) && value >= minimum && value <= maximum;
     };
+    if (version >= 8 && (!(in >> ambient.shadowResolution) ||
+        (ambient.shadowResolution != 512 && ambient.shadowResolution != 1024 &&
+         ambient.shadowResolution != 2048 && ambient.shadowResolution != 4096))) {
+        return fail("Invalid directional shadow resolution.");
+    }
+    if (version >= 10) {
+        std::string cascadeFields;
+        std::getline(in, cascadeFields);
+        std::istringstream cascades{std::move(cascadeFields)};
+        cascades.imbue(in.getloc());
+        if (!(cascades >> ambient.shadowDistance >> ambient.shadowCascadeCount >> ambient.shadowSplitLambda) ||
+            !std::isfinite(ambient.shadowDistance) || ambient.shadowDistance < 10 || ambient.shadowDistance > 1000 ||
+            ambient.shadowCascadeCount < 1 || ambient.shadowCascadeCount > 4 ||
+            !std::isfinite(ambient.shadowSplitLambda) || ambient.shadowSplitLambda < 0 || ambient.shadowSplitLambda > 1 ||
+            !(cascades >> std::ws).eof()) {
+            return fail("Invalid directional shadow cascade settings.");
+        }
+    } else if (version >= 8) {
+        float radius = 0;
+        if (!readRange(radius, 5, 200)) {
+            return fail("Invalid directional shadow radius.");
+        }
+        ambient.shadowDistance = std::clamp(radius * 2.0f, 10.0f, 1000.0f);
+    }
+    auto& bloom = ambient.bloom;
     if (version >= 9 && (!(in >> bloom.enabled) || !readRange(bloom.threshold, 0, 100) ||
         !readRange(bloom.softKnee, 0, 1) || !readRange(bloom.intensity, 0, 10) ||
         !readRange(bloom.radius, 0, 64) || !readColor(bloom.tint) ||
@@ -196,6 +223,39 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
                 return fail("Invalid light on entity " + e.name);
             }
             light.type = static_cast<LightType>(type);
+        }
+    }
+    if (version >= 11) {
+        // Install links from the leaves up so each prospective parent is still
+        // a root. Entities in a cycle never reach a child count of zero.
+        std::vector<std::size_t> parents(count + 1);
+        std::vector<std::size_t> childCounts(count + 1);
+        for (std::size_t ordinal = 1; ordinal <= count; ++ordinal) {
+            int parent = 0;
+            if (!(in >> parent) || parent < 0 || static_cast<std::size_t>(parent) > count) {
+                return fail("Invalid parent ordinal for entity " + std::to_string(ordinal));
+            }
+            parents[ordinal] = static_cast<std::size_t>(parent);
+            ++childCounts[parents[ordinal]];
+        }
+        std::size_t installed = 0;
+        for (std::size_t ordinal = 1; ordinal <= count; ++ordinal) {
+            auto child = ordinal;
+            while (child != 0 && childCounts[child] == 0) {
+                const auto parent = parents[child];
+                if (parent != 0 &&
+                    !candidate.setParent(candidate.entity(child - 1)->id(), candidate.entity(parent - 1)->id())) {
+                    return fail("Invalid scene hierarchy.");
+                }
+                ++installed;
+                // Mark this entity processed, including when it is a root.
+                ++childCounts[child];
+                --childCounts[parent];
+                child = parent;
+            }
+        }
+        if (installed != count) {
+            return fail("Scene hierarchy contains a parent cycle.");
         }
     }
     in >> std::ws;

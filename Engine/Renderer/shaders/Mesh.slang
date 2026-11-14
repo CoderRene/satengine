@@ -14,7 +14,13 @@ cbuffer Frame : register(b0)
     float environmentIntensity;
     int shadowLight;
     float2 lightingPadding;
-    float4x4 shadowViewProj;
+    float4x4 cascadeViewProj[4];
+    float4 cascadeSplits;
+    float4 cascadeTexel;
+    uint cascadeCount;
+    float cascadeBlend;
+    float cascadeNear;
+    float orthoDepthScale;
 };
 cbuffer Object : register(b1)
 {
@@ -33,7 +39,7 @@ cbuffer Clusters : register(b4)
 
 Texture2D<float4> environmentMap : register(t4);
 SamplerState environmentSampler : register(s1);
-Texture2D<float> shadowMap : register(t5);
+Texture2DArray<float> shadowMap : register(t5);
 SamplerComparisonState shadowSampler : register(s2);
 
 float2 environmentUv(float3 direction)
@@ -42,13 +48,55 @@ float2 environmentUv(float3 direction)
         acos(clamp(direction.y, -1.0, 1.0)) * 0.318309886);
 }
 
-float shadowVisibility(float3 position, float3 normal, float3 l)
+float sampleCascade(uint cascade, float3 position, float3 normal, float normalBias)
 {
-    float4 clipPosition = mul(shadowViewProj, float4(position, 1));
+    float3 offsetPosition = position + normal * (cascadeTexel[cascade] * normalBias);
+    float4 clipPosition = mul(cascadeViewProj[cascade], float4(offsetPosition, 1.0));
     float2 uv = clipPosition.xy * float2(0.5, -0.5) + 0.5;
     if (any(uv <= 0.0) || any(uv >= 1.0) || clipPosition.z <= 0.0 || clipPosition.z >= 1.0) { return 1.0; }
-    float bias = lerp(0.0015, 0.00035, saturate(dot(normal, l)));
-    return shadowMap.SampleCmpLevelZero(shadowSampler, uv, clipPosition.z - bias);
+
+    float3 location = float3(uv, float(cascade));
+    float depth = clipPosition.z - 0.0001;
+    float visibility = 0.0;
+    visibility += shadowMap.SampleCmpLevelZero(shadowSampler, location, depth, int2(-1, -1));
+    visibility += shadowMap.SampleCmpLevelZero(shadowSampler, location, depth, int2(0, -1));
+    visibility += shadowMap.SampleCmpLevelZero(shadowSampler, location, depth, int2(1, -1));
+    visibility += shadowMap.SampleCmpLevelZero(shadowSampler, location, depth, int2(-1, 0));
+    visibility += shadowMap.SampleCmpLevelZero(shadowSampler, location, depth, int2(0, 0));
+    visibility += shadowMap.SampleCmpLevelZero(shadowSampler, location, depth, int2(1, 0));
+    visibility += shadowMap.SampleCmpLevelZero(shadowSampler, location, depth, int2(-1, 1));
+    visibility += shadowMap.SampleCmpLevelZero(shadowSampler, location, depth, int2(0, 1));
+    visibility += shadowMap.SampleCmpLevelZero(shadowSampler, location, depth, int2(1, 1));
+    return visibility * (1.0 / 9.0);
+}
+
+float shadowVisibility(float3 position, float3 normal, float3 l, float viewDepth)
+{
+    float nearDepth = cascadeNear;
+    uint cascade = 0;
+    for (; cascade < cascadeCount; ++cascade)
+    {
+        float split = cascadeSplits[cascade];
+        if (viewDepth < split) { break; }
+        nearDepth = split;
+    }
+    if (cascade == cascadeCount) { return 1.0; }
+
+    float normalBias = 1.0 - saturate(dot(normal, l));
+    float visibility = sampleCascade(cascade, position, normal, normalBias);
+    float farDepth = cascadeSplits[cascade];
+    float blendWidth = (farDepth - nearDepth) * cascadeBlend;
+    float blend = saturate(1.0 - (farDepth - viewDepth) / blendWidth);
+    if (blend > 0.0)
+    {
+        float next = 1.0;
+        if (cascade + 1 < cascadeCount)
+        {
+            next = sampleCascade(cascade + 1, position, normal, normalBias);
+        }
+        visibility = lerp(visibility, next, blend);
+    }
+    return visibility;
 }
 
 struct VertexInput
@@ -110,7 +158,11 @@ float4 psMain(MeshFragment input) : SV_Target
             bits &= bits - 1;
             float3 l;
             float3 radiance = evaluator.evaluate(lights[i], input.worldPosition, l);
-            if (int(i) == shadowLight) { radiance *= shadowVisibility(input.worldPosition, surface.normal, l); }
+            if (int(i) == shadowLight)
+            {
+                float viewDepth = orthoDepthScale != 0.0 ? cascadeNear + input.position.z * orthoDepthScale : input.clipW;
+                radiance *= shadowVisibility(input.worldPosition, surface.normal, l, viewDepth);
+            }
             color += radiance * evaluateBrdf(surface.normal, v, l, surface.albedo, surface.metal, surface.rough, specularStrength);
         }
     }

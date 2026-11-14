@@ -10,7 +10,7 @@ files as audio. Playback supports the four formats listed above.
 In the Inspector, use **Add Component** to add an **Audio Source** or **Audio
 Listener**. Select the source clip and bus in the Inspector. Open **Scene >
 Audio Settings** to set gains, voice limits, and time scaling for each bus.
-Scenes save as `SatScene 9`. Versions 1–8 still load. Versions 1–3 have no audio
+Scenes save as `SatScene 10`. Versions 1–9 still load. Versions 1–3 have no audio
 components.
 
 - The line after physics settings contains master gain, SFX gain, music gain,

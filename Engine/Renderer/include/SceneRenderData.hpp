@@ -26,7 +26,9 @@ private:
     float m_environmentIntensity = 1;
     bool m_directionalShadows = true;
     int m_shadowResolution = 2048;
-    float m_shadowRadius = 35.0f;
+    float m_shadowDistance = 100.0f;
+    int m_shadowCascadeCount = 4;
+    float m_shadowSplitLambda = 0.75f;
     BloomSettings m_bloom;
     bool m_hasCamera = false;
 };

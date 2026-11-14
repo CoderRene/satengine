@@ -61,7 +61,7 @@ private:
     void openProject(const std::filesystem::path& folder);
     void openProjectNow(const std::filesystem::path& folder);
     void reloadAssets();
-    void selectEntity(EntityId id);
+    void selectEntity(EntityId id, bool keepHierarchySelection = false);
     void syncLuaTooling() const;
     [[nodiscard]] bool createProjectFromDialog();
     static bool createProjectThunk(void* context);

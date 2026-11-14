@@ -249,13 +249,15 @@ void EditorSession::reloadAssets() {
     });
 }
 
-void EditorSession::selectEntity(EntityId id) {
-    m_state->assetImports->request([this, id] {
+void EditorSession::selectEntity(EntityId id, bool keepHierarchySelection) {
+    m_state->assetImports->request([this, id, keepHierarchySelection] {
         m_state->viewport->resetInteraction();
         m_state->assetImports->clear();
         m_state->content->setSelectedAsset({});
-        const auto index = m_state->scene.entityIndex(id);
-        m_state->hierarchy->setSelectedIndex(index ? static_cast<int>(*index) : -1);
+        if (!keepHierarchySelection) {
+            const auto index = m_state->scene.entityIndex(id);
+            m_state->hierarchy->setSelectedIndex(index ? static_cast<int>(*index) : -1);
+        }
     });
 }
 

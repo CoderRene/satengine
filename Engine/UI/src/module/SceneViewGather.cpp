@@ -41,7 +41,9 @@ std::uint64_t viewRenderKey(const GameViewCamera& camera, const SceneDrawList& d
     mixViewPod(hash, draw.environmentIntensity);
     mixViewPod(hash, static_cast<unsigned char>(draw.directionalShadows));
     mixViewPod(hash, draw.shadowResolution);
-    mixViewPod(hash, draw.shadowRadius);
+    mixViewPod(hash, draw.shadowDistance);
+    mixViewPod(hash, draw.shadowCascadeCount);
+    mixViewPod(hash, draw.shadowSplitLambda);
     mixViewPod(hash, static_cast<unsigned char>(draw.bloom.enabled));
     mixViewPod(hash, draw.bloom.threshold);
     mixViewPod(hash, draw.bloom.softKnee);
@@ -193,7 +195,9 @@ void EditorSession::renderViews() {
     sceneDraw.environmentIntensity = visibleScene.lightingSettings.environmentIntensity;
     sceneDraw.directionalShadows = visibleScene.lightingSettings.directionalShadows;
     sceneDraw.shadowResolution = visibleScene.lightingSettings.shadowResolution;
-    sceneDraw.shadowRadius = visibleScene.lightingSettings.shadowRadius;
+    sceneDraw.shadowDistance = visibleScene.lightingSettings.shadowDistance;
+    sceneDraw.shadowCascadeCount = visibleScene.lightingSettings.shadowCascadeCount;
+    sceneDraw.shadowSplitLambda = visibleScene.lightingSettings.shadowSplitLambda;
     sceneDraw.bloom = visibleScene.lightingSettings.bloom;
     sceneDraw.ambient = ambientRadiance(visibleScene.lightingSettings);
     sceneDraw.meshes = meshInstances.empty() ? nullptr : meshInstances.data();

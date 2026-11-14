@@ -1,5 +1,6 @@
 #include "GpuAssetCache.hpp"
 
+#include "Math.hpp"
 #include "ShaderLayout.hpp"
 
 #include <wrl/client.h>
@@ -10,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <numeric>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -53,6 +55,13 @@ bool createMesh(ID3D11Device* device, const MeshData& data, MeshResource& resour
     if (FAILED(hr)) { error = "Cannot create GPU mesh buffers (HRESULT " + std::to_string(hr) + ")"; return false; }
     resource.view = {resource.vertices.Get(), resource.indices.Get(), static_cast<UINT>(data.indices.size()),
         static_cast<UINT>(sizeof(MeshVertex)), DXGI_FORMAT_R32_UINT};
+    float extent[3];
+    for (int axis = 0; axis < 3; ++axis) {
+        const float center = std::midpoint(data.minimum[axis], data.maximum[axis]);
+        resource.view.boundsCenter[axis] = center;
+        extent[axis] = std::max(center - data.minimum[axis], data.maximum[axis] - center);
+    }
+    resource.view.boundsRadius = length({extent[0], extent[1], extent[2]});
     return true;
 }
 bool createTexture(ID3D11Device* device, const TextureData& data, TextureResource& resource, std::string& error) {

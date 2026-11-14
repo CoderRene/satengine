@@ -27,8 +27,9 @@ public:
     void release();
     void draw(
         ID3D11DeviceContext* context, ShaderProgram program,
-        const Mat4& viewProj, Vec3 eye,
-        const SceneDrawList& drawList, bool hdr = false, ID3D11PixelShader* shadowPixel = nullptr, ShaderLibrary* shaders = nullptr) const;
+        const Mat4& view, const Mat4& projection, Vec3 eye,
+        const SceneDrawList& drawList, bool hdr = false, ID3D11PixelShader* shadowPixel = nullptr,
+        ShaderLibrary* shaders = nullptr, DVec3 renderOrigin = {}) const;
 
     // Geometry owned by this pass for the given primitive (nullptr if unknown/unready).
     [[nodiscard]] const GpuMesh* geometry(const MeshInstance& instance) const;

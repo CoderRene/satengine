@@ -66,7 +66,9 @@ struct LightingSettings {
     float environmentIntensity = 1.0f;
     bool directionalShadows = true;
     int shadowResolution = 2048;
-    float shadowRadius = 35.0f;
+    float shadowDistance = 100.0f;
+    int shadowCascadeCount = 4;
+    float shadowSplitLambda = 0.75f;
 };
 
 struct MeshComponent {
@@ -94,6 +96,7 @@ inline constexpr EntityId kInvalidEntityId = 0;
 
 struct Entity {
     [[nodiscard]] EntityId id() const { return m_id; }
+    [[nodiscard]] EntityId parentId() const { return m_parentId; }
     std::string name;
     Transform transform;
     bool hasCamera = false;
@@ -118,6 +121,8 @@ struct Entity {
 private:
     friend class Scene;
     EntityId m_id = kInvalidEntityId;
+    EntityId m_parentId = kInvalidEntityId;
+    std::size_t m_childCount = 0;
 };
 
 class Scene {
@@ -141,6 +146,11 @@ public:
     [[nodiscard]] std::optional<std::size_t> entityIndex(EntityId id) const;
     [[nodiscard]] Entity* entityById(EntityId id);
     [[nodiscard]] const Entity* entityById(EntityId id) const;
+    // Hierarchy orders entities in the editor. Transforms remain in world space.
+    // Use kInvalidEntityId as the parent to move an entity to the root.
+    [[nodiscard]] bool canSetParent(EntityId childId, EntityId parentId) const;
+    [[nodiscard]] bool setParent(EntityId childId, EntityId parentId);
+    // Direct children of a removed entity become roots.
     [[nodiscard]] bool destroyEntity(EntityId id);
     [[nodiscard]] bool setMainCameraById(EntityId id);
     // Indices are temporary positions for editor/serialization use, never handles.
@@ -151,7 +161,7 @@ public:
     [[nodiscard]] int mainCameraIndex() const;
 
     Entity& createEntity(std::string name);
-    // Insert an entity from a scene copy with its original ID. The ID must be absent.
+    // Insert a root from a scene copy with its original ID. The ID must be absent.
     void addEntityCopy(const Entity& entity);
     void addEmpty();
     void clear();
@@ -165,6 +175,7 @@ public:
 
 private:
     Entity& insertEntity(Entity entity);
+    [[nodiscard]] bool canSetParent(const Entity& child, const Entity* parent) const;
 
     std::vector<Entity> m_entities;
     std::unordered_map<EntityId, std::size_t> m_entityIndices;

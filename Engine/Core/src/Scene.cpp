@@ -82,6 +82,46 @@ const Entity* Scene::entityById(EntityId id) const {
     return found != m_entityIndices.end() ? &m_entities[found->second] : nullptr;
 }
 
+bool Scene::canSetParent(const Entity& child, const Entity* parent) const {
+    if (parent == &child) {
+        return false;
+    }
+    if (child.m_childCount != 0) {
+        for (const Entity* ancestor = parent; ancestor; ancestor = entityById(ancestor->parentId())) {
+            if (ancestor == &child) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool Scene::canSetParent(EntityId childId, EntityId parentId) const {
+    const Entity* child = entityById(childId);
+    const Entity* parent = entityById(parentId);
+    return child && (parent || parentId == kInvalidEntityId) && canSetParent(*child, parent);
+}
+
+bool Scene::setParent(EntityId childId, EntityId parentId) {
+    Entity* child = entityById(childId);
+    Entity* parent = entityById(parentId);
+    if (!child || (!parent && parentId != kInvalidEntityId) || !canSetParent(*child, parent)) {
+        return false;
+    }
+    if (child->m_parentId == parentId) {
+        return true;
+    }
+    if (Entity* previous = entityById(child->m_parentId)) {
+        --previous->m_childCount;
+    }
+    child->m_parentId = parentId;
+    if (parent) {
+        ++parent->m_childCount;
+    }
+    markEdited();
+    return true;
+}
+
 bool Scene::destroyEntity(EntityId id) {
     const auto found = m_entityIndices.find(id);
     return found != m_entityIndices.end() && remove(found->second);
@@ -123,7 +163,10 @@ Entity& Scene::createEntity(std::string name) {
 }
 
 void Scene::addEntityCopy(const Entity& entity) {
-    (void)insertEntity(entity);
+    Entity copy = entity;
+    copy.m_parentId = kInvalidEntityId;
+    copy.m_childCount = 0;
+    (void)insertEntity(std::move(copy));
 }
 
 Entity& Scene::insertEntity(Entity entity) {
@@ -199,7 +242,18 @@ bool Scene::remove(std::size_t index) {
     }
     markEdited();
     ++m_destructionRevision;
-    m_entityIndices.erase(m_entities[index].id());
+    const Entity& removed = m_entities[index];
+    if (Entity* parent = entityById(removed.parentId())) {
+        --parent->m_childCount;
+    }
+    if (removed.m_childCount != 0) {
+        for (Entity& child : m_entities) {
+            if (child.m_parentId == removed.id()) {
+                child.m_parentId = kInvalidEntityId;
+            }
+        }
+    }
+    m_entityIndices.erase(removed.id());
     if (index + 1 != m_entities.size()) {
         m_entities[index] = std::move(m_entities.back());
         m_entityIndices.find(m_entities[index].id())->second = index;

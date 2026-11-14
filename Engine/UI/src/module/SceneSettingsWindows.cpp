@@ -44,12 +44,16 @@ void drawSceneSettingsWindows(bool& showLighting, bool& showAudio, bool& showPhy
                 constexpr int kResolutions[] = {512, 1024, 2048, 4096};
                 int resolution = settings.shadowResolution == 512 ? 0 : settings.shadowResolution == 1024 ? 1 :
                     settings.shadowResolution == 4096 ? 3 : 2;
-                if (ImGui::Combo("Shadow Resolution", &resolution, "512\0" "1024\0" "2048\0" "4096\0")) {
+                if (ImGui::Combo("Cascade Resolution", &resolution, "512\0" "1024\0" "2048\0" "4096\0")) {
                     settings.shadowResolution = kResolutions[resolution];
                     changed = true;
                 }
-                changed |= dragFloat("Shadow Coverage Radius", &settings.shadowRadius, 0.5f,
-                    5.0f, 200.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+                changed |= dragFloat("Shadow Distance", &settings.shadowDistance, 0.5f,
+                    10.0f, 1000.0f, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+                changed |= ImGui::SliderInt("Cascades", &settings.shadowCascadeCount, 1, 4, "%d",
+                    ImGuiSliderFlags_AlwaysClamp);
+                changed |= ImGui::SliderFloat("Split Distribution", &settings.shadowSplitLambda, 0, 1, "%.2f",
+                    ImGuiSliderFlags_AlwaysClamp);
             }
             if (ImGui::BeginCombo("Environment Map", settings.environmentPath.empty() ? "None" : settings.environmentPath.c_str())) {
                 if (ImGui::Selectable("None", settings.environmentPath.empty())) {

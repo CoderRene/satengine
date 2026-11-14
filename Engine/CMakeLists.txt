@@ -214,6 +214,7 @@ add_library(SatRuntime STATIC
     Renderer/src/module/RenderGrid.cpp
     Renderer/src/module/MaterialThumbnail.cpp
     Renderer/src/module/MeshPass.cpp
+    Renderer/src/module/CascadedShadowMap.cpp
     Renderer/src/module/ShaderLibrary.cpp
     Renderer/src/module/GpuAssetCache.cpp
     Renderer/src/module/SelectionOutlinePass.cpp

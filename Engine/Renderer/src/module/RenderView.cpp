@@ -72,8 +72,9 @@ void RenderSession::renderOffscreenView(
     if (drawList.meshCount > 0 && m_state->meshPass.ensure(m_state->device)) {
         const Mat4 invView = inverse(viewMat);
         m_state->meshPass.prepareAssets(m_state->device, drawList);
-        m_state->meshPass.draw(context, m_state->shaders.program(ShaderId::Mesh), viewProj,
-            {invView.m[12], invView.m[13], invView.m[14]}, drawList, true, m_state->shaders.program(ShaderId::Shadow).pixel, &m_state->shaders);
+        m_state->meshPass.draw(context, m_state->shaders.program(ShaderId::Mesh), viewMat, projMat,
+            {invView.m[12], invView.m[13], invView.m[14]}, drawList, true,
+            m_state->shaders.program(ShaderId::Shadow).pixel, &m_state->shaders, camera.renderOrigin);
     }
 
     const auto post = m_state->shaders.program(ShaderId::PostProcess);

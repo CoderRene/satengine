@@ -27,7 +27,9 @@ void SceneRenderData::update(const Scene& scene, int width, int height) {
     m_environmentIntensity = scene.lightingSettings.environmentIntensity;
     m_directionalShadows = scene.lightingSettings.directionalShadows;
     m_shadowResolution = scene.lightingSettings.shadowResolution;
-    m_shadowRadius = scene.lightingSettings.shadowRadius;
+    m_shadowDistance = scene.lightingSettings.shadowDistance;
+    m_shadowCascadeCount = scene.lightingSettings.shadowCascadeCount;
+    m_shadowSplitLambda = scene.lightingSettings.shadowSplitLambda;
     m_bloom = scene.lightingSettings.bloom;
     m_hasCamera = false;
     const int index = scene.mainCameraIndex();
@@ -74,7 +76,9 @@ SceneDrawList SceneRenderData::drawList() const {
     draw.environmentIntensity = m_environmentIntensity;
     draw.directionalShadows = m_directionalShadows;
     draw.shadowResolution = m_shadowResolution;
-    draw.shadowRadius = m_shadowRadius;
+    draw.shadowDistance = m_shadowDistance;
+    draw.shadowCascadeCount = m_shadowCascadeCount;
+    draw.shadowSplitLambda = m_shadowSplitLambda;
     draw.bloom = m_bloom;
     draw.ambient = m_ambient;
     draw.meshes = m_meshes.empty() ? nullptr : m_meshes.data();

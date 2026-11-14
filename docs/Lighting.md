@@ -47,13 +47,14 @@ followed by intensity.
 
 ## Shadows, environment, and opacity
 
-- **Directional Shadows** uses a camera-centered shadow map for the
-  first active directional light. Under **Scene → Lighting Settings**, choose
-  **Shadow Resolution** (512, 1024, 2048, or 4096) and **Shadow Coverage Radius**
-  (5–200 world units). Smaller coverage gives finer detail near the camera.
-  Higher resolution increases detail and GPU memory use. The defaults are
-  2048 pixels and 35 world units. Opaque and masked geometry cast shadows.
-  Point and spot shadow maps and translucent shadow casting are outside this implementation.
+- **Directional Shadows** uses up to four camera-frustum cascades for the first
+  active directional light. Under **Scene → Lighting Settings**, set
+  **Cascades** (1–4), **Shadow Distance** (10–1000 world units),
+  **Split Distribution** (0 for even splits, 1 for logarithmic splits), and
+  **Cascade Resolution** (512, 1024, 2048, or 4096 pixels per cascade).
+  The defaults are four cascades, 100 world units, a split distribution of 0.75,
+  and 2048 pixels per cascade. Opaque and masked geometry cast shadows. The
+  default depth array uses 64 MiB of GPU memory.
 - **Environment Map** accepts an equirectangular PNG or JPEG under `Assets/`.
   Enable mipmap generation on the texture to give rough reflections a blurrier
   level. The shader approximates diffuse and specular image-based lighting by

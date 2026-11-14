@@ -9,14 +9,21 @@ void EditorSession::drawPanels() {
     const bool sceneReadOnly = state.play.decisionPending();
     const bool playing = state.play.active();
     if (state.hierarchy) {
-        const int previous = state.hierarchy->selectedIndex();
+        const int previousIndex = state.hierarchy->selectedIndex();
+        const Entity* previous = previousIndex >= 0 ? state.scene.entity(static_cast<std::size_t>(previousIndex)) : nullptr;
+        const EntityId previousId = previous ? previous->id() : kInvalidEntityId;
         state.hierarchy->onImGuiRender(sceneReadOnly);
         if (state.hierarchy->selectionActivated()) {
             const int selected = state.hierarchy->selectedIndex();
             const Entity* entity = selected >= 0 ? state.scene.entity(static_cast<std::size_t>(selected)) : nullptr;
             const EntityId id = entity ? entity->id() : kInvalidEntityId;
-            state.hierarchy->setSelectedIndex(previous);
-            selectEntity(id);
+            if (state.assetImports->dirty()) {
+                const auto index = state.scene.entityIndex(previousId);
+                state.hierarchy->setSelectedIndex(index ? static_cast<int>(*index) : -1);
+                selectEntity(id);
+            } else {
+                selectEntity(id, true);
+            }
         }
     }
 

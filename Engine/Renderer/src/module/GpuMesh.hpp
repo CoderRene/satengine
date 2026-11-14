@@ -18,6 +18,8 @@ struct GpuMesh {
     UINT indexCount = 0;
     UINT vertexStride = 0;
     DXGI_FORMAT indexFormat = DXGI_FORMAT_R16_UINT;
+    float boundsCenter[3]{}; // Mesh-local bounding sphere.
+    float boundsRadius = 0.0f;
 
     [[nodiscard]] bool valid() const {
         return vertexBuffer != nullptr && indexBuffer != nullptr && indexCount > 0 &&

@@ -154,7 +154,7 @@ corners per polygon. Decoded CPU data, including generated mip levels, is bounde
 4096 unique paths. Sidecars are bounded to 4096 bytes and material files to 8192 bytes.
 Cache-limit failures are explicit; reload to reclaim cached resources.
 
-Scene saves write `SatScene 9` with quoted mesh and material paths. Versions 1–8
+Scene saves write `SatScene 10` with quoted mesh and material paths. Versions 1–9
 still load. Versions 1–5 use default ambient settings. Legacy texture references are discarded
 with a load warning. Create a material that references the texture to restore it.
 

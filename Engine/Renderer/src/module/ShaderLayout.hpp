@@ -19,7 +19,13 @@ struct alignas(16) MeshFrameCb {
     float environmentIntensity;
     int shadowLight;
     float lightingPadding[2];
-    float shadowViewProj[16];
+    float cascadeViewProj[4][16];
+    float cascadeSplits[4];
+    float cascadeTexel[4];
+    unsigned cascadeCount;
+    float cascadeBlend;
+    float cascadeNear;
+    float orthoDepthScale;
 };
 
 struct alignas(16) MeshObjectCb {
@@ -100,7 +106,9 @@ struct alignas(16) GizmoFrameCb {
 
 static_assert(sizeof(MeshVertex) == 48 && offsetof(MeshVertex, nx) == 12 &&
     offsetof(MeshVertex, u) == 24 && offsetof(MeshVertex, tx) == 32);
-static_assert(sizeof(MeshFrameCb) == 192 && alignof(MeshFrameCb) == 16);
+static_assert(sizeof(MeshFrameCb) == 432 && alignof(MeshFrameCb) == 16 &&
+    offsetof(MeshFrameCb, cascadeViewProj) == 128 && offsetof(MeshFrameCb, cascadeSplits) == 384 &&
+    offsetof(MeshFrameCb, cascadeTexel) == 400 && offsetof(MeshFrameCb, cascadeCount) == 416);
 static_assert(sizeof(MeshObjectCb) == 128 && alignof(MeshObjectCb) == 16);
 static_assert(sizeof(MaterialCb) == 64 && alignof(MaterialCb) == 16);
 static_assert(sizeof(PackedLight) == 64 && alignof(PackedLight) == 16);

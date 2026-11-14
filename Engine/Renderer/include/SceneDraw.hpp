@@ -71,7 +71,9 @@ struct SceneDrawList {
     float environmentIntensity = 1.0f;
     bool directionalShadows = true;
     int shadowResolution = 2048;
-    float shadowRadius = 35.0f;
+    float shadowDistance = 100.0f;
+    int shadowCascadeCount = 4;
+    float shadowSplitLambda = 0.75f;
     BloomSettings bloom;
     const LightInstance* lights = nullptr;
     int lightCount = 0;

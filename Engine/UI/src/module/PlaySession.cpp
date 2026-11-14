@@ -187,7 +187,24 @@ void PlaySession::applyEdits(Scene& authored, std::string& error) {
         const Entity* before = m_applied->entityById(after.id());
         if (!before) {
             m_game.addEntityCopy(after);
-        } else if (Entity* live = m_game.entityById(after.id())) {
+        } else if (before->parentId() != after.parentId() && m_game.entityById(after.id())) {
+            // Remove changed edges before adding any new ones. A valid final
+            // hierarchy can temporarily form a cycle when applied one edge at a time.
+            (void)m_game.setParent(after.id(), kInvalidEntityId);
+        }
+    }
+    for (const Entity& after : authored.entities()) {
+        const Entity* before = m_applied->entityById(after.id());
+        Entity* live = m_game.entityById(after.id());
+        if (!live) {
+            continue;
+        }
+        if ((!before || before->parentId() != after.parentId()) &&
+            m_game.entityById(after.parentId()) &&
+            !m_game.setParent(after.id(), after.parentId())) {
+            error = "Cannot sync hierarchy for " + after.name;
+        }
+        if (before) {
             applyEntityEdits(*before, after, *live);
             if (before->hasAudioSource && !after.hasAudioSource) {
                 (void)m_audio.stopSound(after.id());
@@ -199,8 +216,6 @@ void PlaySession::applyEdits(Scene& authored, std::string& error) {
                     (void)m_audio.setPitch(after.id(), after.audioSource.pitch);
                 }
             }
-        } else {
-            continue;
         }
         const auto& scale = after.transform.scale;
         const bool colliderResized = before && after.hasCollider && before->transform.scale != scale &&
@@ -243,7 +258,9 @@ void PlaySession::applyEdits(Scene& authored, std::string& error) {
     applyEdit(ambientBefore.environmentIntensity, ambientAfter.environmentIntensity, ambientLive.environmentIntensity);
     applyEdit(ambientBefore.directionalShadows, ambientAfter.directionalShadows, ambientLive.directionalShadows);
     applyEdit(ambientBefore.shadowResolution, ambientAfter.shadowResolution, ambientLive.shadowResolution);
-    applyEdit(ambientBefore.shadowRadius, ambientAfter.shadowRadius, ambientLive.shadowRadius);
+    applyEdit(ambientBefore.shadowDistance, ambientAfter.shadowDistance, ambientLive.shadowDistance);
+    applyEdit(ambientBefore.shadowCascadeCount, ambientAfter.shadowCascadeCount, ambientLive.shadowCascadeCount);
+    applyEdit(ambientBefore.shadowSplitLambda, ambientAfter.shadowSplitLambda, ambientLive.shadowSplitLambda);
     applyEdit(ambientBefore.bloom, ambientAfter.bloom, ambientLive.bloom);
     *m_applied = authored;
 }
