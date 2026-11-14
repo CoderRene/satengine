@@ -19,7 +19,8 @@
 
 namespace sat {
 namespace {
-constexpr int kSceneVersion = 11;
+constexpr int kSceneVersion = 12;
+constexpr int kSceneVersionWithoutUi = 11;
 constexpr std::size_t kMaxSceneBytes = 16 * 1024 * 1024;
 constexpr std::size_t kMaxEntities = 100000;
 constexpr std::size_t kMaxScripts = 128;
@@ -36,7 +37,9 @@ bool finite(const DVec3& value) {
 std::string serializeScene(const Scene& scene) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "SatScene " << kSceneVersion << '\n' << scene.entityCount() << '\n';
+    const bool hasUi = std::any_of(scene.entities().begin(), scene.entities().end(),
+        [](const Entity& entity) { return entity.gameUi.has_value(); });
+    out << "SatScene " << (hasUi ? kSceneVersion : kSceneVersionWithoutUi) << '\n' << scene.entityCount() << '\n';
     writePhysicsSettings(out, scene.physicsSettings);
     writeAudioSettings(out, scene.audioSettings);
     const auto& ambient = scene.lightingSettings;
@@ -76,6 +79,14 @@ std::string serializeScene(const Scene& scene) {
             << light.color[0] << ' ' << light.color[1] << ' ' << light.color[2] << ' '
             << light.intensity << ' ' << light.range << ' ' << light.innerConeDegrees << ' '
             << light.outerConeDegrees << '\n';
+        if (hasUi) {
+            out << entity.gameUi.has_value();
+            if (entity.gameUi) {
+                out << ' ' << entity.gameUi->visible << ' ' << std::quoted(entity.gameUi->documentPath)
+                    << ' ' << std::quoted(entity.gameUi->fontPath);
+            }
+            out << '\n';
+        }
     }
     // File-local ordinals keep hierarchy links independent of runtime IDs.
     for (const auto& entity : scene.entities()) {
@@ -223,6 +234,18 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
                 return fail("Invalid light on entity " + e.name);
             }
             light.type = static_cast<LightType>(type);
+        }
+        if (version >= 12) {
+            bool hasUi = false;
+            if (!(in >> hasUi)) { return fail("Invalid Game UI component on entity " + e.name); }
+            if (hasUi) {
+                auto& ui = e.gameUi.emplace();
+                if (!(in >> ui.visible >> std::quoted(ui.documentPath) >> std::quoted(ui.fontPath)) ||
+                    (!ui.documentPath.empty() && !isUiDocumentPath(ui.documentPath)) ||
+                    (!ui.fontPath.empty() && !isUiFontPath(ui.fontPath))) {
+                    return fail("Invalid Game UI asset path on entity " + e.name);
+                }
+            }
         }
     }
     if (version >= 11) {

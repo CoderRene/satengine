@@ -1,0 +1,96 @@
+body {
+    font-family: "JetBrains Mono";
+    font-size: 16px;
+    color: #eaf1f9;
+    pointer-events: none;
+}
+
+#panel {
+    position: absolute;
+    left: 20px;
+    top: 20px;
+    width: 300px;
+    padding: 18px;
+    background-color: #18263a;
+    border-width: 1px;
+    border-color: #354761;
+    pointer-events: auto;
+}
+
+h1 {
+    font-size: 22px;
+    margin: 0 0 12px;
+}
+
+p {
+    margin: 0 0 8px;
+}
+
+#count {
+    font-size: 20px;
+    color: #9dc4ff;
+}
+
+#count.active {
+    color: #7ae3b6;
+}
+
+button {
+    border-radius: 10px;
+}
+
+button, input {
+    padding: 6px 10px;
+    background-color: #2a4264;
+    border-width: 1px;
+    border-color: #526f96;
+    color: #eaf1f9;
+}
+
+button:hover, button:focus {
+    background-color: #3a5982;
+}
+
+button:active {
+    background-color: #244266;
+}
+
+.section {
+    margin-top: 16px;
+}
+
+label, input {
+    display: block;
+    margin-bottom: 6px;
+}
+
+input {
+    width: 240px;
+}
+
+input:focus {
+    border-color: #9dc4ff;
+}
+
+#greeting {
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+#scroll {
+    height: 56px;
+    padding: 8px;
+    overflow-y: scroll;
+    background-color: #101b2b;
+    border-width: 1px;
+    border-color: #354761;
+}
+
+#effects {
+    height: 20px;
+    margin-top: 12px;
+    border-radius: 10px;
+    decorator: shader("Assets/UI/stripe.slang");
+    filter: drop-shadow(#7ae3b666 0px 2px 4px);
+    mask-image: linear-gradient(to right, #ffffffff, #ffffff00);
+}

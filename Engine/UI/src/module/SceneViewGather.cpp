@@ -225,6 +225,7 @@ void EditorSession::renderViews() {
         }
         if (gameVisible) {
             state.renderer->renderGameView(gameCamera, state.gameRenderData.drawList());
+            if (state.gameUi) { state.renderer->renderUi(*state.gameUi, UiTarget::GameView); }
         }
         return;
     }

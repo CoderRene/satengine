@@ -25,12 +25,16 @@ struct InspectorPanel::Impl {
     std::vector<std::string> meshes;
     std::vector<std::string> materials;
     std::vector<std::string> clips;
+    std::vector<std::string> uiDocuments;
+    std::vector<std::string> uiFonts;
     std::string assetError;
 
     void refreshAssets() {
         meshes.clear();
         materials.clear();
         clips.clear();
+        uiDocuments.clear();
+        uiFonts.clear();
         assetError.clear();
         if (!project->isOpen()) { return; }
         std::error_code error;
@@ -43,6 +47,8 @@ struct InspectorPanel::Impl {
                 if (isMeshAssetPath(path)) { meshes.push_back(path); }
                 if (isMaterialAssetPath(path)) { materials.push_back(path); }
                 if (isAudioAssetPath(path)) { clips.push_back(path); }
+                if (isUiDocumentPath(path)) { uiDocuments.push_back(path); }
+                if (isUiFontPath(path)) { uiFonts.push_back(path); }
             }
             if (!error) { current.increment(error); }
         }
@@ -50,6 +56,8 @@ struct InspectorPanel::Impl {
         std::sort(meshes.begin(), meshes.end());
         std::sort(materials.begin(), materials.end());
         std::sort(clips.begin(), clips.end());
+        std::sort(uiDocuments.begin(), uiDocuments.end());
+        std::sort(uiFonts.begin(), uiFonts.end());
     }
 
     bool assetPicker(const char* label, const char* emptyLabel, std::string& path, const std::vector<std::string>& paths) {
@@ -214,6 +222,17 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
         changed = true;
     }
 
+    if (entity->gameUi && ImGui::CollapsingHeader("Game UI", ImGuiTreeNodeFlags_DefaultOpen)) {
+        auto& ui = *entity->gameUi;
+        changed |= m_impl->assetPicker("Document", "None", ui.documentPath, m_impl->uiDocuments);
+        changed |= m_impl->assetPicker("Font", "None", ui.fontPath, m_impl->uiFonts);
+        changed |= ImGui::Checkbox("Show on Start", &ui.visible);
+        if (ImGui::Button("Remove Game UI")) {
+            entity->gameUi.reset();
+            changed = true;
+        }
+    }
+
     changed |= drawPhysicsInspector(*entity);
     if (entity->hasAudioSource && ImGui::CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
         auto& source = entity->audioSource;
@@ -277,6 +296,10 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
         ImGui::OpenPopup("AddComponent");
     }
     if (ImGui::BeginPopup("AddComponent")) {
+        if (ImGui::MenuItem("Game UI", nullptr, false, !entity->gameUi)) {
+            entity->gameUi.emplace();
+            changed = true;
+        }
         if (ImGui::MenuItem("Light", nullptr, false, !entity->hasLight)) {
             entity->hasLight = true;
             entity->light = {};

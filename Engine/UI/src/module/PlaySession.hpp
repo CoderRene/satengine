@@ -15,6 +15,7 @@
 namespace sat {
 
 class Input;
+class GameUi;
 
 // Window-thread play runtime. The borrowed Input must outlive this object.
 // Authored scene edits are copied in; simulation changes stay here.
@@ -43,7 +44,7 @@ public:
     void acceptEdits();
     void defer(std::function<void()> action);
     [[nodiscard]] std::function<void()> takePendingAction();
-    [[nodiscard]] bool start(Scene& authored, const std::filesystem::path& projectRoot);
+    [[nodiscard]] bool start(Scene& authored, const std::filesystem::path& projectRoot, GameUi* ui);
     void applyEdits(Scene& authored, std::string& error);
 
 private:
@@ -52,6 +53,7 @@ private:
     ScriptLog m_log;
     PhysicsSystem m_physics;
     AudioSystem m_audio;
+    GameUi* m_gameUi = nullptr;
     LuaRuntime m_scripts;
     std::optional<Scene> m_prePlay;
     std::function<void()> m_afterDecision;

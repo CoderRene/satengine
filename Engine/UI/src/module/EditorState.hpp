@@ -7,6 +7,7 @@
 
 #include "ContentPanel.hpp"
 #include "EnginePaths.hpp"
+#include "GameUi.hpp"
 #include "GameBuilder.hpp"
 #include "HierarchyPanel.hpp"
 #include "InspectorPanel.hpp"
@@ -44,6 +45,8 @@ struct EditorSession::State {
     std::vector<CameraFrustumInstance> sceneFrustums;
     std::vector<DebugLine> colliderLines;
     RecentProjects recent{std::filesystem::path("recent_projects.txt")};
+    const Input& input;
+    std::unique_ptr<GameUi> gameUi;
     // Declared before the panels so their destructors still see the play log.
     PlaySession play;
     std::unique_ptr<HierarchyPanel> hierarchy;

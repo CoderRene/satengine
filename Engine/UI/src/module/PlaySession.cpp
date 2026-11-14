@@ -1,5 +1,7 @@
 #include "PlaySession.hpp"
 
+#include "GameUi.hpp"
+
 #include "Input.hpp"
 
 #include <algorithm>
@@ -83,6 +85,7 @@ void applyEntityEdits(const Entity& before, const Entity& after, Entity& live) {
     if (before.hasGravitySource != after.hasGravitySource || before.gravitySource != after.gravitySource) {
         live.gravitySource = after.gravitySource;
     }
+    applyEdit(before.gameUi, after.gameUi, live.gameUi);
     applyEdit(before.hasAudioSource, after.hasAudioSource, live.hasAudioSource);
     if (before.hasAudioSource != after.hasAudioSource || before.audioSource != after.audioSource) {
         live.audioSource = after.audioSource;
@@ -121,7 +124,9 @@ void PlaySession::setAssetReader(AssetReader reader) {
 }
 
 bool PlaySession::update(float deltaSeconds) {
-    return m_scripts.update(deltaSeconds);
+    if (!m_scripts.update(deltaSeconds)) { return false; }
+    if (m_gameUi) { m_gameUi->update(); }
+    return true;
 }
 
 void PlaySession::stop(const Scene& authored) {
@@ -129,6 +134,9 @@ void PlaySession::stop(const Scene& authored) {
         return;
     }
     m_scripts.stop();
+    m_scripts.setGameUi(nullptr);
+    if (m_gameUi) { m_gameUi->clear(); }
+    m_gameUi = nullptr;
     if (!m_scripts.error().empty()) {
         m_log.error(m_scripts.error());
         m_focusLog = true;
@@ -159,12 +167,14 @@ std::function<void()> PlaySession::takePendingAction() {
     return std::exchange(m_afterDecision, {});
 }
 
-bool PlaySession::start(Scene& authored, const std::filesystem::path& projectRoot) {
+bool PlaySession::start(Scene& authored, const std::filesystem::path& projectRoot, GameUi* ui) {
     m_prePlay = authored;
     m_applied = authored;
     m_game = authored;
     m_log.clear();
     m_active = true;
+    m_gameUi = ui;
+    m_scripts.setGameUi(ui);
     if (!m_scripts.start(projectRoot)) {
         stop(authored);
         return false;

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <span>
 
 namespace sat {
 
@@ -140,7 +141,13 @@ public:
     void setKey(Key key, bool held);
     void setMouseButton(MouseButton button, bool held);
     void setCursorPosition(double x, double y);
+    void addScroll(double x, double y);
+    void addText(char32_t codepoint);
+    void repeatKey(Key key);
     void releaseAll();
+    [[nodiscard]] CursorPosition scrollDelta() const { return m_scroll; }
+    [[nodiscard]] std::span<const char32_t> text() const { return {m_text.data(), m_textSize}; }
+    [[nodiscard]] unsigned keyRepeats(Key key) const;
     [[nodiscard]] bool keyPressed(Key key) const;
     [[nodiscard]] bool keyHeld(Key key) const;
     [[nodiscard]] bool keyReleased(Key key) const;
@@ -150,10 +157,13 @@ public:
     // Window client coordinates in screen units, origin top-left, +Y down.
     [[nodiscard]] CursorPosition cursorPosition() const { return m_cursor; }
 private:
-    struct ButtonState { bool held = false; bool pressed = false; bool released = false; };
+    struct ButtonState { bool held = false; bool pressed = false; bool released = false; unsigned repeats = 0; };
     static void setButton(ButtonState& state, bool held);
     std::array<ButtonState, 349> m_keys{};
     std::array<ButtonState, 8> m_mouse{};
     CursorPosition m_cursor;
+    CursorPosition m_scroll;
+    std::array<char32_t, 64> m_text{};
+    std::size_t m_textSize = 0;
 };
 } // namespace sat

@@ -1,6 +1,7 @@
 #include "ViewportPanel.hpp"
 
 #include "EnginePaths.hpp"
+#include "GameUi.hpp"
 #include "Math.hpp"
 #include "Renderer.hpp"
 #include "Scene.hpp"
@@ -631,7 +632,10 @@ struct ViewportPanel::Impl {
         ImGui::End();
     }
 
-    void drawGamePanel(const Scene& gameScene, bool focusGameView) {
+    void drawGamePanel(const Scene& gameScene, bool focusGameView, GameUi* ui, const Input* input) {
+        ImVec2 imageOrigin{};
+        bool hovered = false;
+        bool focused = false;
         if (focusGameView) {
             ImGui::SetNextWindowFocus();
         }
@@ -653,6 +657,17 @@ struct ViewportPanel::Impl {
                     ImGui::Image(
                         ImTextureRef((ImTextureID)gameTexture),
                         ImVec2(static_cast<float>(gameWidth), static_cast<float>(gameHeight)));
+                    imageOrigin = ImGui::GetItemRectMin();
+                    if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+                        int windowX = 0;
+                        int windowY = 0;
+                        glfwGetWindowPos(window, &windowX, &windowY);
+                        imageOrigin.x -= static_cast<float>(windowX);
+                        imageOrigin.y -= static_cast<float>(windowY);
+                    }
+                    hovered = ImGui::IsItemHovered();
+                    focused = ImGui::IsWindowFocused() && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+                    if (ui) { ui->setViewport(gameWidth, gameHeight); }
                 } else {
                     ImGui::TextUnformatted("Game view unavailable");
                 }
@@ -664,6 +679,11 @@ struct ViewportPanel::Impl {
             gameViewHeight = 0;
         }
         ImGui::End();
+        if (ui && input) {
+            const bool windowFocused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
+            ui->processInput(*input, imageOrigin.x, imageOrigin.y, 1.0f, 1.0f,
+                windowFocused && hovered, windowFocused && (hovered || focused));
+        }
     }
 };
 
@@ -689,11 +709,12 @@ ViewportPanel::~ViewportPanel() {
     }
 }
 
-void ViewportPanel::onImGuiRender(int& selectedIndex, const Scene& gameScene, bool sceneReadOnly, bool focusGameView) {
+void ViewportPanel::onImGuiRender(int& selectedIndex, const Scene& gameScene, bool sceneReadOnly, bool focusGameView,
+    GameUi* ui, const Input* input) {
     m_impl->selectionActivated = false;
     m_impl->liveSceneVisible = false;
     m_impl->drawScenePanel(selectedIndex, gameScene, sceneReadOnly);
-    m_impl->drawGamePanel(gameScene, focusGameView);
+    m_impl->drawGamePanel(gameScene, focusGameView, ui, input);
 }
 
 TransformGizmoInstance ViewportPanel::gizmo(const Entity& entity) const { return m_impl->gizmo(entity); }

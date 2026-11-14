@@ -11,6 +11,8 @@ namespace sat {
 class Scene;
 struct Entity;
 class Renderer;
+class GameUi;
+class Input;
 struct GameViewCamera;
 
 class ViewportPanel {
@@ -23,7 +25,8 @@ public:
 
     // selectedIndex refers to the authored scene, including when picking a live entity.
     // When focusGameView is true, the Game window is focused this frame.
-    void onImGuiRender(int& selectedIndex, const Scene& gameScene, bool sceneReadOnly, bool focusGameView);
+    void onImGuiRender(int& selectedIndex, const Scene& gameScene, bool sceneReadOnly, bool focusGameView,
+        GameUi* ui = nullptr, const Input* input = nullptr);
 
     void resetInteraction();
     [[nodiscard]] bool showColliders() const;

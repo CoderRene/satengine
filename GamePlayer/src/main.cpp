@@ -173,6 +173,7 @@ protected:
                 scripts.push_back({std::string_view(entry.name).substr(8), entry.bytes, true});
             }
         }
+        m_scripts.setGameUi(gameUi());
         if (!m_scripts.start(scripts)) {
             reportFailure();
         }
@@ -184,6 +185,7 @@ protected:
     }
     void onStop() override {
         m_scripts.stop();
+        m_scripts.setGameUi(nullptr);
         if (!m_failed && !m_scripts.error().empty()) {
             reportFailure();
         }

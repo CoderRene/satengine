@@ -30,7 +30,8 @@ void EditorSession::drawPanels() {
     if (state.viewport) {
         int selected = state.hierarchy ? state.hierarchy->selectedIndex() : -1;
         const bool focusGame = state.play.takeFocusGame();
-        state.viewport->onImGuiRender(selected, state.play.viewScene(state.scene), sceneReadOnly, focusGame);
+        state.viewport->onImGuiRender(selected, state.play.viewScene(state.scene), sceneReadOnly, focusGame,
+            playing ? state.gameUi.get() : nullptr, &state.input);
         if (state.hierarchy && state.viewport->selectionActivated()) {
             const Entity* entity = selected >= 0 ? state.scene.entity(static_cast<std::size_t>(selected)) : nullptr;
             const EntityId id = entity ? entity->id() : kInvalidEntityId;

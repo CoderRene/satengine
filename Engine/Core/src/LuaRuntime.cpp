@@ -15,6 +15,8 @@
 #include "module/LuaRuntimeModules/LuaAudioBindings.hpp"
 #include "module/LuaRuntimeModules/LuaPhysicsBindings.hpp"
 #include "Input.hpp"
+#include "GameUi.hpp"
+#include "module/LuaRuntimeModules/LuaUiBindings.hpp"
 
 #include <lua.hpp>
 
@@ -24,6 +26,7 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -59,6 +62,9 @@ struct LuaRuntime::Impl {
     ScriptLog* m_log = nullptr;
     PhysicsSystem* m_physics = nullptr;
     AudioSystem* m_audio = nullptr;
+    GameUi* m_gameUi = nullptr;
+    std::unordered_map<UiOwner, Impl*> m_uiOwners;
+    std::uint64_t m_uiRevision = 0;
     double m_physicsDebt = 0;
     PhysicsSettings m_physicsSettings;
     lua_State* m_state = nullptr;
@@ -117,7 +123,26 @@ struct LuaRuntime::Impl {
         return true;
     }
 
+    UiOwner uiOwner() const { return reinterpret_cast<UiOwner>(this); }
+
+    bool deliverUiEvents() {
+        if (!m_gameUi) { return true; }
+        for (const auto& event : m_gameUi->takeEvents()) {
+            const auto found = m_uiOwners.find(event.owner);
+            if (found == m_uiOwners.end()) { continue; }
+            auto& child = *found->second;
+            if (!child.m_running || !child.enabled() ||
+                !m_gameUi->subscribed(event.listener, event.owner)) { continue; }
+            if (lua::pushUiCallback(child.m_state, event)) {
+                if (!child.call(1)) { return fail(child.m_error); }
+                if (!retireDestroyed()) { return false; }
+            }
+        }
+        return true;
+    }
+
     void close() {
+        m_uiOwners.clear();
         if (m_sharedMessages != &m_messages && m_targetIndex < m_sharedMessages->m_targets.size()) {
             m_sharedMessages->m_targets[m_targetIndex].m_accepting = false;
         }
@@ -128,6 +153,10 @@ struct LuaRuntime::Impl {
         m_messages.m_targets.clear();
         m_messages.m_pendingBytes = 0;
         if (m_state != nullptr) {
+            if (m_gameUi) {
+                m_gameUi->unsubscribeOwner(uiOwner());
+                m_gameUi->removeModels(uiOwner());
+            }
             lua_close(m_state);
             m_state = nullptr;
         }
@@ -201,6 +230,12 @@ struct LuaRuntime::Impl {
 LuaRuntime::LuaRuntime(Scene& scene, const Input* input, ScriptLog* log, PhysicsSystem* physics, AudioSystem* audio)
     : m_impl(std::make_unique<Impl>(scene, input, log, physics, audio)) {}
 LuaRuntime::~LuaRuntime() = default;
+
+void LuaRuntime::setGameUi(GameUi* ui) {
+    if (!m_impl->m_running && m_impl->m_instances.empty() && !m_impl->m_state) {
+        m_impl->m_gameUi = ui;
+    }
+}
 
 bool LuaRuntime::start(const std::filesystem::path& projectRoot) {
     return startScripts(projectRoot, {}, false);
@@ -301,6 +336,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
             source = ownedSource;
         }
         auto instance = std::make_unique<LuaRuntime>(impl.m_scene, impl.m_input, impl.m_log, impl.m_physics, impl.m_audio);
+        instance->m_impl->m_gameUi = impl.m_gameUi;
         instance->m_impl->m_sharedTime = &impl.m_time;
         instance->m_impl->m_sharedMessages = &impl.m_messages;
         instance->m_impl->m_targetIndex = targetIndex;
@@ -313,6 +349,10 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
             return false;
         }
         impl.m_messages.m_targets[targetIndex].m_instance = instance.get();
+        if (impl.m_gameUi) {
+            auto* child = instance->m_impl.get();
+            impl.m_uiOwners.emplace(child->uiOwner(), child);
+        }
         impl.m_instances.push_back(std::move(instance));
         if (!impl.retireDestroyed()) {
             stop();
@@ -322,6 +362,14 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
     if (!impl.retireDestroyed()) {
         stop();
         return false;
+    }
+    if (impl.m_gameUi) {
+        auto error = impl.m_gameUi->syncScene(impl.m_scene);
+        if (!error.empty()) {
+            impl.fail(error);
+            stop();
+            return false;
+        }
     }
     impl.m_running = true;
     return true;
@@ -347,6 +395,7 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
     lua::registerSceneBindings(state, impl.m_scene, impl.m_physics);
     lua::registerPhysicsBindings(state, impl.m_scene, impl.m_physics);
     lua::registerAudioBindings(state, impl.m_scene, impl.m_audio);
+    lua::registerUiBindings(state, impl.m_gameUi, impl.uiOwner(), impl.m_scene);
     lua::registerMathBindings(state);
     lua::registerInputBindings(state, impl.m_input);
     lua::registerLogBindings(state, impl.m_log);
@@ -383,6 +432,10 @@ bool LuaRuntime::update(float deltaSeconds) {
         return impl.fail("deltaSeconds must be finite and nonnegative");
     }
     if (impl.m_state != nullptr) {
+        if (impl.m_gameUi && impl.m_uiRevision != impl.m_gameUi->listenerRevision()) {
+            impl.m_uiRevision = impl.m_gameUi->listenerRevision();
+            lua::pruneUiCallbacks(impl.m_state, *impl.m_gameUi, impl.uiOwner());
+        }
         return impl.callback("onUpdate", true, deltaSeconds);
     }
     // Advance once per session, even when no components are enabled. Child VMs
@@ -402,7 +455,7 @@ bool LuaRuntime::update(float deltaSeconds) {
     // Freeze the batch before retirement callbacks, which may enqueue messages.
     impl.m_messages.m_delivery.swap(impl.m_messages.m_pending);
     impl.m_messages.m_pendingBytes = 0;
-    if (!impl.retireDestroyed(true) || !impl.deliverMessages()) {
+    if (!impl.retireDestroyed(true) || !impl.deliverMessages() || !impl.deliverUiEvents()) {
         return false;
     }
     for (const auto& instance : impl.m_instances) {
@@ -451,6 +504,13 @@ bool LuaRuntime::update(float deltaSeconds) {
             }
         }
     }
+    if (impl.m_gameUi) {
+        auto error = impl.m_gameUi->syncScene(impl.m_scene);
+        if (!error.empty()) {
+            if (impl.m_log) { impl.m_log->error(error); }
+            else { return impl.fail(error); }
+        }
+    }
     if (impl.m_audio) { impl.m_audio->update(deltaSeconds, impl.m_physics, time.m_timeScale); }
     return true;
 }
@@ -470,6 +530,7 @@ void LuaRuntime::stop() {
     }
     impl.close();
     if (impl.m_sharedTime == &impl.m_time) {
+        if (impl.m_gameUi) { impl.m_gameUi->clearScene(); }
         if (impl.m_audio) { impl.m_audio->stop(); }
         if (impl.m_physics) { impl.m_physics->stop(); }
     }

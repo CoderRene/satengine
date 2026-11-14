@@ -7,6 +7,7 @@
 #include "module/SelectionOutlinePass.hpp"
 #include "module/ShaderLibrary.hpp"
 #include "module/TransformGizmoPass.hpp"
+#include "module/UiPass.hpp"
 #ifdef SAT_SHADER_HOT_RELOAD
 #include "module/ShaderHotReload.hpp"
 #endif
@@ -100,6 +101,7 @@ struct RenderSession::State {
 #ifdef SAT_SHADER_HOT_RELOAD
     ShaderHotReload hotReload;
 #endif
+    UiPass uiPass;
     MeshPass meshPass;
     SelectionOutlinePass outlinePass;
     CameraFrustumPass frustumPass;

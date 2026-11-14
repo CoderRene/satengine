@@ -1,5 +1,7 @@
 #include "Scene.hpp"
 
+#include "AssetData.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -36,6 +38,15 @@ void trimInPlace(std::string& value) {
 }
 
 } // namespace
+
+bool isUiDocumentPath(std::string_view path) {
+    return path.starts_with("Assets/UI/") && path.ends_with(".rml") && isValidAssetPath(path);
+}
+
+bool isUiFontPath(std::string_view path) {
+    return path.starts_with("Assets/UI/") && (path.ends_with(".ttf") || path.ends_with(".otf")) &&
+        isValidAssetPath(path);
+}
 
 bool isValidScriptPath(std::string_view path) {
     if (path.empty() || path.front() == '/' || !path.ends_with(".lua") ||

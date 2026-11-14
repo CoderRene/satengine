@@ -1,0 +1,25 @@
+<rml>
+<head>
+    <link type="text/rcss" href="hud.rcss" />
+</head>
+<body>
+    <div id="panel" data-model="hud">
+        <h1>Game UI demo</h1>
+        <p id="count" data-class-active="active">Clicks {{clicks}}</p>
+        <button id="increment">Add click</button>
+        <button id="reset">Reset</button>
+        <div class="section">
+            <label for="name">Pilot name 2</label>
+            <input id="name" data-value="pilot" type="text" maxlength="32" />
+            <p id="greeting">{{greeting}}</p>
+        </div>
+        <div id="effects" />
+        <div id="scroll" class="section">
+            <p>SCROLL inside this box.</p>
+            <p>RML defines the controls.</p>
+            <p>RCSS styles the panel.</p>
+            <p>Lua updates the HUD.</p>
+        </div>
+    </div>
+</body>
+</rml>

@@ -52,8 +52,8 @@ void UiLayer::beginFrame() {
         const bool saved = m_impl->saveScene();
         (void)saved; // Failure details appear in Scene Errors.
     }
-    m_impl->tickScripts(io.DeltaTime);
     m_impl->drawInterface(canSaveScene);
+    m_impl->tickScripts(io.DeltaTime);
 }
 
 bool UiLayer::requestClose() {

@@ -2,6 +2,8 @@
 
 #include "AssetData.hpp"
 
+#include "GameUi.hpp"
+
 #include <GLFW/glfw3.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
@@ -95,6 +97,20 @@ void RenderSession::invalidateMaterial(std::string_view path) {
 
 void RenderSession::setShaderReader(AssetReader reader) {
     m_state->shaders.setReader(std::move(reader));
+}
+
+void* RenderSession::uiRenderInterface() {
+    return valid() && m_state->uiPass.initialize(m_state->device)
+        ? static_cast<Rml::RenderInterface*>(&m_state->uiPass) : nullptr;
+}
+
+void RenderSession::renderUi(GameUi& ui, UiTarget target) {
+    if (!ui.hasDocuments() || !initializeShaders()) { return; }
+    const bool window = target == UiTarget::Window;
+    m_state->uiPass.draw(m_state->context, m_state->shaders,
+        window ? m_state->backBuffer : m_state->game.rtv,
+        window ? m_state->swapWidth : m_state->game.width,
+        window ? m_state->swapHeight : m_state->game.height, ui);
 }
 
 bool RenderSession::initializeShaders() {

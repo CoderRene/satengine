@@ -302,6 +302,88 @@ function SatTime.timeScale() end
 ---@param scale number
 function SatTime.setTimeScale(scale) end
 
+---@class SatUi
+local SatUi = {}
+
+---@param path string
+---@return boolean
+function SatUi.loadFont(path) end
+
+---@param path string
+---@return userdata|nil
+---@return string|nil
+function SatUi.load(path) end
+
+---@param doc userdata
+---@return boolean
+function SatUi.show(doc) end
+
+---@param doc userdata
+---@return boolean
+function SatUi.hide(doc) end
+
+---@param doc userdata
+---@return boolean
+function SatUi.close(doc) end
+
+---@param doc userdata
+---@param id string
+---@return userdata|nil
+function SatUi.element(doc, id) end
+
+---@param element userdata
+---@param text string
+---@return boolean
+function SatUi.setText(element, text) end
+
+---@param element userdata
+---@param markup string
+---@return boolean
+function SatUi.setRml(element, markup) end
+
+---@param element userdata
+---@param name string
+---@param enabled boolean
+---@return boolean
+function SatUi.setClass(element, name, enabled) end
+
+---@param element userdata
+---@param name string
+---@param value string
+---@return boolean
+function SatUi.setProperty(element, name, value) end
+
+---@param element userdata
+---@param name string
+---@return boolean
+function SatUi.removeProperty(element, name) end
+
+---@param element userdata
+---@param name string
+---@param value string
+---@return boolean
+function SatUi.setAttribute(element, name, value) end
+
+---@param element userdata
+---@return string|nil
+function SatUi.getValue(element) end
+
+---@param element userdata
+---@param eventName string
+---@param callback function
+---@return integer|nil
+function SatUi.on(element, eventName, callback) end
+
+---@param listener integer
+---@return boolean
+function SatUi.off(listener) end
+
+---@return boolean
+function SatUi.wantsMouse() end
+
+---@return boolean
+function SatUi.wantsKeyboard() end
+
 ---@class SatKey
 ---@field Space integer
 ---@field Apostrophe integer
@@ -440,6 +522,7 @@ function SatTime.setTimeScale(scale) end
 ---@field math SatMath
 ---@field physics SatPhysics
 ---@field time SatTime
+---@field ui SatUi
 ---@field Key SatKey
 ---@field MouseButton SatMouseButton
 sat = {}
@@ -458,6 +541,9 @@ sat.physics = {}
 
 ---@type SatTime
 sat.time = {}
+
+---@type SatUi
+sat.ui = {}
 
 ---@type SatKey
 sat.Key = {}

@@ -11,6 +11,7 @@ Engine/Core/include/EnginePaths.hpp
 
 Tests/
 /**/**/tests/
+!/Engine/GameUi/tests/
 # Generated standalone archive encryption keys (never deploy or commit).
 GamePakKey.bin
 GamePakKey.hpp

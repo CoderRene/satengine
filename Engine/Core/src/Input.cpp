@@ -2,7 +2,12 @@
 
 namespace sat {
 void Input::beginFrame() {
-    for (auto& state : m_keys) { state.pressed = state.released = false; }
+    for (auto& state : m_keys) {
+        state.pressed = state.released = false;
+        state.repeats = 0;
+    }
+    m_scroll = {};
+    m_textSize = 0;
     for (auto& state : m_mouse) { state.pressed = state.released = false; }
 }
 void Input::setButton(ButtonState& state, bool held) {
@@ -12,6 +17,21 @@ void Input::setButton(ButtonState& state, bool held) {
     }
 }
 void Input::setCursorPosition(double x, double y) { m_cursor = {x, y}; }
+void Input::addScroll(double x, double y) {
+    m_scroll.x += x;
+    m_scroll.y += y;
+}
+void Input::addText(char32_t codepoint) {
+    if (m_textSize < m_text.size()) { m_text[m_textSize++] = codepoint; }
+}
+void Input::repeatKey(Key key) {
+    const auto index = static_cast<std::size_t>(key);
+    if (index < m_keys.size() && m_keys[index].held) { ++m_keys[index].repeats; }
+}
+unsigned Input::keyRepeats(Key key) const {
+    const auto index = static_cast<std::size_t>(key);
+    return index < m_keys.size() ? m_keys[index].repeats : 0;
+}
 void Input::releaseAll() {
     for (auto& state : m_keys) { setButton(state, false); }
     for (auto& state : m_mouse) { setButton(state, false); }

@@ -88,6 +88,16 @@ struct ScriptComponent {
     bool operator==(const ScriptComponent&) const = default;
 };
 
+struct GameUiComponent {
+    std::string documentPath;
+    std::string fontPath;
+    bool visible = true;
+
+    bool operator==(const GameUiComponent&) const = default;
+};
+
+[[nodiscard]] bool isUiDocumentPath(std::string_view path);
+[[nodiscard]] bool isUiFontPath(std::string_view path);
 [[nodiscard]] bool isValidScriptPath(std::string_view path);
 
 // Opaque runtime identity. Zero is invalid. IDs are never reused within a process.
@@ -116,6 +126,7 @@ struct Entity {
     GravitySourceComponent gravitySource;
     bool hasAudioSource = false;
     AudioSourceComponent audioSource;
+    std::optional<GameUiComponent> gameUi;
     bool hasAudioListener = false;
 
 private:

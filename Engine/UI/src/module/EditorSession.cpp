@@ -30,7 +30,7 @@
 namespace sat {
 
 EditorSession::State::State(Scene& sceneIn, Project& projectIn, const Input& input)
-    : project(projectIn), scene(sceneIn), play(input), savedSceneRevision(sceneIn.editRevision()) {}
+    : project(projectIn), scene(sceneIn), input(input), play(input), savedSceneRevision(sceneIn.editRevision()) {}
 
 EditorSession::EditorSession(Scene& scene, Project& project, const Input& input)
     : m_state(std::make_unique<State>(scene, project, input)) {
@@ -162,6 +162,7 @@ void EditorSession::stopPlay() {
         return;
     }
     m_state->play.stop(m_state->scene);
+    m_state->gameUi.reset();
     if (m_state->viewport) {
         m_state->viewport->resetInteraction();
     }
@@ -198,7 +199,10 @@ void EditorSession::startPlayNow() {
     }
     state.content->stopAudioPreview();
     if (state.viewport) { state.viewport->resetInteraction(); }
-    if (!state.play.start(state.scene, state.project.root())) {
+    state.gameUi = std::make_unique<GameUi>(state.renderer->uiRenderInterface(), fileAssetReader(state.project.root()));
+    state.gameUi->enableHotReload();
+    if (!state.play.start(state.scene, state.project.root(), state.gameUi.get())) {
+        state.gameUi.reset();
         if (state.viewport) { state.viewport->resetInteraction(); }
     }
 }

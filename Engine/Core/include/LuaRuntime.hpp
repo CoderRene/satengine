@@ -13,6 +13,7 @@ class Scene;
 class Input;
 class ScriptLog;
 class PhysicsSystem;
+class GameUi;
 class AudioSystem;
 
 // Script names are relative to Scripts/, using '/' separators (e.g. main.lua).
@@ -38,6 +39,9 @@ public:
     LuaRuntime& operator=(const LuaRuntime&) = delete;
     LuaRuntime(LuaRuntime&&) = delete;
     LuaRuntime& operator=(LuaRuntime&&) = delete;
+
+    // Set while stopped. The borrowed UI must remain alive until stop().
+    void setGameUi(GameUi* ui);
 
     // Starts enabled script components attached to scene entities. Each component
     // has a separate VM and self.entity (the stable owning entity ID).

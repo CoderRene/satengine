@@ -140,6 +140,10 @@ int main(int argc, char** argv) {
                     throw std::runtime_error("Asset path does not exactly match a packaged file: " + path);
                 }
             };
+            if (entity.gameUi && !entity.gameUi->documentPath.empty()) {
+                validatePath(entity.gameUi->documentPath);
+                validatePath(entity.gameUi->fontPath);
+            }
             if (entity.hasMesh) {
                 validatePath(entity.mesh.meshPath);
                 validatePath(entity.mesh.materialPath);

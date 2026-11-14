@@ -112,6 +112,14 @@ bool Renderer::renderWindow(const GameViewCamera& camera, const SceneDrawList& d
     return m_impl->renderWindow(camera, drawList);
 }
 
+void* Renderer::uiRenderInterface() {
+    return m_impl->uiRenderInterface();
+}
+
+void Renderer::renderUi(GameUi& ui, UiTarget target) {
+    m_impl->renderUi(ui, target);
+}
+
 void Renderer::present() {
     m_impl->present();
 }

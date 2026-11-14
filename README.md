@@ -33,6 +33,7 @@ Open any folder under `Examples/` as a project in the editor, then press **Play*
 | [LightingDemo](Examples/LightingDemo) | Directional, point, and spot lights with metallic-roughness materials |
 | [SpacePhysics](Examples/SpacePhysics) | Rigid bodies, gravity, triggers |
 | [AudioDemo](Examples/AudioDemo) | Spatial audio, buses, time scale |
+| [GameUiDemo](Examples/GameUiDemo) | An interactive RmlUi HUD driven by Lua |
 
 ## Requirements
 

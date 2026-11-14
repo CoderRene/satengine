@@ -83,12 +83,21 @@ Window::Window(int width, int height, const char* title)
 
     glfwSetWindowUserPointer(m_impl->window, m_impl.get());
     glfwSetKeyCallback(m_impl->window, [](GLFWwindow* window, int key, int, int action, int) {
-        if (action != GLFW_REPEAT) {
-            static_cast<Impl*>(glfwGetWindowUserPointer(window))->input.setKey(static_cast<Key>(key), action == GLFW_PRESS);
+        auto& input = static_cast<Impl*>(glfwGetWindowUserPointer(window))->input;
+        if (action == GLFW_REPEAT) {
+            input.repeatKey(static_cast<Key>(key));
+        } else {
+            input.setKey(static_cast<Key>(key), action == GLFW_PRESS);
         }
     });
     glfwSetMouseButtonCallback(m_impl->window, [](GLFWwindow* window, int button, int action, int) {
         static_cast<Impl*>(glfwGetWindowUserPointer(window))->input.setMouseButton(static_cast<MouseButton>(button), action == GLFW_PRESS);
+    });
+    glfwSetScrollCallback(m_impl->window, [](GLFWwindow* window, double x, double y) {
+        static_cast<Impl*>(glfwGetWindowUserPointer(window))->input.addScroll(x, y);
+    });
+    glfwSetCharCallback(m_impl->window, [](GLFWwindow* window, unsigned int codepoint) {
+        static_cast<Impl*>(glfwGetWindowUserPointer(window))->input.addText(static_cast<char32_t>(codepoint));
     });
     glfwSetCursorPosCallback(m_impl->window, [](GLFWwindow* window, double x, double y) {
         static_cast<Impl*>(glfwGetWindowUserPointer(window))->input.setCursorPosition(x, y);

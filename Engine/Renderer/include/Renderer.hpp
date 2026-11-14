@@ -28,6 +28,9 @@ struct GameViewCamera {
     };
 };
 
+class GameUi;
+enum class UiTarget { Window, GameView };
+
 class Renderer {
 public:
     explicit Renderer(void* glfwWindow);
@@ -73,6 +76,9 @@ public:
 
     // Render a game scene to the window, with no UI backend required.
     [[nodiscard]] bool renderWindow(const GameViewCamera& camera, const SceneDrawList& drawList = {});
+    // Borrowed render interface. Destroy GameUi before destroying this renderer.
+    [[nodiscard]] void* uiRenderInterface();
+    void renderUi(GameUi& ui, UiTarget target);
     void present();
 
     // Borrowed D3D11 device/context for optional integrations. Valid for this renderer's lifetime.

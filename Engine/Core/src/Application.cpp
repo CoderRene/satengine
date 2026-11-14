@@ -1,5 +1,6 @@
 #include "Application.hpp"
 
+#include "GameUi.hpp"
 #include "Renderer.hpp"
 #include "SceneRenderData.hpp"
 #include "Window.hpp"
@@ -23,6 +24,16 @@ int Application::run() {
         return 1;
     }
 
+    GameUi ui(renderer.uiRenderInterface(),
+        [this](std::string_view path, std::string& bytes, std::string& error) {
+            return m_assetReader ? m_assetReader(path, bytes, error) : AssetReadResult::Missing;
+        });
+    struct ResetUi {
+        GameUi*& pointer;
+        ~ResetUi() { pointer = nullptr; }
+    } reset{m_gameUi};
+    m_gameUi = &ui;
+
     m_input = window.input();
     m_stopRequested = false;
     onStart();
@@ -44,14 +55,23 @@ int Application::run() {
         const auto now = std::chrono::steady_clock::now();
         const float deltaSeconds = std::chrono::duration<float>(now - previous).count();
         previous = now;
-        onUpdate(deltaSeconds);
-        if (m_stopRequested) {
-            break;
-        }
-
         int width = 0;
         int height = 0;
-        glfwGetFramebufferSize(static_cast<GLFWwindow*>(window.nativeHandle()), &width, &height);
+        auto* nativeWindow = static_cast<GLFWwindow*>(window.nativeHandle());
+        glfwGetFramebufferSize(nativeWindow, &width, &height);
+        int clientWidth = 0;
+        int clientHeight = 0;
+        glfwGetWindowSize(nativeWindow, &clientWidth, &clientHeight);
+        const bool visible = width > 0 && height > 0 && clientWidth > 0 && clientHeight > 0;
+        const bool focused = visible && glfwGetWindowAttrib(nativeWindow, GLFW_FOCUSED) == GLFW_TRUE;
+        ui.setViewport(width, height);
+        ui.processInput(m_input, 0.0f, 0.0f,
+            visible ? static_cast<float>(width) / static_cast<float>(clientWidth) : 1.0f,
+            visible ? static_cast<float>(height) / static_cast<float>(clientHeight) : 1.0f,
+            focused, focused);
+        onUpdate(deltaSeconds);
+        if (m_stopRequested) { break; }
+        ui.update();
         if (width < 1 || height < 1) {
             // Avoid rendering/presenting a minimized window or spinning at full speed.
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -67,6 +87,7 @@ int Application::run() {
         for (; reportedAssetErrors < assetErrors.size(); ++reportedAssetErrors) {
             std::cerr << assetErrors[reportedAssetErrors] << '\n';
         }
+        renderer.renderUi(ui, UiTarget::Window);
         renderer.present();
     }
     onStop();

@@ -341,6 +341,148 @@ function onUpdate(deltaSeconds)
 end
 ```
 
+## Game UI
+
+Put RML layouts, RCSS stylesheets, fonts and PNG or JPEG images under
+`Assets/UI/`. Lua uses project-relative paths. RML and RCSS can reference
+files relative to their own location. The same paths work from disk in editor
+Play and from the pak in GamePlayer. During editor Play, saves to loaded `.rml` files
+and their linked `.rcss` stylesheets take effect within about 300 ms. Stylesheet
+edits update the existing document in place, preserving focus, form values, and
+Lua state. RML edits replace the document's markup while preserving the model
+values and Lua VMs. Document handles survive and element handles and listeners
+follow matching IDs. Removed IDs invalidate their handles and listeners. An RML
+parse error leaves the last loaded layout visible. Restart Play to pick up font
+or image changes.
+
+Copy `Engine/Assets/Fonts/JetBrainsMono.ttf` into the project's `Assets/UI/`.
+Save this layout as `Assets/UI/hud.rml`.
+
+```rml
+<rml>
+<head>
+    <link type="text/rcss" href="hud.rcss" />
+</head>
+<body>
+    <button id="action"><span id="count">Clicks 0</span></button>
+</body>
+</rml>
+```
+
+Save this stylesheet as `Assets/UI/hud.rcss`.
+
+```css
+body {
+    font-family: "JetBrains Mono";
+    font-size: 18px;
+    color: white;
+    pointer-events: none;
+}
+
+#action {
+    position: absolute;
+    top: 24px;
+    left: 24px;
+    padding: 12px 20px;
+    background-color: #273752;
+    pointer-events: auto;
+}
+
+#action:hover {
+    background-color: #3a5278;
+}
+```
+
+Attach this script to an entity. In Play, click the button in the Game view to
+increment the counter.
+
+```lua
+local ui = sat.ui
+local doc, listener
+local clicks = 0
+
+function onStart()
+    assert(ui.loadFont("Assets/UI/JetBrainsMono.ttf"))
+    doc = assert(ui.load("Assets/UI/hud.rml"))
+    local button = assert(ui.element(doc, "action"))
+    local count = assert(ui.element(doc, "count"))
+    listener = assert(ui.on(button, "click", function(event)
+        clicks = clicks + 1
+        ui.setText(count, "Clicks " .. clicks)
+    end))
+    ui.show(doc)
+end
+
+function onStop()
+    if listener then ui.off(listener) end
+    if doc then ui.close(doc) end
+end
+```
+
+`ui.load` returns a hidden document or `nil, error`. Use `show` and `hide`
+to control visibility. Closing a document invalidates its handles and removes
+its listeners. `ui.element` and `ui.getValue` return `nil` for an invalid
+handle. Document and element setters return whether the operation succeeded.
+
+Use `setText` for escaped text, `setRml` for markup, `setClass` to toggle an
+RCSS class, `setProperty` and `removeProperty` for inline styles, and
+`setAttribute` for attributes. `getValue` returns a form control's current
+value or the element's `value` attribute.
+
+`ui.on(element, eventName, callback)` returns a listener ID for `ui.off`.
+Callbacks run in the VM that registered them, after queued messages and before
+`onUpdate`. The event table contains `type`, viewport-local `x` and `y` in
+pixels, the RmlUi `key` identifier, and `value`. Use `ui.wantsMouse()` and
+`ui.wantsKeyboard()` to skip game actions while the UI has hover or focus.
+In editor Play, mouse input goes to the Game image and keyboard input is
+available when that image is hovered or its window has focus.
+
+### Data models
+
+Create the model before loading a document that references it. Fields are
+booleans, finite numbers or strings. Model names are shared across the UI
+context. The VM that creates a model owns its lifetime.
+
+```lua
+assert(sat.ui.createModel("hud", {score = 0, pilot = ""}))
+assert(sat.ui.setModelValue("hud", "score", 25))
+local score = sat.ui.getModelValue("hud", "score")
+```
+
+```rml
+<div data-model="hud">
+    <p>Score {{score}}</p>
+    <input type="text" data-value="pilot" />
+</div>
+```
+
+`data-value` writes edits back to the model. `getModelValue` returns the
+current value or `nil` for an unknown model or field. Changes are applied to
+the layout during the UI update.
+
+### Scene UI components
+
+In the Inspector, choose **Add Component > Game UI**, then select an RML
+document and an optional font from `Assets/UI/`. **Show on Start** controls
+initial visibility. The host loads the document after Lua startup. A script
+can call `sat.ui.getDocument(self.entity)` after creating its model to load
+and access its authored document during `onStart`. Keep the document's font
+family in RCSS consistent with the selected font. Text inputs require a
+loaded font.
+
+### RCSS effects
+
+The D3D11 backend supports color filters, opacity, blur, drop shadows,
+backdrop filters, clip masks, and `mask-image`. Use linear, radial or conic
+gradients in decorators and masks. Gradients support up to 64 stops. Blur
+sigma is capped at 64 pixels.
+
+Use `decorator: shader("Assets/UI/stripe.slang");` for a project shader.
+Its `psMain` takes `SV_Position`, `COLOR` and `TEXCOORD0`. The UV spans
+the decorator box from top left to bottom right. Return premultiplied RGBA,
+including the element opacity carried in `COLOR.a`. The Debug editor compiles the shader through the project shader pipeline.
+GamePlayer loads its packaged bytecode.
+
 ## Finding and controlling other entities
 
 Use `sat.findEntity(name)` for a uniquely named entity, or

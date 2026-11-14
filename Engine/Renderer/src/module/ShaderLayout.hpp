@@ -4,6 +4,8 @@
 
 #include "ShaderLibrary.hpp"
 
+#include <RmlUi/Core/Vertex.h>
+
 #include <cstddef>
 
 namespace sat {
@@ -152,6 +154,45 @@ inline constexpr D3D11_INPUT_ELEMENT_DESC kTransformGizmoLayout[] = {
          0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0},
     };
+
+struct alignas(16) UiDrawCb {
+    float transform[16];
+    float translation[2];
+    float scale[2];
+};
+static_assert(sizeof(UiDrawCb) == 80);
+
+struct alignas(16) UiEffectCb {
+    float matrix[16];
+    float color[4];
+    float offset[2];
+    float step[2];
+    float value;
+    unsigned effect;
+    float padding[2];
+};
+
+static_assert(sizeof(UiEffectCb) == 112);
+
+inline constexpr unsigned kUiGradientStops = 64;
+struct alignas(16) UiGradientCb {
+    float origin[2];
+    float direction[2];
+    unsigned gradientType;
+    unsigned repeating;
+    unsigned stopCount;
+    unsigned padding;
+    float positions[kUiGradientStops];
+    float colors[kUiGradientStops][4];
+};
+
+static_assert(sizeof(UiGradientCb) == 1312);
+
+inline constexpr D3D11_INPUT_ELEMENT_DESC kUiLayout[] = {
+    {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Rml::Vertex, position), D3D11_INPUT_PER_VERTEX_DATA, 0},
+    {"COLOR", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, offsetof(Rml::Vertex, colour), D3D11_INPUT_PER_VERTEX_DATA, 0},
+    {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(Rml::Vertex, tex_coord), D3D11_INPUT_PER_VERTEX_DATA, 0},
+};
 
 inline constexpr D3D11_INPUT_ELEMENT_DESC kGridLayout[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},

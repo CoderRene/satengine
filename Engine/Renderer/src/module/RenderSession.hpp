@@ -53,6 +53,8 @@ public:
     [[nodiscard]] std::uintptr_t createTexture(const unsigned char* rgba, int width, int height);
     void destroyTexture(std::uintptr_t texture);
     [[nodiscard]] bool renderWindow(const GameViewCamera& camera, const SceneDrawList& drawList);
+    [[nodiscard]] void* uiRenderInterface();
+    void renderUi(GameUi& ui, UiTarget target);
     void present();
     [[nodiscard]] void* nativeDevice() const;
     [[nodiscard]] void* nativeContext() const;

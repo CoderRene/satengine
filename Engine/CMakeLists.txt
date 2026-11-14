@@ -104,6 +104,8 @@ target_compile_features(SatInput PUBLIC cxx_std_20)
 add_subdirectory(Physics)
 add_subdirectory(Audio)
 
+add_subdirectory(GameUi)
+
 add_library(SatScripting STATIC
     Core/src/LuaRuntime.cpp
     Core/src/Project.cpp
@@ -115,6 +117,7 @@ add_library(SatScripting STATIC
     Core/src/module/LuaRuntimeModules/LuaMathBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaPhysicsBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaAudioBindings.cpp
+    Core/src/module/LuaRuntimeModules/LuaUiBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaPackageConfig.cpp
     Core/src/ScriptLog.cpp
     Core/src/module/LuaRuntimeModules/LuaLogBindings.hpp
@@ -123,7 +126,7 @@ add_library(SatScripting STATIC
 target_include_directories(SatScripting PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/src"
 )
-target_link_libraries(SatScripting PUBLIC SatScene SatInput SatPhysics SatAudio PRIVATE SatLua)
+target_link_libraries(SatScripting PUBLIC SatScene SatInput SatPhysics SatAudio SatGameUi PRIVATE SatLua)
 target_compile_features(SatScripting PUBLIC cxx_std_20)
 
 if(BUILD_TESTING)
@@ -136,6 +139,12 @@ if(BUILD_TESTING)
     target_link_libraries(PhysicsScriptingTests PRIVATE SatScripting)
     add_test(NAME PhysicsScripting COMMAND PhysicsScriptingTests)
     set_tests_properties(PhysicsScripting PROPERTIES TIMEOUT 15)
+    add_executable(GameUiScriptingTests GameUi/tests/GameUiScriptingTests.cpp)
+    target_link_libraries(GameUiScriptingTests PRIVATE SatScripting SatGameUi RmlUi::Core)
+    target_compile_definitions(GameUiScriptingTests PRIVATE
+        SAT_GAME_UI_TEST_FONT="${CMAKE_CURRENT_SOURCE_DIR}/Assets/Fonts/JetBrainsMono.ttf")
+    add_test(NAME GameUiScripting COMMAND GameUiScriptingTests)
+    set_tests_properties(GameUiScripting PROPERTIES TIMEOUT 15)
     add_executable(AudioTests Audio/tests/AudioTests.cpp)
     target_link_libraries(AudioTests PRIVATE SatAudio)
     target_include_directories(AudioTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Audio/src")
@@ -162,6 +171,7 @@ if(Python3_Interpreter_FOUND)
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaPhysicsBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaAudioBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaLogBindings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaUiBindings.cpp"
     )
     set(SAT_LUA_DEF_OUTPUT
         "${CMAKE_CURRENT_SOURCE_DIR}/Scripting/LuaDefs/sat.lua"
@@ -219,6 +229,8 @@ add_library(SatRuntime STATIC
     Renderer/src/module/GpuAssetCache.cpp
     Renderer/src/module/SelectionOutlinePass.cpp
     Renderer/src/module/CameraFrustumPass.cpp
+    Renderer/src/module/UiEffects.cpp
+    Renderer/src/module/UiPass.cpp
     Renderer/src/module/TransformGizmoPass.cpp
 )
 target_include_directories(SatRuntime PRIVATE
@@ -226,7 +238,7 @@ target_include_directories(SatRuntime PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/src"
 )
 target_link_libraries(SatRuntime PUBLIC SatScene SatScripting glfw)
-target_link_libraries(SatRuntime PRIVATE d3d11 dxgi dwmapi)
+target_link_libraries(SatRuntime PRIVATE d3d11 dxgi dwmapi RmlUi::Core)
 add_dependencies(SatRuntime SatShaders)
 target_include_directories(SatRuntime PRIVATE "${shader_generated}")
 if(SAT_SHADER_HOT_RELOAD)
