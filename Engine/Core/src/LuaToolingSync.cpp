@@ -2,6 +2,9 @@
 
 #include <fstream>
 #include <iostream>
+#include <iterator>
+#include <string>
+#include <system_error>
 
 namespace sat {
 namespace fs = std::filesystem;
@@ -52,31 +55,6 @@ constexpr const char* kVscodeSettings = R"json({
 }
 )json";
 
-constexpr const char* kCodeWorkspace = R"json({
-  "folders": [
-    {
-      "path": "."
-    }
-  ],
-  "settings": {
-    "Lua.runtime.version": "Lua 5.4",
-    "Lua.workspace.library": [
-      "${workspaceFolder}/LuaDefs"
-    ],
-    "Lua.workspace.checkThirdParty": false,
-    "Lua.workspace.useGitIgnore": false,
-    "Lua.diagnostics.globals": [
-      "sat",
-      "self",
-      "onStart",
-      "onUpdate",
-      "onStop"
-    ],
-    "selene.configPath": "${workspaceFolder}/selene.toml"
-  }
-}
-)json";
-
 // Project-local Selene config (must live in the opened game project, not only the engine repo).
 constexpr const char* kSeleneToml = R"toml(std = "satengine"
 # EmmyLua stubs are for LuaLS only; empty bodies trip unused_variable.
@@ -110,40 +88,70 @@ bool writeTextFile(const fs::path& path, const char* text) {
     return static_cast<bool>(out);
 }
 
-bool copyTree(const fs::path& from, const fs::path& to, std::error_code& ec) {
-    fs::remove_all(to, ec);
-    ec.clear();
-    fs::create_directories(to, ec);
-    if (ec) {
+bool updateDefinition(const fs::path& source, const fs::path& destination) {
+    std::ifstream input(source, std::ios::binary);
+    if (!input) {
         return false;
     }
-    fs::copy(from, to, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
-    return !ec;
+    const std::string contents{std::istreambuf_iterator<char>(input), {}};
+    if (input.bad() || contents.empty()) {
+        return false;
+    }
+    {
+        std::ifstream previous(destination, std::ios::binary);
+        if (previous) {
+            const std::string existing{std::istreambuf_iterator<char>(previous), {}};
+            if (!previous.bad() && existing == contents) {
+                return true;
+            }
+        }
+    }
+    // Keep the current definition in place if the write fails.
+    auto staged = destination;
+    staged += ".tmp";
+    std::error_code error;
+    if (!writeTextFile(staged, contents.c_str())) {
+        fs::remove(staged, error);
+        return false;
+    }
+    fs::rename(staged, destination, error);
+    if (error) {
+        fs::remove(staged, error);
+        return false;
+    }
+    return true;
 }
 
 } // namespace
 
-bool syncProjectLuaTooling(const fs::path& projectRoot, const fs::path& luaDefsSource) {
-    if (projectRoot.empty() || !fs::is_directory(projectRoot)) {
-        std::cerr << "syncProjectLuaTooling: invalid project root\n";
-        return false;
-    }
-    if (!fs::is_directory(luaDefsSource) || !fs::is_regular_file(luaDefsSource / "sat.lua")) {
-        std::cerr << "syncProjectLuaTooling: LuaDefs not found at " << luaDefsSource << '\n';
-        return false;
-    }
-
+bool syncProjectLuaDefinitions(const fs::path& projectRoot, const fs::path& luaDefsSource) {
     std::error_code ec;
-    // Drop the old hidden location; LuaLS often treats it like an ignored path.
-    fs::remove_all(projectRoot / ".satengine", ec);
-    ec.clear();
-
-    const fs::path dest = projectRoot / "LuaDefs";
-    if (!copyTree(luaDefsSource, dest, ec)) {
-        std::cerr << "syncProjectLuaTooling: failed to copy LuaDefs: " << ec.message() << '\n';
+    if (projectRoot.empty() || !fs::is_directory(projectRoot, ec)) {
+        std::cerr << "syncProjectLuaDefinitions: invalid project root " << projectRoot << '\n';
         return false;
     }
+    const auto destination = projectRoot / "LuaDefs";
+    fs::create_directories(destination, ec);
+    if (ec) {
+        std::cerr << "Cannot create " << destination << ": " << ec.message() << '\n';
+        return false;
+    }
+    for (const char* name : {"sat.lua", "globals.lua"}) {
+        const auto source = luaDefsSource / name;
+        const auto target = destination / name;
+        if (luaDefsSource.empty() || !updateDefinition(source, target)) {
+            std::cerr << "Cannot update " << target << " from " << source << '\n';
+            return false;
+        }
+    }
+    return true;
+}
 
+bool syncProjectLuaTooling(const fs::path& projectRoot, const fs::path& luaDefsSource) {
+    if (!syncProjectLuaDefinitions(projectRoot, luaDefsSource)) {
+        return false;
+    }
+    std::error_code ec;
     fs::create_directories(projectRoot / ".vscode", ec);
     if (ec) {
         std::cerr << "syncProjectLuaTooling: failed to create .vscode: " << ec.message() << '\n';
@@ -152,7 +160,6 @@ bool syncProjectLuaTooling(const fs::path& projectRoot, const fs::path& luaDefsS
 
     if (!writeTextFile(projectRoot / ".luarc.json", kLuarc) ||
         !writeTextFile(projectRoot / ".vscode" / "settings.json", kVscodeSettings) ||
-        !writeTextFile(projectRoot / "SatEngine.code-workspace", kCodeWorkspace) ||
         !writeTextFile(projectRoot / "selene.toml", kSeleneToml) ||
         !writeTextFile(projectRoot / "satengine.yml", kSatengineYml)) {
         std::cerr << "syncProjectLuaTooling: failed to write Lua tooling config files\n";

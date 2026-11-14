@@ -3,6 +3,7 @@
 #include "AudioTypes.hpp"
 #include "Math.hpp"
 #include "PhysicsTypes.hpp"
+#include "ScriptFields.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -84,6 +85,7 @@ struct MeshComponent {
 struct ScriptComponent {
     std::string path;
     bool enabled = true;
+    ScriptFields fieldOverrides{};
 
     bool operator==(const ScriptComponent&) const = default;
 };

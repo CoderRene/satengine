@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BINDING_SOURCES = [
     ROOT / "Engine/Core/src/module/LuaRuntimeModules/LuaSceneBindings.cpp",
+    ROOT / "Engine/Core/src/module/LuaRuntimeModules/LuaFieldBindings.cpp",
     ROOT / "Engine/Core/src/module/LuaRuntimeModules/LuaInputBindings.cpp",
     ROOT / "Engine/Core/src/module/LuaRuntimeModules/LuaTimeBindings.cpp",
     ROOT / "Engine/Core/src/module/LuaRuntimeModules/LuaMessageBindings.cpp",
@@ -383,7 +384,8 @@ def main() -> int:
         return 0
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(text, encoding="utf-8", newline="\n")
+    if not OUTPUT.is_file() or OUTPUT.read_bytes() != text.encode("utf-8"):
+        OUTPUT.write_text(text, encoding="utf-8", newline="\n")
     print(f"wrote {OUTPUT.relative_to(ROOT)} ({len(all_funs)} funs, {len(all_enums)} enums)")
     return 0
 

@@ -804,6 +804,12 @@ function sat.isScriptEnabled(entity, path) end
 ---@return boolean
 function sat.setScriptEnabled(entity, path, enabled) end
 
+---@param fields table
+function sat.expose(fields) end
+
+---@return lightuserdata
+function sat.entityField() end
+
 ---@param entity EntityId
 ---@param path string
 ---@param message string

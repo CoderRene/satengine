@@ -1,7 +1,9 @@
 #include "InspectorPanel.hpp"
 
 #include "Scene.hpp"
+#include "LuaScriptFields.hpp"
 #include "module/PhysicsInspector.hpp"
+#include "module/HierarchyDragDrop.hpp"
 #include "module/CursorWrap.hpp"
 #include "Project.hpp"
 #include "AssetData.hpp"
@@ -10,18 +12,99 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <type_traits>
+#include <unordered_map>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace sat {
+namespace {
+
+constexpr auto kScriptRefreshInterval = std::chrono::milliseconds(200);
+
+bool editEntityReference(const char* label, ScriptEntityReference& reference, const Scene& scene) {
+    const Entity* target = scene.entityById(reference.entityId);
+    const char* display = target ? target->name.c_str() :
+        (reference.entityId == kInvalidEntityId ? "Drop an entity here" : "Missing entity");
+    ImGui::Button("##entityReference", ImVec2(ImGui::CalcItemWidth(), ImGui::GetFrameHeight()));
+    const ImVec2 position = ImGui::GetItemRectMin();
+    const ImVec2 end = ImGui::GetItemRectMax();
+    const ImVec2 padding = ImGui::GetStyle().FramePadding;
+    auto* drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(position, ImVec2(end.x - padding.x, end.y), true);
+    drawList->AddText(ImVec2(position.x + padding.x, position.y + padding.y),
+        ImGui::GetColorU32(ImGuiCol_Text), display);
+    drawList->PopClipRect();
+    bool changed = false;
+    if (!(ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) && ImGui::BeginDragDropTarget()) {
+        const EntityId dragged = hierarchyPayloadEntity(ImGui::GetDragDropPayload());
+        if (scene.entityById(dragged) && ImGui::AcceptDragDropPayload(kEntityPayload) && dragged != reference.entityId) {
+            reference.entityId = dragged;
+            changed = true;
+        }
+        ImGui::EndDragDropTarget();
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted(label);
+    return changed;
+}
+
+bool editScriptField(const char* label, ScriptFieldValue& value, const Scene& scene) {
+    return std::visit([label, &scene](auto& item) {
+        using T = std::decay_t<decltype(item)>;
+        if constexpr (std::is_same_v<T, bool>) {
+            return ImGui::Checkbox(label, &item);
+        } else if constexpr (std::is_same_v<T, std::int64_t>) {
+            ImS64 integer = item;
+            if (!ImGui::InputScalar(label, ImGuiDataType_S64, &integer)) {
+                return false;
+            }
+            item = integer;
+            return true;
+        } else if constexpr (std::is_same_v<T, double>) {
+            return ImGui::InputDouble(label, &item, 0.0, 0.0, "%.17g") && std::isfinite(item);
+        } else if constexpr (std::is_same_v<T, ScriptEntityReference>) {
+            return editEntityReference(label, item, scene);
+        } else {
+            std::array<char, kMaxScriptFieldTextBytes + 1> text;
+            item.copy(text.data(), item.size());
+            text[item.size()] = '\0';
+            if (!ImGui::InputText(label, text.data(), text.size())) {
+                return false;
+            }
+            const std::string_view edited(text.data());
+            if (!isValidScriptFieldText(edited)) {
+                return false;
+            }
+            item = edited;
+            return true;
+        }
+    }, value);
+}
+
+} // namespace
 
 struct InspectorPanel::Impl {
     Scene* scene = nullptr;
     Project* project = nullptr;
     std::vector<std::string> availableScripts;
     std::string scanError;
+
+    struct FieldCache {
+        std::chrono::steady_clock::time_point m_nextRefresh;
+        LuaScriptFieldPreview m_preview;
+    };
+    std::filesystem::path m_fieldProjectRoot;
+    EntityId m_fieldEntity = kInvalidEntityId;
+    std::unordered_map<std::string, FieldCache> m_scriptFields;
     std::vector<std::string> meshes;
     std::vector<std::string> materials;
     std::vector<std::string> clips;
@@ -78,6 +161,70 @@ struct InspectorPanel::Impl {
         return changed;
     }
 
+    bool drawScriptFields(ScriptComponent& script) {
+        auto [entry, inserted] = m_scriptFields.try_emplace(script.path);
+        auto& cache = entry->second;
+        const auto now = std::chrono::steady_clock::now();
+        if (inserted || now >= cache.m_nextRefresh) {
+            const auto path = m_fieldProjectRoot / "Scripts" /
+                std::filesystem::path(std::u8string(script.path.begin(), script.path.end()));
+            cache.m_preview.refresh(path);
+            cache.m_nextRefresh = now + kScriptRefreshInterval;
+        }
+        const auto& defaults = cache.m_preview.defaults();
+        const auto& error = cache.m_preview.error();
+        if (!error.empty()) {
+            ImGui::TextWrapped("%s", error.c_str());
+            if (defaults.empty()) {
+                return false;
+            }
+            ImGui::TextDisabled("Showing the last valid script fields.");
+        }
+
+        bool changed = false;
+        auto& overrides = script.fieldOverrides;
+        ImGui::BeginDisabled(!error.empty());
+        for (const auto& name : cache.m_preview.fieldOrder()) {
+            const auto& defaultValue = defaults.at(name);
+            const auto saved = overrides.find(name);
+            auto value = saved != overrides.end() && saved->second.index() == defaultValue.index()
+                ? saved->second : defaultValue;
+            ImGui::PushID(name.c_str());
+            ImGui::BeginDisabled(saved == overrides.end() && overrides.size() >= kMaxScriptFields);
+            if (editScriptField(name.c_str(), value, *scene)) {
+                overrides.insert_or_assign(name, std::move(value));
+                changed = true;
+            }
+            ImGui::EndDisabled();
+            if (saved != overrides.end()) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Reset##scriptField")) {
+                    overrides.erase(saved);
+                    changed = true;
+                }
+            }
+            ImGui::PopID();
+        }
+        for (auto saved = overrides.begin(); saved != overrides.end();) {
+            if (defaults.contains(saved->first)) {
+                ++saved;
+                continue;
+            }
+            ImGui::PushID(saved->first.c_str());
+            ImGui::TextDisabled("%s (field removed)", saved->first.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Reset##scriptField")) {
+                saved = overrides.erase(saved);
+                changed = true;
+            } else {
+                ++saved;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndDisabled();
+        return changed;
+    }
+
     void refreshScripts() {
         availableScripts.clear();
         scanError.clear();
@@ -115,13 +262,22 @@ InspectorPanel::InspectorPanel(Scene& scene, Project& project)
 InspectorPanel::~InspectorPanel() = default;
 
 void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
-    ImGui::Begin("Inspector");
+    if (!ImGui::Begin("Inspector")) {
+        ImGui::End();
+        return;
+    }
 
     Entity* entity = nullptr;
     if (selectedIndex >= 0) {
         entity = m_impl->scene->entity(static_cast<std::size_t>(selectedIndex));
     }
 
+    const auto fieldEntity = entity ? entity->id() : kInvalidEntityId;
+    if (m_impl->m_fieldEntity != fieldEntity || m_impl->m_fieldProjectRoot != m_impl->project->root()) {
+        m_impl->m_scriptFields.clear();
+        m_impl->m_fieldEntity = fieldEntity;
+        m_impl->m_fieldProjectRoot = m_impl->project->root();
+    }
     if (entity == nullptr) {
         ImGui::TextUnformatted("Nothing selected");
         ImGui::End();
@@ -190,11 +346,11 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
     if (entity->hasMesh && ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
         changed |= m_impl->assetPicker("Geometry", "Built-in Cube", entity->mesh.meshPath, m_impl->meshes);
         changed |= m_impl->assetPicker("Material", "Default", entity->mesh.materialPath, m_impl->materials);
-    }
 
-    if (entity->hasMesh && ImGui::Button("Remove Mesh")) {
-        entity->hasMesh = false;
-        changed = true;
+        if (entity->hasMesh && ImGui::Button("Remove Mesh")) {
+            entity->hasMesh = false;
+            changed = true;
+        }
     }
 
     int removeScript = -1;
@@ -205,11 +361,9 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
         if (ImGui::CollapsingHeader(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
             changed |= ImGui::Checkbox("Enabled", &script.enabled);
             ImGui::TextWrapped("Scripts/%s", script.path.c_str());
-            std::error_code error;
-            if (!m_impl->project->isOpen() ||
-                !std::filesystem::is_regular_file(m_impl->project->root() / "Scripts" /
-                    std::filesystem::path(std::u8string(script.path.begin(), script.path.end())), error)) {
-                ImGui::TextDisabled("Script file is missing.");
+            ImGui::Separator();
+            if (m_impl->project->isOpen() && isValidScriptPath(script.path)) {
+                changed |= m_impl->drawScriptFields(script);
             }
             if (ImGui::Button("Remove Script")) {
                 removeScript = static_cast<int>(index);
@@ -218,6 +372,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
         ImGui::PopID();
     }
     if (removeScript >= 0) {
+        m_impl->m_scriptFields.erase(entity->scripts[static_cast<std::size_t>(removeScript)].path);
         entity->scripts.erase(entity->scripts.begin() + removeScript);
         changed = true;
     }

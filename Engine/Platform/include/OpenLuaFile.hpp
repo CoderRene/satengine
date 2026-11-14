@@ -4,8 +4,8 @@
 
 namespace sat {
 
-// Launches Cursor with SatEngine.code-workspace when present (else projectRoot)
-// and optionally --goto file:1. Returns false if Cursor could not be started.
+// Opens projectRoot in Cursor and optionally jumps to line 1 of filePath.
+// Returns false if Cursor could not be started.
 [[nodiscard]] bool openInCursor(
     const std::filesystem::path& projectRoot,
     const std::filesystem::path& filePath = {});

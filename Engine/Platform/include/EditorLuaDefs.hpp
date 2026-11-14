@@ -4,7 +4,7 @@
 
 namespace sat {
 
-// Prefers <SatEngine.exe dir>/LuaDefs (POST_BUILD copy), else SAT_LUA_DEFS_DIR.
+// Uses the source tree when available, then LuaDefs beside the packaged editor.
 [[nodiscard]] std::filesystem::path editorLuaDefsDirectory();
 
 } // namespace sat

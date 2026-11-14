@@ -25,7 +25,7 @@ void applyVectorEdit(const Vector& before, const Vector& after, Vector& live) {
     applyEdit(before.z, after.z, live.z);
 }
 
-void applyEntityEdits(const Entity& before, const Entity& after, Entity& live) {
+void applyEntityEdits(const Entity& before, const Entity& after, Entity& live, LuaRuntime& scripts) {
     applyEdit(before.name, after.name, live.name);
     applyVectorEdit(before.transform.position, after.transform.position, live.transform.position);
     applyVectorEdit(before.transform.rotation, after.transform.rotation, live.transform.rotation);
@@ -62,8 +62,10 @@ void applyEntityEdits(const Entity& before, const Entity& after, Entity& live) {
             const auto runtime = std::ranges::find(live.scripts, script.path, &ScriptComponent::path);
             if (authored == after.scripts.end()) {
                 if (runtime != live.scripts.end()) { live.scripts.erase(runtime); }
-            } else if (authored->enabled != script.enabled && runtime != live.scripts.end()) {
-                runtime->enabled = authored->enabled;
+            } else if (runtime != live.scripts.end()) {
+                applyEdit(script.enabled, authored->enabled, runtime->enabled);
+                scripts.applyScriptFieldEdits(live.id(), script, *authored);
+                applyEdit(script.fieldOverrides, authored->fieldOverrides, runtime->fieldOverrides);
             }
         }
         for (const auto& script : after.scripts) {
@@ -215,7 +217,7 @@ void PlaySession::applyEdits(Scene& authored, std::string& error) {
             error = "Cannot sync hierarchy for " + after.name;
         }
         if (before) {
-            applyEntityEdits(*before, after, *live);
+            applyEntityEdits(*before, after, *live, m_scripts);
             if (before->hasAudioSource && !after.hasAudioSource) {
                 (void)m_audio.stopSound(after.id());
             } else if (after.hasAudioSource) {

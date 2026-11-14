@@ -10,6 +10,7 @@
 
 namespace sat {
 class Scene;
+struct ScriptComponent;
 class Input;
 class ScriptLog;
 class PhysicsSystem;
@@ -58,6 +59,9 @@ public:
     // Input delta is unscaled seconds. sat.time advances once per update;
     // onUpdate receives scaled seconds. Play resets elapsed time and scale.
     [[nodiscard]] bool update(float deltaSeconds);
+    // Apply changed authored fields to an existing component VM. Removing an
+    // override restores the default declared when that VM started.
+    void applyScriptFieldEdits(std::uint64_t ownerId, const ScriptComponent& before, const ScriptComponent& after);
     // Calls optional onStop() once after successful startup, then releases the VM.
     // Preserves the first failure. Repeated calls are harmless.
     void stop();
@@ -67,7 +71,8 @@ public:
 private:
     [[nodiscard]] bool startSource(std::string_view source, std::string_view chunkName,
                                    std::string_view modulePath,
-                                   std::span<const LuaScriptSource> scripts, bool embedded, std::uint64_t ownerId);
+                                   std::span<const LuaScriptSource> scripts, bool embedded, std::uint64_t ownerId,
+                                   const ScriptComponent& component);
     [[nodiscard]] bool startScripts(const std::filesystem::path& root,
                                     std::span<const LuaScriptSource> scripts, bool embedded);
     struct Impl;

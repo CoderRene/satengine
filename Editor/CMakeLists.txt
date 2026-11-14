@@ -13,6 +13,7 @@ add_dependencies(Editor SatShaders SatEditorShaders)
 # MSBuild/VS often skips relinking Editor when engine libraries change.
 # Refresh a stub .cpp whenever the lib is newer so Editor recompiles and relinks.
 set(_sat_relink_stub "${CMAKE_CURRENT_BINARY_DIR}/satengine_relink_stub.cpp")
+set(_sat_lua_defs "${PROJECT_SOURCE_DIR}/Engine/Scripting/LuaDefs")
 if(NOT EXISTS "${_sat_relink_stub}")
     file(WRITE "${_sat_relink_stub}" "/* Forces Editor relink when engine libraries change. */\n")
 endif()
@@ -20,7 +21,8 @@ add_custom_command(
     OUTPUT "${_sat_relink_stub}"
     COMMAND ${CMAKE_COMMAND} -E touch "${_sat_relink_stub}"
     DEPENDS ${SAT_EDITOR_SHADER_OUTPUTS} ${SAT_SHADER_OUTPUTS} "$<TARGET_FILE:SatAssets>" "$<TARGET_FILE:SatGameUi>" "$<TARGET_FILE:SatScripting>" "$<TARGET_FILE:SatLua>" "$<TARGET_FILE:SatScene>" "$<TARGET_FILE:SatRuntime>" "$<TARGET_FILE:SatEditor>"
-    COMMENT "Engine library changed; refreshing Editor relink stub"
+        "${_sat_lua_defs}/sat.lua" "${_sat_lua_defs}/globals.lua"
+    COMMENT "Engine dependency changed; refreshing Editor relink stub"
     VERBATIM
 )
 target_sources(Editor PRIVATE "${_sat_relink_stub}")
@@ -31,7 +33,7 @@ add_custom_command(TARGET Editor POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/EditorShaders" "$<TARGET_FILE_DIR:Editor>/EditorShaders/Shaders"
     COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:Editor>/LuaDefs"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${PROJECT_SOURCE_DIR}/Engine/Scripting/LuaDefs"
+        "${_sat_lua_defs}"
         "$<TARGET_FILE_DIR:Editor>/LuaDefs"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/Fonts"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/Icons"

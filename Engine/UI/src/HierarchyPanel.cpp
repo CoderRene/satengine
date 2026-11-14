@@ -1,12 +1,12 @@
 #include "HierarchyPanel.hpp"
 
 #include "Scene.hpp"
+#include "module/HierarchyDragDrop.hpp"
 
 #include <imgui.h>
 
 #include <algorithm>
 #include <charconv>
-#include <cstring>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -17,7 +17,6 @@
 namespace sat {
 namespace {
 
-constexpr char kEntityPayload[] = "SAT_HIERARCHY_ENTITY";
 constexpr char kTreeNode[] = "##entity";
 constexpr std::size_t kNoIndex = std::numeric_limits<std::size_t>::max();
 
@@ -28,12 +27,7 @@ void pushEntityId(EntityId id) {
 }
 
 EntityId draggedEntity() {
-    const ImGuiPayload* payload = ImGui::GetDragDropPayload();
-    EntityId id = kInvalidEntityId;
-    if (payload && payload->IsDataType(kEntityPayload) && payload->DataSize == sizeof(id)) {
-        std::memcpy(&id, payload->Data, sizeof(id));
-    }
-    return id;
+    return hierarchyPayloadEntity(ImGui::GetDragDropPayload());
 }
 
 } // namespace
@@ -307,11 +301,9 @@ struct HierarchyPanel::Impl {
                     } else if (m_selected.size() <= 1 && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
                         selectOnly(id);
                         beginRename(id);
-                    } else if (m_selected.contains(id)) {
-                        // Keep the full selection until this click becomes a drag or is released.
-                        m_clicked = id;
                     } else {
-                        selectOnly(id);
+                        // Keep the Inspector selection while dragging another entity.
+                        m_clicked = id;
                     }
                 }
                 if (m_clicked == id && ImGui::IsMouseReleased(ImGuiMouseButton_Left) && ImGui::IsItemHovered()) {

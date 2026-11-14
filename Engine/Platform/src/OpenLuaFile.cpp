@@ -1,5 +1,8 @@
 #include "OpenLuaFile.hpp"
 
+#include "EditorLuaDefs.hpp"
+#include "LuaToolingSync.hpp"
+
 #include <iostream>
 #include <string>
 
@@ -27,15 +30,14 @@ bool openInCursor(
         return false;
     }
 
-    // Prefer the multi-root workspace file (written by syncProjectLuaTooling). It embeds
-    // Lua.workspace.library so reopening a script does not depend on hidden .satengine paths.
-    // Falling back to the folder keeps older projects working before the next sync.
-    const std::filesystem::path workspaceFile = projectRoot / "SatEngine.code-workspace";
-    const std::filesystem::path workspace =
-        std::filesystem::is_regular_file(workspaceFile) ? workspaceFile : projectRoot;
+    const auto definitions = editorLuaDefsDirectory();
+    if (definitions.empty() || !syncProjectLuaDefinitions(projectRoot, definitions)) {
+        std::cerr << "Could not refresh Lua definitions before opening Cursor for " << projectRoot << '\n';
+    }
 
-    //   cursor "<workspace>" --goto "<file>:1"
-    std::wstring args = quote(workspace);
+    // Open the folder so Cursor displays its name and loads .vscode/settings.json.
+    //   cursor "<project folder>" --goto "<file>:1"
+    std::wstring args = quote(projectRoot);
     if (!filePath.empty()) {
         args += L" --goto ";
         args += quote(filePath.wstring() + L":1");

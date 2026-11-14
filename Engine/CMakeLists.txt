@@ -111,6 +111,7 @@ add_library(SatScripting STATIC
     Core/src/Project.cpp
     Core/src/LuaToolingSync.cpp
     Core/src/module/LuaRuntimeModules/LuaSceneBindings.cpp
+    Core/src/module/LuaRuntimeModules/LuaFieldBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaInputBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaTimeBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaMessageBindings.cpp
@@ -130,6 +131,11 @@ target_link_libraries(SatScripting PUBLIC SatScene SatInput SatPhysics SatAudio 
 target_compile_features(SatScripting PUBLIC cxx_std_20)
 
 if(BUILD_TESTING)
+    add_executable(LuaScriptFieldsTests Core/tests/LuaScriptFieldsTests.cpp)
+    target_link_libraries(LuaScriptFieldsTests PRIVATE SatScripting)
+    add_test(NAME LuaScriptFields COMMAND LuaScriptFieldsTests)
+    set_tests_properties(LuaScriptFields PROPERTIES TIMEOUT 15)
+
     add_executable(PhysicsTests Physics/tests/PhysicsTests.cpp)
     target_link_libraries(PhysicsTests PRIVATE SatPhysics)
     target_compile_definitions(PhysicsTests PRIVATE SAT_PHYSICS_EXAMPLE_DIR="${PROJECT_SOURCE_DIR}/Examples/SpacePhysics")
@@ -164,6 +170,7 @@ find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     set(SAT_LUA_DEF_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaSceneBindings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaFieldBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaInputBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaTimeBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaMessageBindings.cpp"
@@ -289,6 +296,7 @@ add_library(SatEditor STATIC
     UI/src/module/EditorStartup.cpp
     UI/src/module/EditorTheme.cpp
     UI/src/module/NewProjectModal.cpp
+    UI/src/module/HierarchyDragDrop.hpp
     UI/src/module/PhysicsInspector.cpp
     UI/src/module/PlaySession.cpp
     UI/src/module/SceneSettingsWindows.cpp

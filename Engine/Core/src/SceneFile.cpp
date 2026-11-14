@@ -1,12 +1,14 @@
 #include "SceneFile.hpp"
 
 #include "Scene.hpp"
+#include "ScriptFields.hpp"
 #include "module/SceneAudioFile.hpp"
 #include "module/ScenePhysicsFile.hpp"
 #include "AssetData.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -14,12 +16,16 @@
 #include <iostream>
 #include <sstream>
 #include <system_error>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace sat {
 namespace {
-constexpr int kSceneVersion = 12;
+constexpr int kSceneVersionWithEntityReferences = 14;
+constexpr int kSceneVersionWithScriptFields = 13;
+constexpr int kSceneVersionWithUi = 12;
 constexpr int kSceneVersionWithoutUi = 11;
 constexpr std::size_t kMaxSceneBytes = 16 * 1024 * 1024;
 constexpr std::size_t kMaxEntities = 100000;
@@ -32,6 +38,78 @@ bool finite(const Vec3& value) {
 bool finite(const DVec3& value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
+
+bool readScriptField(std::istream& in, ScriptFields& fields, int version, std::size_t entityCount) {
+    std::string name;
+    char type = 0;
+    if (!(in >> std::quoted(name) >> type) || !isValidScriptFieldName(name) || fields.contains(name)) {
+        return false;
+    }
+    ScriptFieldValue value;
+    switch (type) {
+    case 'b': {
+        bool boolean = false;
+        if (!(in >> boolean)) { return false; }
+        value = boolean;
+        break;
+    }
+    case 'i': {
+        std::int64_t integer = 0;
+        if (!(in >> integer)) { return false; }
+        value = integer;
+        break;
+    }
+    case 'n': {
+        double number = 0;
+        if (!(in >> number) || !std::isfinite(number)) { return false; }
+        value = number;
+        break;
+    }
+    case 's': {
+        std::string text;
+        if (!(in >> std::quoted(text)) || !isValidScriptFieldText(text)) { return false; }
+        value = std::move(text);
+        break;
+    }
+    case 'e': {
+        std::uint64_t ordinal = 0;
+        if (version < kSceneVersionWithEntityReferences || !(in >> ordinal) || ordinal > entityCount) {
+            return false;
+        }
+        // Resolve the file-local ordinal once all entities exist.
+        value = ScriptEntityReference{ordinal};
+        break;
+    }
+    default:
+        return false;
+    }
+    fields.emplace(std::move(name), std::move(value));
+    return true;
+}
+
+void writeScriptFields(std::ostream& out, const ScriptFields& fields, const Scene& scene) {
+    out << fields.size() << '\n';
+    for (const auto& [name, value] : fields) {
+        out << std::quoted(name) << ' ';
+        std::visit([&](const auto& item) {
+            using T = std::decay_t<decltype(item)>;
+            if constexpr (std::is_same_v<T, bool>) {
+                out << "b " << item;
+            } else if constexpr (std::is_same_v<T, std::int64_t>) {
+                out << "i " << item;
+            } else if constexpr (std::is_same_v<T, double>) {
+                out << "n " << std::setprecision(std::numeric_limits<double>::max_digits10) << item
+                    << std::setprecision(std::numeric_limits<float>::max_digits10);
+            } else if constexpr (std::is_same_v<T, ScriptEntityReference>) {
+                const auto index = scene.entityIndex(item.entityId);
+                out << "e " << (index ? *index + 1 : 0);
+            } else {
+                out << "s " << std::quoted(item);
+            }
+        }, value);
+        out << '\n';
+    }
+}
 } // namespace
 
 std::string serializeScene(const Scene& scene) {
@@ -39,7 +117,20 @@ std::string serializeScene(const Scene& scene) {
     out.imbue(std::locale::classic());
     const bool hasUi = std::any_of(scene.entities().begin(), scene.entities().end(),
         [](const Entity& entity) { return entity.gameUi.has_value(); });
-    out << "SatScene " << (hasUi ? kSceneVersion : kSceneVersionWithoutUi) << '\n' << scene.entityCount() << '\n';
+    int version = hasUi ? kSceneVersionWithUi : kSceneVersionWithoutUi;
+    for (const auto& entity : scene.entities()) {
+        for (const auto& script : entity.scripts) {
+            if (!script.fieldOverrides.empty()) {
+                version = std::max(version, kSceneVersionWithScriptFields);
+            }
+            if (std::any_of(script.fieldOverrides.begin(), script.fieldOverrides.end(), [](const auto& field) {
+                return std::holds_alternative<ScriptEntityReference>(field.second);
+            })) {
+                version = kSceneVersionWithEntityReferences;
+            }
+        }
+    }
+    out << "SatScene " << version << '\n' << scene.entityCount() << '\n';
     writePhysicsSettings(out, scene.physicsSettings);
     writeAudioSettings(out, scene.audioSettings);
     const auto& ambient = scene.lightingSettings;
@@ -71,6 +162,9 @@ std::string serializeScene(const Scene& scene) {
         out << '\n' << entity.scripts.size() << '\n';
         for (const auto& script : entity.scripts) {
             out << script.enabled << ' ' << std::quoted(script.path) << '\n';
+            if (version >= kSceneVersionWithScriptFields) {
+                writeScriptFields(out, script.fieldOverrides, scene);
+            }
         }
         writePhysicsComponents(out, entity);
         writeAudioComponents(out, entity);
@@ -79,7 +173,7 @@ std::string serializeScene(const Scene& scene) {
             << light.color[0] << ' ' << light.color[1] << ' ' << light.color[2] << ' '
             << light.intensity << ' ' << light.range << ' ' << light.innerConeDegrees << ' '
             << light.outerConeDegrees << '\n';
-        if (hasUi) {
+        if (version >= kSceneVersionWithUi) {
             out << entity.gameUi.has_value();
             if (entity.gameUi) {
                 out << ' ' << entity.gameUi->visible << ' ' << std::quoted(entity.gameUi->documentPath)
@@ -107,7 +201,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
     std::string magic;
     int version = 0;
     std::size_t count = 0;
-    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > kSceneVersion) || count > kMaxEntities) {
+    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > kSceneVersionWithEntityReferences) || count > kMaxEntities) {
         return fail("Invalid scene header, version or entity count.");
     }
     Scene candidate;
@@ -216,7 +310,19 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
             if (!(in >> enabled >> std::quoted(path)) || !candidate.attachScript(index, path)) {
                 return fail("Invalid or duplicate script path on entity " + e.name);
             }
-            e.scripts.back().enabled = enabled;
+            auto& component = e.scripts.back();
+            component.enabled = enabled;
+            if (version >= kSceneVersionWithScriptFields) {
+                std::size_t fieldCount = 0;
+                if (!(in >> fieldCount) || fieldCount > kMaxScriptFields) {
+                    return fail("Invalid script field count for " + path + " on entity " + e.name);
+                }
+                for (std::size_t field = 0; field < fieldCount; ++field) {
+                    if (!readScriptField(in, component.fieldOverrides, version, count)) {
+                        return fail("Invalid or duplicate script field for " + path + " on entity " + e.name);
+                    }
+                }
+            }
         }
         if (version >= 3 && !readPhysicsComponents(in, e, error)) { return false; }
         if (version >= 4 && !readAudioComponents(in, e, error, version >= 5)) { return false; }
@@ -235,7 +341,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
             }
             light.type = static_cast<LightType>(type);
         }
-        if (version >= 12) {
+        if (version >= kSceneVersionWithUi) {
             bool hasUi = false;
             if (!(in >> hasUi)) { return fail("Invalid Game UI component on entity " + e.name); }
             if (hasUi) {
@@ -244,6 +350,18 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
                     (!ui.documentPath.empty() && !isUiDocumentPath(ui.documentPath)) ||
                     (!ui.fontPath.empty() && !isUiFontPath(ui.fontPath))) {
                     return fail("Invalid Game UI asset path on entity " + e.name);
+                }
+            }
+        }
+    }
+    if (version >= kSceneVersionWithEntityReferences) {
+        for (std::size_t index = 0; index < count; ++index) {
+            for (auto& script : candidate.entity(index)->scripts) {
+                for (auto& [name, value] : script.fieldOverrides) {
+                    if (auto* reference = std::get_if<ScriptEntityReference>(&value);
+                        reference && reference->entityId != 0) {
+                        reference->entityId = candidate.entity(static_cast<std::size_t>(reference->entityId - 1))->id();
+                    }
                 }
             }
         }

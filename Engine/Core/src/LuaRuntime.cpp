@@ -1,5 +1,6 @@
 #include "LuaRuntime.hpp"
 
+#include "module/LuaRuntimeModules/LuaFieldBindings.hpp"
 #include "module/LuaRuntimeModules/LuaInputBindings.hpp"
 #include "module/LuaRuntimeModules/LuaPackageConfig.hpp"
 #include "module/LuaRuntimeModules/LuaSceneBindings.hpp"
@@ -76,6 +77,7 @@ struct LuaRuntime::Impl {
     std::string m_context;
     std::vector<std::unique_ptr<LuaRuntime>> m_instances;
     std::string m_scriptPath;
+    lua::FieldBindings m_fields;
     lua::TimeState m_time;
     lua::TimeState* m_sharedTime = &m_time;
     lua::MessageBus m_messages;
@@ -272,7 +274,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
     struct Attachment {
         EntityId ownerId;
         std::string entityName;
-        std::string path;
+        ScriptComponent component;
     };
     std::vector<Attachment> attachments;
     for (std::size_t index = 0; index < impl.m_scene.entities().size(); ++index) {
@@ -282,7 +284,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
                 if (!isValidScriptPath(component.path)) {
                     return impl.fail("Invalid script path on entity " + entity.name);
                 }
-                attachments.push_back({entity.id(), entity.name, component.path});
+                attachments.push_back({entity.id(), entity.name, component});
             }
         }
     }
@@ -294,7 +296,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
     }
     impl.m_messages.m_targets.reserve(attachments.size());
     for (const auto& attachment : attachments) {
-        impl.m_messages.m_targets.push_back({attachment.ownerId, attachment.path});
+        impl.m_messages.m_targets.push_back({attachment.ownerId, attachment.component.path});
     }
     impl.m_messages.m_accepting = true;
     std::string modulePath;
@@ -304,6 +306,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
     }
     for (std::size_t targetIndex = 0; targetIndex < attachments.size(); ++targetIndex) {
         const auto& attachment = attachments[targetIndex];
+        const auto& path = attachment.component.path;
         if (impl.m_scene.entityById(attachment.ownerId) == nullptr) {
             continue; // Earlier startup code may destroy an unstarted owner.
         }
@@ -311,16 +314,16 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
         std::string_view source;
         if (embedded) {
             const auto found = std::find_if(scripts.begin(), scripts.end(), [&](const LuaScriptSource& script) {
-                return script.name == attachment.path;
+                return script.name == path;
             });
             if (found == scripts.end()) {
-                impl.fail("Entity " + attachment.entityName + ": missing embedded script Scripts/" + attachment.path);
+                impl.fail("Entity " + attachment.entityName + ": missing embedded script Scripts/" + path);
                 stop();
                 return false;
             }
             source = found->source;
         } else {
-            const auto filePath = root / "Scripts" / std::filesystem::path(std::u8string(attachment.path.begin(), attachment.path.end()));
+            const auto filePath = root / "Scripts" / std::filesystem::path(std::u8string(path.begin(), path.end()));
             std::ifstream file(filePath, std::ios::binary);
             if (!file) {
                 impl.fail("Entity " + attachment.entityName + ": cannot read script " + filePath.string());
@@ -340,10 +343,10 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
         instance->m_impl->m_sharedTime = &impl.m_time;
         instance->m_impl->m_sharedMessages = &impl.m_messages;
         instance->m_impl->m_targetIndex = targetIndex;
-        instance->m_impl->m_context = "Entity " + attachment.entityName + " [Scripts/" + attachment.path + "]";
-        instance->m_impl->m_scriptPath = attachment.path;
-        if (!instance->startSource(source, "@Scripts/" + attachment.path, modulePath,
-                                   scripts, embedded, attachment.ownerId)) {
+        instance->m_impl->m_context = "Entity " + attachment.entityName + " [Scripts/" + path + "]";
+        instance->m_impl->m_scriptPath = path;
+        if (!instance->startSource(source, "@Scripts/" + path, modulePath,
+                                   scripts, embedded, attachment.ownerId, attachment.component)) {
             impl.fail(instance->error());
             stop();
             return false;
@@ -377,7 +380,8 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
 
 bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName,
                              std::string_view modulePath,
-                             std::span<const LuaScriptSource> scripts, bool embedded, std::uint64_t ownerId) {
+                             std::span<const LuaScriptSource> scripts, bool embedded, std::uint64_t ownerId,
+                             const ScriptComponent& component) {
     auto& impl = *m_impl;
     impl.m_ownerId = ownerId;
     impl.m_state = luaL_newstate();
@@ -393,6 +397,7 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
 
     lua_newtable(state);
     lua::registerSceneBindings(state, impl.m_scene, impl.m_physics);
+    lua::registerFieldBindings(state, impl.m_fields);
     lua::registerPhysicsBindings(state, impl.m_scene, impl.m_physics);
     lua::registerAudioBindings(state, impl.m_scene, impl.m_audio);
     lua::registerUiBindings(state, impl.m_gameUi, impl.uiOwner(), impl.m_scene);
@@ -414,7 +419,11 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
         impl.close();
         return false;
     }
-    if (!impl.call(0) || (impl.m_scene.entityById(impl.m_ownerId) != nullptr && !impl.callback("onStart"))) {
+    impl.m_fields.m_startupOverrides = &component.fieldOverrides;
+    const bool loaded = impl.call(0);
+    impl.m_fields.m_startupOverrides = nullptr;
+    impl.m_fields.m_accepting = false;
+    if (!loaded || (impl.m_scene.entityById(impl.m_ownerId) != nullptr && !impl.callback("onStart"))) {
         impl.close();
         return false;
     }
@@ -513,6 +522,20 @@ bool LuaRuntime::update(float deltaSeconds) {
     }
     if (impl.m_audio) { impl.m_audio->update(deltaSeconds, impl.m_physics, time.m_timeScale); }
     return true;
+}
+
+void LuaRuntime::applyScriptFieldEdits(std::uint64_t ownerId, const ScriptComponent& before,
+                                       const ScriptComponent& after) {
+    if (before.path != after.path || before.fieldOverrides == after.fieldOverrides) {
+        return;
+    }
+    for (const auto& instance : m_impl->m_instances) {
+        const auto& child = *instance->m_impl;
+        if (child.m_ownerId == ownerId && child.m_scriptPath == after.path && child.m_state != nullptr) {
+            lua::applyFieldEdits(child.m_state, child.m_fields, before.fieldOverrides, after.fieldOverrides);
+            return;
+        }
+    }
 }
 
 void LuaRuntime::stop() {

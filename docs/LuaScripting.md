@@ -40,6 +40,83 @@ function onStop()
 end
 ```
 
+### Inspector fields
+
+The [Lua Inspector Fields example](../Examples/LuaInspectorFields/) shows two
+entities using the same script with different values.
+
+Put `sat.expose { ... }` at the start of an attached project script, after any
+header comments. It declares editable defaults and makes the values available
+on `self` as soon as the declaration runs.
+
+```lua
+sat.expose {
+    speed = 45.0,
+    spinning = true,
+}
+
+---@class SpinSelf: ScriptSelf
+---@field speed number
+---@field spinning boolean
+local cube = self --[[@as SpinSelf]]
+
+local angle = 0
+
+function onUpdate(deltaSeconds)
+    if cube.spinning then
+        angle = (angle + cube.speed * deltaSeconds) % 360
+        sat.setRotation(cube.entity, 0, angle, 0)
+    end
+end
+```
+
+Select the entity and expand its **Lua Script** component to edit the fields.
+Each attachment can store its own overrides in the scene. **Reset** returns a
+field to its script default. Edits during Play take effect in the running
+instance before the next update. The usual **Save Changes** or **Discard
+Changes** prompt applies when you stop. Read fields from `self` or its alias
+in your callbacks so they pick up live edits.
+
+Save the Lua file to refresh its fields in the open Inspector. If a save has
+an error, the Inspector shows the error alongside the last valid fields until
+you save a correction.
+Fields appear in the order you write them in the `sat.expose { ... }` block.
+
+Lua Language Server uses the `SpinSelf` annotations above for completion and
+type checking. Give each script's fields a class that inherits `ScriptSelf`
+to keep its fields scoped to that script.
+
+Use boolean, integer, finite number, or single-line string defaults. Write
+`45.0` for a decimal field and `45` for an integer field. Names use identifier
+characters, and `entity` is reserved. Field declarations may contain up to 128
+fields with text values up to 4096 bytes. Keep the declaration self-contained
+so the Inspector can read it with engine APIs and standard libraries disabled.
+Restart Play after changing a declaration in the source file to load the new
+defaults or types into the running instance. Saved values with a different type
+are ignored until replaced or reset.
+
+#### Entity references
+
+```lua
+sat.expose {
+    target = sat.entityField(),
+}
+
+function onUpdate()
+    local target = self.target
+    if target and sat.isEntityValid(target) then
+        local x, y, z = sat.getPosition(target)
+        sat.setPosition(self.entity, x, y + 2, z)
+    end
+end
+```
+
+Select the entity that owns the script, then drag a row from **Hierarchy** onto
+the `target` field in the Inspector. Lua receives the assigned entity's ID, or
+`nil` when the field is empty. **Reset** clears the assignment. The reference
+is saved with the scene and can be reassigned during Play. Check
+`sat.isEntityValid` before using a target that may have been destroyed.
+
 Scripts start in entity/component order. A script's top-level code runs before
 its onStart; then each instance receives updates in the same order. The active
 component roster is fixed for a Play session, except that destroyed owners retire

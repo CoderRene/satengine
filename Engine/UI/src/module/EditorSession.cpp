@@ -268,7 +268,8 @@ void EditorSession::selectEntity(EntityId id, bool keepHierarchySelection) {
 void EditorSession::syncLuaTooling() const {
     const auto defs = editorLuaDefsDirectory();
     if (defs.empty() || !syncProjectLuaTooling(m_state->project.root(), defs)) {
-        std::cerr << "Warning: failed to sync LuaDefs into the project (Cursor linting may not work)\n";
+        m_state->sceneError = "Could not update LuaDefs in the project. Check the project folder permissions and editor log.";
+        std::cerr << m_state->sceneError << '\n';
     }
 }
 
