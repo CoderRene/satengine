@@ -56,6 +56,7 @@ add_custom_command(TARGET Editor POST_BUILD
         "${PROJECT_SOURCE_DIR}/Engine/Assets/Icons/light_ic.png"
         "${PROJECT_SOURCE_DIR}/Engine/Assets/Icons/spotlight_ic.png"
         "${PROJECT_SOURCE_DIR}/Engine/Assets/Icons/sun_ic.png"
+        "${PROJECT_SOURCE_DIR}/Engine/Assets/Icons/lua_ic.png"
         "$<TARGET_FILE_DIR:Editor>/Icons/"
     COMMENT "Copy engine fonts, icons, and LuaDefs next to Editor"
     VERBATIM

@@ -87,11 +87,13 @@ ContentPanel::ContentPanel(Project& project, Renderer& renderer)
     , m_renderer(&renderer) {
     m_folderIcon = loadIconTexture(renderer, "Icons/folder_ic.png");
     m_returnIcon = loadIconTexture(renderer, "Icons/return_ic.png");
+    m_luaIcon = loadIconTexture(renderer, "Icons/lua_ic.png");
 }
 
 ContentPanel::~ContentPanel() {
     destroyIconTexture(*m_renderer, m_folderIcon);
     destroyIconTexture(*m_renderer, m_returnIcon);
+    destroyIconTexture(*m_renderer, m_luaIcon);
 }
 
 void ContentPanel::syncToProject() {
@@ -125,6 +127,8 @@ void ContentPanel::stopAudioPreview() {
 }
 
 void ContentPanel::setSelectedAsset(std::string path) {
+    m_revealedReferences.clear();
+    m_scrollToReference = false;
     if (path == m_selectedAsset) { return; }
     stopAudioPreview();
     m_selectedAsset = std::move(path);
@@ -136,6 +140,29 @@ void ContentPanel::setSelectedAsset(std::string path) {
         if (!loadImportSettings(source, m_audioImport, m_audioError)) {
             m_audioError = "Cannot read audio import settings: " + m_audioError;
         }
+    }
+}
+
+void ContentPanel::revealReferences(std::initializer_list<std::string_view> paths) {
+    syncToProject();
+    setSelectedAsset({});
+    if (!m_project->isOpen()) { return; }
+
+    constexpr std::string_view kScriptsPrefix = "Scripts/";
+    for (const std::string_view path : paths) {
+        if (!isValidAssetPath(path) &&
+            !(path.starts_with(kScriptsPrefix) && isValidScriptPath(path.substr(kScriptsPrefix.size())))) {
+            continue;
+        }
+        const fs::path relative{std::u8string(path.begin(), path.end())};
+        std::error_code error;
+        if (!fs::is_regular_file(m_project->root() / relative, error)) { continue; }
+
+        if (m_revealedReferences.empty()) {
+            m_relative = relative.parent_path();
+            m_scrollToReference = true;
+        }
+        m_revealedReferences.emplace_back(path);
     }
 }
 
@@ -179,7 +206,10 @@ void ContentPanel::onImGuiRender(bool playMode) {
         stopAudioPreview();
     }
 
-    ImGui::Begin("Content");
+    if (!ImGui::Begin("Content")) {
+        ImGui::End();
+        return;
+    }
     if (m_project->isOpen()) {
         drawBreadcrumb();
         ImGui::Separator();
@@ -308,6 +338,22 @@ void ContentPanel::drawFolderList() {
 
     const ImTextureRef folderIcon((ImTextureID)(std::uintptr_t)m_folderIcon);
     const ImTextureRef returnIcon((ImTextureID)(std::uintptr_t)m_returnIcon);
+    const ImTextureRef luaIcon(static_cast<ImTextureID>(m_luaIcon));
+
+    const auto isHighlighted = [this](std::string_view path, bool directory) {
+        if (!directory && path == m_selectedAsset) { return true; }
+        return std::any_of(m_revealedReferences.begin(), m_revealedReferences.end(),
+            [path, directory](std::string_view reference) {
+                return directory ? reference.starts_with(path) && reference.size() > path.size() &&
+                    reference[path.size()] == '/' : reference == path;
+            });
+    };
+    const auto scrollToReference = [this](std::string_view path) {
+        if (m_scrollToReference && !m_revealedReferences.empty() && path == m_revealedReferences.front()) {
+            ImGui::SetScrollHereY();
+            m_scrollToReference = false;
+        }
+    };
 
     if (listView) {
         for (const Entry& entry : entries) {
@@ -321,16 +367,20 @@ void ContentPanel::drawFolderList() {
             } else if (entry.isDirectory && m_folderIcon != 0) {
                 ImGui::Image(folderIcon, ImVec2(iconSize, iconSize));
                 ImGui::SameLine();
+            } else if (!entry.isDirectory && m_luaIcon != 0 && isLuaFile(entry.name)) {
+                ImGui::Image(luaIcon, ImVec2(iconSize, iconSize));
+                ImGui::SameLine();
             }
 
             const auto encoded = (listedFolder / entry.name).generic_u8string();
             const std::string assetPath(encoded.begin(), encoded.end());
-            if (ImGui::Selectable(name.c_str(), !entry.isDirectory && assetPath == m_selectedAsset)) {
+            if (ImGui::Selectable(name.c_str(), isHighlighted(assetPath, entry.isDirectory))) {
                 if (!entry.isDirectory && m_select) { m_select(assetPath); }
                 if (isParent) {
                     navigateUp();
                 }
             }
+            scrollToReference(assetPath);
             if (entry.isDirectory && !isParent &&
                 ImGui::IsItemHovered() &&
                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -373,7 +423,7 @@ void ContentPanel::drawFolderList() {
         const auto encoded = (listedFolder / entry.name).generic_u8string();
         const std::string assetPath(encoded.begin(), encoded.end());
         if (pressed && !entry.isDirectory && m_select) { m_select(assetPath); }
-        if (hovered || (!entry.isDirectory && assetPath == m_selectedAsset)) {
+        if (hovered || isHighlighted(assetPath, entry.isDirectory)) {
             draw->AddRectFilled(
                 min,
                 ImVec2(min.x + iconSize, min.y + cellH),
@@ -392,6 +442,8 @@ void ContentPanel::drawFolderList() {
             draw->AddImage(returnIcon, iconMin, iconMax);
         } else if (entry.isDirectory && m_folderIcon != 0) {
             draw->AddImage(folderIcon, iconMin, iconMax);
+        } else if (!entry.isDirectory && m_luaIcon != 0 && isLuaFile(entry.name)) {
+            draw->AddImage(luaIcon, iconMin, iconMax);
         } else {
             draw->AddRectFilled(
                 iconMin, iconMax, ImGui::GetColorU32(ImGuiCol_FrameBg), style.FrameRounding);
@@ -435,6 +487,7 @@ void ContentPanel::drawFolderList() {
         }
 
         ImGui::EndGroup();
+        scrollToReference(assetPath);
         ImGui::PopID();
 
         column = (column + 1) % columns;

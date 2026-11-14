@@ -6,8 +6,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace sat {
 
@@ -26,6 +29,8 @@ public:
     void stopAudioPreview();
     void setSelectionHandler(std::function<void(std::string)> handler) { m_select = std::move(handler); }
     void setSelectedAsset(std::string path);
+    void revealReferences(std::initializer_list<std::string_view> paths);
+    [[nodiscard]] std::uintptr_t luaIcon() const noexcept { return m_luaIcon; }
 
 private:
     void syncToProject();
@@ -42,8 +47,11 @@ private:
     std::filesystem::path m_relative; // path under project root; empty = root
     std::uintptr_t m_folderIcon = 0;
     std::uintptr_t m_returnIcon = 0;
+    std::uintptr_t m_luaIcon = 0;
     std::function<void(std::string)> m_select;
     std::string m_selectedAsset;
+    std::vector<std::string> m_revealedReferences;
+    bool m_scrollToReference = false;
     Scene m_previewScene;
     AudioSystem m_preview{m_previewScene};
     EntityId m_previewEntity = kInvalidEntityId;

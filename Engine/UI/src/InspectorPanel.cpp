@@ -1,5 +1,6 @@
 #include "InspectorPanel.hpp"
 
+#include "ContentPanel.hpp"
 #include "Scene.hpp"
 #include "LuaScriptFields.hpp"
 #include "module/PhysicsInspector.hpp"
@@ -96,6 +97,7 @@ struct InspectorPanel::Impl {
     Scene* scene = nullptr;
     Project* project = nullptr;
     std::vector<std::string> availableScripts;
+    std::array<char, 256> m_scriptSearch{};
     std::string scanError;
 
     struct FieldCache {
@@ -261,7 +263,7 @@ InspectorPanel::InspectorPanel(Scene& scene, Project& project)
 
 InspectorPanel::~InspectorPanel() = default;
 
-void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
+void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, ContentPanel* content) {
     if (!ImGui::Begin("Inspector")) {
         ImGui::End();
         return;
@@ -343,7 +345,15 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
         entity->camera = {};
     }
 
-    if (entity->hasMesh && ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen)) {
+    const auto componentHeader = [content](const char* label, std::initializer_list<std::string_view> paths) {
+        const bool expanded = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
+        if (content && ImGui::IsItemClicked()) {
+            content->revealReferences(paths);
+        }
+        return expanded;
+    };
+
+    if (entity->hasMesh && componentHeader("Mesh", {entity->mesh.meshPath, entity->mesh.materialPath})) {
         changed |= m_impl->assetPicker("Geometry", "Built-in Cube", entity->mesh.meshPath, m_impl->meshes);
         changed |= m_impl->assetPicker("Material", "Default", entity->mesh.materialPath, m_impl->materials);
 
@@ -358,7 +368,16 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
         auto& script = entity->scripts[index];
         ImGui::PushID(static_cast<int>(index));
         const std::string label = "Lua Script: " + script.path;
-        if (ImGui::CollapsingHeader(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+        const auto scriptPath = isValidScriptPath(script.path) ? "Scripts/" + script.path : std::string{};
+        if (content && content->luaIcon() != 0) {
+            const float iconSize = ImGui::GetFrameHeight();
+            ImGui::Image(ImTextureRef(static_cast<ImTextureID>(content->luaIcon())), ImVec2(iconSize, iconSize));
+            if (ImGui::IsItemClicked()) {
+                content->revealReferences({scriptPath});
+            }
+            ImGui::SameLine();
+        }
+        if (componentHeader(label.c_str(), {scriptPath})) {
             changed |= ImGui::Checkbox("Enabled", &script.enabled);
             ImGui::TextWrapped("Scripts/%s", script.path.c_str());
             ImGui::Separator();
@@ -377,7 +396,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
         changed = true;
     }
 
-    if (entity->gameUi && ImGui::CollapsingHeader("Game UI", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (entity->gameUi && componentHeader("Game UI", {entity->gameUi->documentPath, entity->gameUi->fontPath})) {
         auto& ui = *entity->gameUi;
         changed |= m_impl->assetPicker("Document", "None", ui.documentPath, m_impl->uiDocuments);
         changed |= m_impl->assetPicker("Font", "None", ui.fontPath, m_impl->uiFonts);
@@ -389,7 +408,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
     }
 
     changed |= drawPhysicsInspector(*entity);
-    if (entity->hasAudioSource && ImGui::CollapsingHeader("Audio Source", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (entity->hasAudioSource && componentHeader("Audio Source", {entity->audioSource.clipPath})) {
         auto& source = entity->audioSource;
         changed |= m_impl->assetPicker("Clip", "None", source.clipPath, m_impl->clips);
         changed |= dragFloat("Volume", &source.volume, 0.01f, 0.0f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -448,6 +467,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
     ImGui::Separator();
     if (ImGui::Button("Add Component", ImVec2(-1.0f, 0.0f))) {
         m_impl->refreshScripts();
+        m_impl->m_scriptSearch.front() = '\0';
         ImGui::OpenPopup("AddComponent");
     }
     if (ImGui::BeginPopup("AddComponent")) {
@@ -497,13 +517,29 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity) {
             if (!m_impl->scanError.empty()) {
                 ImGui::TextWrapped("Cannot list scripts: %s", m_impl->scanError.c_str());
             }
+            auto& search = m_impl->m_scriptSearch;
+            if (!m_impl->availableScripts.empty()) {
+                if (ImGui::IsWindowAppearing()) {
+                    ImGui::SetKeyboardFocusHere();
+                }
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 18.0f);
+                ImGui::InputTextWithHint("##ScriptSearch", "Search scripts", search.data(), search.size());
+            }
+            bool hasMatches = false;
             for (const auto& path : m_impl->availableScripts) {
+                if (search.front() != '\0' && !ImStristr(path.data(), path.data() + path.size(), search.data(), nullptr)) {
+                    continue;
+                }
+                hasMatches = true;
                 const bool attached = std::any_of(entity->scripts.begin(), entity->scripts.end(),
                     [&](const ScriptComponent& component) { return component.path == path; });
                 if (ImGui::MenuItem(path.c_str(), nullptr, attached, !attached)) {
                     const bool added = m_impl->scene->attachScript(static_cast<std::size_t>(selectedIndex), path);
                     (void)added; // Valid path and duplicate checks were applied above.
                 }
+            }
+            if (!hasMatches && !m_impl->availableScripts.empty()) {
+                ImGui::TextDisabled("No matching scripts.");
             }
             ImGui::EndMenu();
         }

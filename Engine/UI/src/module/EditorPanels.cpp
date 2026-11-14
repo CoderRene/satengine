@@ -46,7 +46,7 @@ void EditorSession::drawPanels() {
         const int selected = state.hierarchy ? state.hierarchy->selectedIndex() : -1;
         const Entity* authored = selected >= 0 ? state.scene.entity(static_cast<std::size_t>(selected)) : nullptr;
         Entity* live = playing && authored ? state.play.game().entityById(authored->id()) : nullptr;
-        state.inspector->onImGuiRender(selected, live);
+        state.inspector->onImGuiRender(selected, live, state.content.get());
     }
     ImGui::EndDisabled();
 

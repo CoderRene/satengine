@@ -20,7 +20,7 @@ A large-world or open-world space game engine. Design choices assume vacuum, loc
 
 Forward PBR [lighting and materials](docs/Lighting.md) with [Slang shaders](docs/Shaders.md).
 
-Still planned: animation, macOS/Linux editor, and a stable public API.
+Prioritized next work: [docs/Roadmap.md](docs/Roadmap.md) (content pipeline → animation → editor undo → physics depth).
 
 ## Try an example
 
@@ -91,6 +91,7 @@ Ship the exe together with its `.pak` parts. An MSVC runtime is required on the 
 
 | Topic | Guide |
 | --- | --- |
+| Roadmap | [docs/Roadmap.md](docs/Roadmap.md) |
 | Lua scripting | [docs/LuaScripting.md](docs/LuaScripting.md) |
 | Meshes, materials & textures | [docs/AssetLoading.md](docs/AssetLoading.md) |
 | Lighting | [docs/Lighting.md](docs/Lighting.md) |
