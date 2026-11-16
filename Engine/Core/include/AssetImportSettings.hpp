@@ -17,6 +17,8 @@ struct AssetImportSettings {
     TextureWrap wrap = TextureWrap::Repeat;
     bool mipmaps = false;
     AudioLoadMode audioLoadMode = AudioLoadMode::Auto;
+    bool mergeGeometry = false;
+    bool preserveNodeHierarchy = false;
     bool operator==(const AssetImportSettings&) const = default;
 };
 [[nodiscard]] bool parseImportSettings(std::string_view text, AssetImportSettings& settings, std::string& error);

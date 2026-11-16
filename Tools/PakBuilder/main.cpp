@@ -10,11 +10,13 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -56,16 +58,7 @@ int main(int argc, char** argv) {
         if (!sat::deserializeScene(entries.front().bytes, scene, sceneError)) {
             throw std::runtime_error("Cannot pack scene: " + sceneError);
         }
-        sat::AssetLibrary assets;
-        assets.setReader(sat::fileAssetReader(root));
-        for (const auto& entity : scene.entities()) {
-            if (!entity.hasMesh) { continue; }
-            if ((!entity.mesh.meshPath.empty() && assets.mesh(entity.mesh.meshPath) == nullptr) ||
-                (!entity.mesh.materialPath.empty() && assets.material(entity.mesh.materialPath) == nullptr)) {
-                throw std::runtime_error("Entity " + entity.name + ": " + assets.errors().back());
-            }
-        }
-        std::vector<std::filesystem::path> files;
+        std::vector<std::string> files;
         for (const char* folder : {"Scripts", "Assets"}) {
             if (!std::filesystem::exists(root / folder)) { continue; }
             for (const auto& file : std::filesystem::recursive_directory_iterator(root / folder)) {
@@ -74,15 +67,38 @@ int main(int argc, char** argv) {
                 if (name.starts_with(u8"._") || name == u8".DS_Store") { continue; }
                 if (file.is_symlink()) { throw std::runtime_error("Symlinks are not supported in pak inputs"); }
                 if (file.is_regular_file() && (std::string_view(folder) == "Assets" || file.path().extension() == ".lua")) {
-                    files.push_back(file.path());
+                    const auto encoded = file.path().lexically_relative(root).generic_u8string();
+                    std::string relative(encoded.begin(), encoded.end());
+                    if (relative.ends_with(".satimport.tmp") || relative.ends_with(".satmat.tmp") ||
+                        (relative.ends_with(".tmp") && sat::isTextureAssetPath(
+                            std::string_view(relative).substr(0, relative.size() - 4)))) { continue; }
+                    files.push_back(std::move(relative));
                 }
             }
         }
         std::sort(files.begin(), files.end());
-        for (const auto& path : files) {
-            const auto encoded = path.lexically_relative(root).generic_u8string();
-            std::string name(encoded.begin(), encoded.end());
-            if (name.ends_with(".satimport.tmp") || name.ends_with(".satmat.tmp")) { continue; }
+        sat::AssetLibrary assets;
+        // Asset readers in the player look up exact archive paths, including
+        // glTF buffers that have no engine asset extension.
+        assets.setReader([&files, reader = sat::fileAssetReader(root)](
+            std::string_view path, std::string& bytes, std::string& error) {
+            const auto result = reader(path, bytes, error);
+            if (result == sat::AssetReadResult::Found &&
+                !std::binary_search(files.begin(), files.end(), path, std::less<>{})) {
+                error = "Asset path does not exactly match a packaged file: " + std::string(path);
+                return sat::AssetReadResult::Error;
+            }
+            return result;
+        });
+        for (const auto& entity : scene.entities()) {
+            if (!entity.hasMesh) { continue; }
+            if ((!entity.mesh.meshPath.empty() && assets.mesh(entity.mesh.meshPath) == nullptr) ||
+                (!entity.mesh.materialPath.empty() && assets.material(entity.mesh.materialPath) == nullptr)) {
+                throw std::runtime_error("Entity " + entity.name + ": " + assets.errors().back());
+            }
+        }
+        for (const auto& name : files) {
+            const auto path = root / std::filesystem::path(std::u8string(name.begin(), name.end()));
             if (name.ends_with(".satimport")) {
                 const auto source = std::string_view(name).substr(0, name.size() - std::string_view(".satimport").size());
                 if (!sat::isMeshAssetPath(source) && !sat::isTextureAssetPath(source) && !sat::isAudioAssetPath(source)) {
@@ -114,7 +130,7 @@ int main(int argc, char** argv) {
                 if (lua_dump(state.get(), dump, &bytes, 0) != 0) { throw std::runtime_error("Bytecode compilation failed: " + name); }
                 lua_pop(state.get(), 1);
             }
-            entries.push_back({std::move(name), std::move(bytes)});
+            entries.push_back({name, std::move(bytes)});
         }
         for (const auto& entry : entries) {
             if (entry.name.ends_with(".satimport")) {
@@ -173,7 +189,7 @@ int main(int argc, char** argv) {
                     throw std::runtime_error(entry.name + ": missing compiled shader " + material->shaderPath);
                 }
                 for (const auto* path : {&material->baseColorTexture, &material->metallicRoughnessTexture,
-                                        &material->normalTexture, &material->emissiveTexture}) {
+                                        &material->normalTexture, &material->emissiveTexture, &material->occlusionTexture}) {
                     if (!path->empty() && std::none_of(entries.begin(), entries.end(),
                         [&](const sat::PakEntry& candidate) { return candidate.name == *path; })) {
                         throw std::runtime_error(entry.name + ": missing texture " + *path);

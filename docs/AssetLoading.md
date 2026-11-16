@@ -139,8 +139,8 @@ maximum, bilinear filtering, and a full mip chain.
 
 ## Loading, reload and limits
 
-Loading is synchronous on first use. Repeated draws use cached CPU data and
-immutable GPU resources; repeated failures do not retry or log every frame.
+Loading is synchronous on first use. Repeated draws reuse immutable GPU
+resources. Repeated failures do not retry or log every frame.
 Use the selected asset's **Reimport** after editing its source or fixing a failure.
 Use **File > Reload Assets** to clear all cached assets and diagnostics. Opening another project clears both CPU and GPU caches.
 There is no automatic file watcher or background streaming yet.
@@ -150,9 +150,11 @@ Absolute paths, traversal, empty segments, backslashes and control characters
 are rejected. File sources also reject symlinks that resolve outside the project.
 Files are bounded to 64 MiB; images to 4096×4096; imported meshes to one million
 positions/UVs/normals/output vertices, three million triangle indices, and 256
-corners per polygon. Decoded CPU data, including generated mip levels, is bounded to 256 MiB and
-4096 unique paths. Sidecars are bounded to 4096 bytes and material files to 8192 bytes.
-Cache-limit failures are explicit; reload to reclaim cached resources.
+corners per polygon. When the 256 MiB decoded mesh and texture cache fills, it
+evicts the least recently used data to make room. Evicted assets are decoded again
+when their CPU data is requested. Generated mip levels count toward this budget.
+The asset caches also enforce a 4096-path limit. Sidecars are bounded to 4096 bytes
+and material files to 8192 bytes.
 
 Scene saves write `SatScene 10` with quoted mesh and material paths. Versions 1–9
 still load. Versions 1–5 use default ambient settings. Legacy texture references are discarded

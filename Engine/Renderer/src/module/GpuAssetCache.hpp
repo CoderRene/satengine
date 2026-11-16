@@ -4,6 +4,7 @@
 #include "GpuMesh.hpp"
 #include "SceneDraw.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -18,6 +19,7 @@ struct GpuMaterial {
     ID3D11Buffer* constants = nullptr;
     ID3D11ShaderResourceView* views[4]{};
     ID3D11SamplerState* sampler = nullptr;
+    ID3D11ShaderResourceView* occlusion = nullptr;
 };
 
 class GpuAssetCache {
@@ -27,19 +29,27 @@ public:
     GpuAssetCache(const GpuAssetCache&) = delete;
     GpuAssetCache& operator=(const GpuAssetCache&) = delete;
     void setReader(AssetReader reader);
+    void releaseDecodedAssets();
     void invalidateMaterial(std::string_view path);
+    void invalidateAsset(std::string_view path);
     [[nodiscard]] const GpuMaterial* material(std::string_view path, bool fallback = true) const;
     [[nodiscard]] ID3D11ShaderResourceView* environment(std::string_view path) const;
     void prepare(ID3D11Device* device, const SceneDrawList& drawList);
     [[nodiscard]] bool reimport(ID3D11Device* device, std::string_view path, const AssetImportSettings* settings,
         const AssetImportWriter& writer, std::string& error);
+    [[nodiscard]] bool publishImport(ID3D11Device* device, PreparedAssetImport&& prepared,
+        const AssetImportWriter& writer, std::string& error);
     [[nodiscard]] std::string info(std::string_view path);
     [[nodiscard]] ID3D11SamplerState* sampler(std::string_view path) const;
+    // Borrowed until the next decoded asset access.
+    [[nodiscard]] const MeshData* decodedMesh(std::string_view path);
     [[nodiscard]] const GpuMesh* mesh(std::string_view path) const;
     [[nodiscard]] ID3D11ShaderResourceView* texture(std::string_view path) const;
-    [[nodiscard]] bool bounds(std::string_view path, Vec3& minimum, Vec3& maximum);
+    [[nodiscard]] bool bounds(std::string_view path, Vec3& minimum, Vec3& maximum, std::uint32_t meshNode = 0);
     [[nodiscard]] const std::vector<std::string>& errors() const;
 private:
+    [[nodiscard]] bool publishPrepared(ID3D11Device* device, PreparedAssetImport& prepared, bool exists,
+        const AssetImportWriter& writer, std::string& error);
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };

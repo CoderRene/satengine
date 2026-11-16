@@ -8,12 +8,13 @@
 namespace sat {
 
 class GameUi;
+struct GameViewStats;
 
 class UiPass final : public Rml::RenderInterface {
 public:
     [[nodiscard]] bool initialize(ID3D11Device* device);
     void draw(ID3D11DeviceContext* context, ShaderLibrary& shaders, ID3D11RenderTargetView* target,
-        int width, int height, GameUi& ui);
+        int width, int height, GameUi& ui, GameViewStats* stats);
 
     Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
         Rml::Span<const int> indices) override;
@@ -47,6 +48,9 @@ private:
     void bindGeometryProgram(ShaderProgram program, UINT vertexConstantSlot = 0);
     UiEffects m_effects;
     ShaderLibrary* m_shaders = nullptr;
+    GameViewStats* m_stats = nullptr;
+    ID3D11ShaderResourceView* m_statsTexture = nullptr;
+    bool m_passChanged = false;
     Microsoft::WRL::ComPtr<ID3D11Buffer> m_gradient;
     Rml::Rectanglei m_scissor = Rml::Rectanglei::MakeInvalid();
     bool m_scissorEnabled = false;

@@ -78,6 +78,9 @@ std::uint64_t viewRenderKey(const GameViewCamera& camera, const SceneDrawList& d
         mixViewPod(hash, static_cast<unsigned char>(mesh.primitive));
         mixViewText(hash, mesh.meshPath);
         mixViewText(hash, mesh.materialPath);
+        mixViewPod(hash, mesh.combineStatic);
+        mixViewPod(hash, mesh.meshNode);
+        if (mesh.combineStatic) { mixViewPod(hash, mesh.worldPosition); }
     }
     mixViewPod(hash, draw.selectedMesh);
     mixViewPod(hash, draw.frustumCount);
@@ -161,6 +164,9 @@ void EditorSession::renderViews() {
             instance.world = matrixFromTransform(entity.transform, sceneCamera.renderOrigin);
             instance.meshPath = entity.mesh.meshPath;
             instance.materialPath = entity.mesh.materialPath;
+            instance.worldPosition = entity.transform.position;
+            instance.combineStatic = entity.mesh.combineStatic;
+            instance.meshNode = entity.mesh.meshNode;
             switch (entity.mesh.primitive) {
             case MeshComponent::Primitive::Cube:
                 instance.primitive = MeshPrimitive::Cube;
@@ -226,6 +232,7 @@ void EditorSession::renderViews() {
         if (gameVisible) {
             state.renderer->renderGameView(gameCamera, state.gameRenderData.drawList());
             if (state.gameUi) { state.renderer->renderUi(*state.gameUi, UiTarget::GameView); }
+            state.viewport->drawGameStats();
         }
         return;
     }
@@ -251,6 +258,7 @@ void EditorSession::renderViews() {
             state.gameContentRevision = contentRevision;
             state.gameViewValid = true;
         }
+        state.viewport->drawGameStats();
     }
 }
 

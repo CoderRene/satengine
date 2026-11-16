@@ -7,6 +7,7 @@
 #include "SceneDraw.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -15,6 +16,7 @@
 namespace sat {
 
 struct OffscreenView;
+class MeshPass;
 
 // Renderer composition root. Window/device thread only.
 class RenderSession {
@@ -30,26 +32,30 @@ public:
     [[nodiscard]] bool valid() const;
 
     void invalidateMaterial(std::string_view path);
+    void invalidateAsset(std::string_view path);
     void setShaderReader(AssetReader reader);
     [[nodiscard]] bool initializeShaders();
     void setAssetReader(AssetReader reader);
+    void setProjectAssetRoot(const std::filesystem::path& root);
     void setProjectShaderSource(AssetReader reader);
     [[nodiscard]] bool reimportAsset(std::string_view path, const AssetImportSettings* settings,
         const AssetImportWriter& writer, std::string& error);
+    [[nodiscard]] bool publishAssetImport(PreparedAssetImport&& prepared, const AssetImportWriter& writer, std::string& error);
     [[nodiscard]] std::string assetInfo(std::string_view path);
     [[nodiscard]] const std::vector<std::string>& assetErrors() const;
-    [[nodiscard]] bool meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum);
+    [[nodiscard]] bool meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum, std::uint32_t meshNode = 0);
     void newFrame();
     void resizeGameView(int width, int height);
     void resizeSceneView(int width, int height);
     void renderGameView(const GameViewCamera& camera, const SceneDrawList& drawList);
     void renderSceneView(const GameViewCamera& camera, const SceneDrawList& drawList);
+    [[nodiscard]] GameViewStats gameViewStats() const;
     [[nodiscard]] std::uintptr_t gameColorTexture() const;
     [[nodiscard]] std::uintptr_t sceneColorTexture() const;
     [[nodiscard]] int gameViewWidth() const;
     [[nodiscard]] int gameViewHeight() const;
     [[nodiscard]] std::uint64_t contentRevision() const;
-    [[nodiscard]] std::uintptr_t materialThumbnail(std::string_view path);
+    [[nodiscard]] AssetThumbnail assetThumbnail(std::string_view path);
     [[nodiscard]] std::uintptr_t createTexture(const unsigned char* rgba, int width, int height);
     void destroyTexture(std::uintptr_t texture);
     [[nodiscard]] bool renderWindow(const GameViewCamera& camera, const SceneDrawList& drawList);
@@ -62,16 +68,23 @@ public:
 
 private:
     struct State;
+    [[nodiscard]] bool makeThumbnailSpace();
+    void uploadTextureThumbnail(std::string path, const TextureData& image);
+    void uploadReadyThumbnails();
+    void renderThumbnail(std::string path, MeshPass& pass);
     std::unique_ptr<State> m_state;
 
     void releaseOffscreenView(OffscreenView& view);
     void releaseDebugLines();
+    void beginGpuFrameTiming();
+    void endGpuFrameTiming();
     bool createBackBuffer();
     bool createDevice(void* hwnd, unsigned flags);
     bool ensureDebugLines();
     void resizeOffscreenView(OffscreenView& view, int width, int height, const char* label);
     void renderOffscreenView(
-        OffscreenView& view, const GameViewCamera& camera, const SceneDrawList& drawList);
+        OffscreenView& view, const GameViewCamera& camera, const SceneDrawList& drawList,
+        MeshPass* preparedPass = nullptr, GameViewStats* stats = nullptr);
     void noteContentChanged();
 };
 

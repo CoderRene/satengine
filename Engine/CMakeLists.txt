@@ -7,7 +7,10 @@ add_library(SatAssets STATIC
     Core/src/TextureData.cpp
 )
 target_include_directories(SatAssets PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Core/include")
-target_include_directories(SatAssets SYSTEM PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb")
+target_include_directories(SatAssets SYSTEM PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/cgltf"
+)
 target_compile_features(SatAssets PUBLIC cxx_std_20)
 
 # Scene extraction is portable and can be tested without a window or graphics device.
@@ -131,6 +134,22 @@ target_link_libraries(SatScripting PUBLIC SatScene SatInput SatPhysics SatAudio 
 target_compile_features(SatScripting PUBLIC cxx_std_20)
 
 if(BUILD_TESTING)
+    add_executable(AssetCacheTests Core/tests/AssetCacheTests.cpp)
+    target_link_libraries(AssetCacheTests PRIVATE SatAssets)
+    add_test(NAME AssetCache COMMAND AssetCacheTests)
+    set_tests_properties(AssetCache PROPERTIES TIMEOUT 20)
+
+    find_package(Threads REQUIRED)
+    add_executable(TextureThumbnailTests
+        Core/tests/TextureThumbnailTests.cpp
+        Renderer/src/module/AssetThumbnailLoader.cpp
+    )
+    target_include_directories(TextureThumbnailTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/src/module")
+    target_link_libraries(TextureThumbnailTests PRIVATE SatAssets Threads::Threads)
+    add_test(NAME TextureThumbnail COMMAND TextureThumbnailTests
+        "${PROJECT_SOURCE_DIR}/Examples/AssetLoading" "${CMAKE_CURRENT_BINARY_DIR}")
+    set_tests_properties(TextureThumbnail PROPERTIES TIMEOUT 15)
+
     add_executable(LuaScriptFieldsTests Core/tests/LuaScriptFieldsTests.cpp)
     target_link_libraries(LuaScriptFieldsTests PRIVATE SatScripting)
     add_test(NAME LuaScriptFields COMMAND LuaScriptFieldsTests)
@@ -229,8 +248,10 @@ add_library(SatRuntime STATIC
     Renderer/src/module/RenderTargets.cpp
     Renderer/src/module/RenderView.cpp
     Renderer/src/module/RenderGrid.cpp
-    Renderer/src/module/MaterialThumbnail.cpp
+    Renderer/src/module/AssetThumbnail.cpp
+    Renderer/src/module/AssetThumbnailLoader.cpp
     Renderer/src/module/MeshPass.cpp
+    Renderer/src/module/StaticMeshBatches.cpp
     Renderer/src/module/CascadedShadowMap.cpp
     Renderer/src/module/ShaderLibrary.cpp
     Renderer/src/module/GpuAssetCache.cpp
@@ -283,6 +304,7 @@ add_library(SatEditor STATIC
     Platform/src/GameBuilder.cpp
     UI/src/UiLayer.cpp
     UI/src/module/AssetImportPanel.cpp
+    UI/src/module/ContentDragDrop.hpp
     UI/src/module/BuildStatusWindow.cpp
     UI/src/module/CursorWrap.cpp
     UI/src/module/CursorWrap.hpp
@@ -336,3 +358,13 @@ add_dependencies(SatEditor SatEditorShaders)
 target_include_directories(SatEditor PRIVATE "${imgui_SOURCE_DIR}/backends")
 target_link_libraries(SatEditor PUBLIC SatRuntime)
 target_link_libraries(SatEditor PRIVATE d3d11 ole32 uuid shell32)
+
+if(BUILD_TESTING)
+    add_executable(HierarchyDropTests UI/tests/HierarchyDropTests.cpp)
+    target_include_directories(HierarchyDropTests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/UI/src/module"
+        "${imgui_SOURCE_DIR}"
+    )
+    target_link_libraries(HierarchyDropTests PRIVATE SatEditor)
+    add_test(NAME HierarchyDrop COMMAND HierarchyDropTests)
+endif()

@@ -1,12 +1,16 @@
 #pragma once
 
 #include "AssetData.hpp"
+#include "Math.hpp"
 
 #include "ShaderLibrary.hpp"
 
 #include <RmlUi/Core/Vertex.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstring>
 
 namespace sat {
 
@@ -30,12 +34,32 @@ struct alignas(16) MeshFrameCb {
     float orthoDepthScale;
 };
 
-struct alignas(16) MeshObjectCb {
-    float world[16] = {
-        1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,
-    };
-    float normal[16];
+struct alignas(16) MeshInstanceData {
+    float world[16];
+    float normal[12]; // Three columns. The first column's W stores tangent handedness.
 };
+
+inline void writeMeshInstance(MeshInstanceData& object, const Mat4& matrix) {
+    std::memcpy(object.world, matrix.m, sizeof(object.world));
+    // Orthogonal TRS columns give inverse-transpose via reciprocal squared lengths.
+    const auto& world = matrix.m;
+    const Vec3 x{world[0], world[1], world[2]};
+    const Vec3 y{world[4], world[5], world[6]};
+    const Vec3 z{world[8], world[9], world[10]};
+    const float xx = dot(x, x), yy = dot(y, y), zz = dot(z, z);
+    const float tolerance = 1e-5f * std::max({xx, yy, zz});
+    const bool uniform = std::abs(xx - yy) <= tolerance && std::abs(xx - zz) <= tolerance;
+    const float sign = dot(cross(x, y), z) < 0 ? -1.0f : 1.0f;
+    const float scales[] = {xx, yy, zz};
+    for (int column = 0; column < 3; ++column) {
+        const float scale = uniform || scales[column] <= 1e-20f ? 1.0f : 1.0f / scales[column];
+        for (int row = 0; row < 3; ++row) {
+            object.normal[column * 4 + row] = world[column * 4 + row] * scale;
+        }
+        object.normal[column * 4 + 3] = 0;
+    }
+    object.normal[3] = sign;
+}
 
 struct alignas(16) MaterialCb {
     float baseColor[4];
@@ -45,7 +69,7 @@ struct alignas(16) MaterialCb {
     float roughness;
     float hasEmissiveTexture;
     float unlit;
-    float alphaMode, alphaCutoff, specularStrength, padding;
+    float alphaMode, alphaCutoff, specularStrength, occlusionStrength;
 };
 
 inline constexpr int kMaxLights = 128;
@@ -111,7 +135,7 @@ static_assert(sizeof(MeshVertex) == 48 && offsetof(MeshVertex, nx) == 12 &&
 static_assert(sizeof(MeshFrameCb) == 432 && alignof(MeshFrameCb) == 16 &&
     offsetof(MeshFrameCb, cascadeViewProj) == 128 && offsetof(MeshFrameCb, cascadeSplits) == 384 &&
     offsetof(MeshFrameCb, cascadeTexel) == 400 && offsetof(MeshFrameCb, cascadeCount) == 416);
-static_assert(sizeof(MeshObjectCb) == 128 && alignof(MeshObjectCb) == 16);
+static_assert(sizeof(MeshInstanceData) == 112 && offsetof(MeshInstanceData, normal) == 64);
 static_assert(sizeof(MaterialCb) == 64 && alignof(MaterialCb) == 16);
 static_assert(sizeof(PackedLight) == 64 && alignof(PackedLight) == 16);
 static_assert(sizeof(LightsCb) == 8192 && alignof(LightsCb) == 16);
@@ -126,6 +150,13 @@ inline constexpr D3D11_INPUT_ELEMENT_DESC kMeshLayout[] = {
         {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"INSTANCE", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+        {"INSTANCE", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 16, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+        {"INSTANCE", 2, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 32, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+        {"INSTANCE", 3, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 48, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+        {"INSTANCE", 4, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 64, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+        {"INSTANCE", 5, DXGI_FORMAT_R32G32B32_FLOAT, 1, 80, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+        {"INSTANCE", 6, DXGI_FORMAT_R32G32B32_FLOAT, 1, 96, D3D11_INPUT_PER_INSTANCE_DATA, 1},
     };
 
 inline constexpr D3D11_INPUT_ELEMENT_DESC kSelectionOutlineLayout[] = {

@@ -14,6 +14,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace sat {
@@ -21,13 +22,48 @@ namespace sat {
 void EditorSession::initialize() {
     auto& state = *m_state;
     Renderer& renderer = *state.renderer;
-    renderer.setAssetReader(fileAssetReader(state.project.root()));
+    renderer.setProjectAssetRoot(state.project.root());
     renderer.setProjectShaderSource(fileAssetReader(state.project.root()));
     state.play.setAssetReader(fileAssetReader(state.project.root()));
-    state.hierarchy = std::make_unique<HierarchyPanel>(state.scene);
+    state.hierarchy = std::make_unique<HierarchyPanel>(state.scene, &state.project);
     state.inspector = std::make_unique<InspectorPanel>(state.scene, state.project);
     state.assetImports = std::make_unique<AssetImportPanel>(state.project, renderer);
     state.content = std::make_unique<ContentPanel>(state.project, renderer);
+    state.content->setMoveHandler([this](std::string_view oldPath, std::string_view newPath) {
+        auto& scene = m_state->scene;
+        bool changed = false;
+        const auto replace = [&changed](std::string& path, std::string_view from, std::string_view to) {
+            if (path == from) {
+                path = to;
+                changed = true;
+            }
+        };
+        replace(scene.lightingSettings.environmentPath, oldPath, newPath);
+        for (std::size_t i = 0; i < scene.entityCount(); ++i) {
+            auto& entity = *scene.entity(i);
+            replace(entity.mesh.meshPath, oldPath, newPath);
+            replace(entity.mesh.materialPath, oldPath, newPath);
+            replace(entity.audioSource.clipPath, oldPath, newPath);
+            if (entity.gameUi) {
+                replace(entity.gameUi->documentPath, oldPath, newPath);
+                replace(entity.gameUi->fontPath, oldPath, newPath);
+            }
+            if (oldPath.starts_with("Scripts/") && newPath.starts_with("Scripts/")) {
+                for (auto& script : entity.scripts) {
+                    replace(script.path, oldPath.substr(8), newPath.substr(8));
+                }
+            }
+        }
+        if (changed) { scene.markEdited(); }
+        auto error = m_state->assetImports->updateMaterialReferences(oldPath, newPath);
+        if (isShaderAssetPath(oldPath)) {
+            m_state->renderer->setProjectShaderSource(fileAssetReader(m_state->project.root()));
+        }
+        if (m_state->assetImports->active() && m_state->assetImports->path() != oldPath) {
+            m_state->assetImports->select(m_state->assetImports->path());
+        }
+        return error;
+    });
     state.content->setSelectionHandler([this](std::string path) {
         if (m_state->assetImports->active() && m_state->assetImports->path() == path) { return; }
         m_state->assetImports->request([this, path = std::move(path)] {

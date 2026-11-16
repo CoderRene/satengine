@@ -16,7 +16,7 @@ matter for a real game.
 | Status                   | Focus                             | What it unlocks                                        |
 | ------------------------ | --------------------------------- | ------------------------------------------------------ |
 | Done                     | **Working baseline**              | Edit, play, script, physics, audio, UI, package a game |
-| **Next**                 | **Better art import**             | Drop in modern mesh files (glTF) instead of OBJ-only   |
+| **In progress**          | **Better art import**             | Drop in modern mesh files (glTF) instead of OBJ-only   |
 | Soon                     | **Animation**                     | Moving parts, crew, hatches, turrets, simple cutscenes |
 | Soon                     | **Editor comfort**                | Undo, snapping, easier multi-object layout             |
 | Later                    | **Richer space physics**          | Docking joints, hinged parts, better station collision |
@@ -53,14 +53,14 @@ More detail: [README](../README.md) and the guides in this `docs/` folder.
 
 ---
 
-## Next — better art import
+## In progress — better art import
 
 **Goal:** bring ships and stations in from normal DCC tools without converting
 everything to OBJ first.
 
-Today the engine loads OBJ meshes well, but lighting and materials already expect
-richer content. Supporting **glTF** (meshes, materials, textures) is the main
-next step, plus a small example that packs and runs as a standalone build.
+Static **glTF** meshes load from `.gltf` and `.glb` files. The editor can extract
+a material and its embedded textures. `Examples/AssetLoading` includes a ship
+with an external buffer and texture for standalone packaging.
 
 Animation (skinned meshes) waits until this import path exists. FBX is only on
 the table if glTF turns out not to be enough.

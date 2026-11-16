@@ -2,6 +2,7 @@
 
 #include "AssetData.hpp"
 #include "GameUi.hpp"
+#include "Renderer.hpp"
 #include "ShaderLayout.hpp"
 
 #include <RmlUi/Core/Core.h>
@@ -28,6 +29,7 @@ struct Geometry {
     ComPtr<ID3D11Buffer> vertices;
     ComPtr<ID3D11Buffer> indices;
     UINT indexCount = 0;
+    UINT vertexCount = 0;
 };
 
 // The engine uses the immediate context, one viewport, and no shader class
@@ -212,7 +214,7 @@ bool UiPass::initialize(ID3D11Device* device) {
 }
 
 void UiPass::draw(ID3D11DeviceContext* context, ShaderLibrary& shaders, ID3D11RenderTargetView* target,
-    int width, int height, GameUi& ui) {
+    int width, int height, GameUi& ui, GameViewStats* stats) {
     const auto shader = shaders.program(ShaderId::Ui);
     if (!m_device || !context || !shader.vertex || !target || width < 1 || height < 1) { return; }
     const ScopedUiState restore(*context);
@@ -220,12 +222,15 @@ void UiPass::draw(ID3D11DeviceContext* context, ShaderLibrary& shaders, ID3D11Re
         UiEffects& effects;
         ID3D11DeviceContext*& context;
         ShaderLibrary*& shaders;
-        ~ResetContext() { effects.end(); context = nullptr; shaders = nullptr; }
-    } reset{m_effects, m_context, m_shaders};
+        GameViewStats*& stats;
+        ~ResetContext() { effects.end(); context = nullptr; shaders = nullptr; stats = nullptr; }
+    } reset{m_effects, m_context, m_shaders, m_stats};
     m_context = context;
     m_shaders = &shaders;
+    m_stats = stats;
+    m_statsTexture = nullptr;
     m_scissorEnabled = false;
-    m_effects.begin(*context, *target, shaders.program(ShaderId::UiEffects), width, height);
+    m_effects.begin(*context, *target, shaders.program(ShaderId::UiEffects), width, height, stats);
     m_transform = Rml::Matrix4f::Identity();
     m_scaleX = 2.0f / static_cast<float>(width);
     m_scaleY = -2.0f / static_cast<float>(height);
@@ -246,6 +251,7 @@ void UiPass::bindGeometryProgram(ShaderProgram program, UINT vertexConstantSlot)
     m_context->VSSetShader(program.vertex, nullptr, 0);
     m_context->VSSetConstantBuffers(vertexConstantSlot, 1, m_constants.GetAddressOf());
     m_context->PSSetShader(program.pixel, nullptr, 0);
+    m_passChanged = true;
 }
 
 Rml::CompiledGeometryHandle UiPass::CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
@@ -265,6 +271,7 @@ Rml::CompiledGeometryHandle UiPass::CompileGeometry(Rml::Span<const Rml::Vertex>
         return 0;
     }
     geometry->indexCount = static_cast<UINT>(indices.size());
+    geometry->vertexCount = static_cast<UINT>(vertices.size());
     return reinterpret_cast<Rml::CompiledGeometryHandle>(geometry.release());
 }
 
@@ -289,6 +296,14 @@ void UiPass::RenderGeometry(Rml::CompiledGeometryHandle handle, Rml::Vector2f tr
     m_context->IASetVertexBuffers(0, 1, geometry.vertices.GetAddressOf(), &stride, &offset);
     m_context->IASetIndexBuffer(geometry.indices.Get(), DXGI_FORMAT_R32_UINT, 0);
     m_context->DrawIndexed(geometry.indexCount, 0, 0);
+    if (m_stats) {
+        ++m_stats->drawCalls;
+        m_stats->setPassCalls += m_passChanged || view != m_statsTexture;
+        m_stats->triangles += geometry.indexCount / 3;
+        m_stats->vertices += geometry.vertexCount;
+        m_passChanged = false;
+        m_statsTexture = view;
+    }
 }
 
 void UiPass::ReleaseGeometry(Rml::CompiledGeometryHandle geometry) {
@@ -325,6 +340,7 @@ void UiPass::ReleaseTexture(Rml::TextureHandle texture) {
 }
 
 void UiPass::EnableScissorRegion(bool enable) {
+    m_passChanged |= m_scissorEnabled != enable;
     m_scissorEnabled = enable;
     m_effects.setScissor(enable, m_scissor);
     if (m_context) { m_context->RSSetState(enable ? m_scissorRasterizer.Get() : m_rasterizer.Get()); }
@@ -343,16 +359,24 @@ void UiPass::SetTransform(const Rml::Matrix4f* transform) {
     m_transform = transform ? *transform : Rml::Matrix4f::Identity();
 }
 
-void UiPass::EnableClipMask(bool enable) { m_effects.enableClipMask(enable); }
+void UiPass::EnableClipMask(bool enable) {
+    m_effects.enableClipMask(enable);
+    m_passChanged = true;
+}
 
 void UiPass::RenderToClipMask(Rml::ClipMaskOperation operation, Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation) {
     if (!m_context) { return; }
     m_context->RSSetState(m_rasterizer.Get());
+    m_passChanged = true;
     m_effects.renderClipMask(*this, operation, geometry, translation);
+    m_passChanged = true;
     m_context->RSSetState(m_scissorEnabled ? m_scissorRasterizer.Get() : m_rasterizer.Get());
 }
 
-Rml::LayerHandle UiPass::PushLayer() { return m_effects.pushLayer(); }
+Rml::LayerHandle UiPass::PushLayer() {
+    m_passChanged = true;
+    return m_effects.pushLayer();
+}
 
 void UiPass::CompositeLayers(Rml::LayerHandle source, Rml::LayerHandle destination, Rml::BlendMode blend,
     Rml::Span<const Rml::CompiledFilterHandle> filters) {
@@ -364,7 +388,10 @@ void UiPass::CompositeLayers(Rml::LayerHandle source, Rml::LayerHandle destinati
     }
 }
 
-void UiPass::PopLayer() { m_effects.popLayer(); }
+void UiPass::PopLayer() {
+    m_effects.popLayer();
+    m_passChanged = true;
+}
 Rml::TextureHandle UiPass::SaveLayerAsTexture() { return m_effects.saveTexture(); }
 Rml::CompiledFilterHandle UiPass::SaveLayerAsMaskImage() { return m_effects.saveMask(); }
 

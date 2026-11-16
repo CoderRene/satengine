@@ -2,6 +2,7 @@
 
 #include "Scene.hpp"
 
+#include <cstdint>
 #include <string_view>
 
 namespace sat {
@@ -37,6 +38,10 @@ struct MeshInstance {
     // Borrowed from scene components, valid through the render submission.
     std::string_view meshPath;
     std::string_view materialPath;
+    // Absolute position keeps static batches valid when the render origin moves.
+    DVec3 worldPosition{};
+    bool combineStatic = false;
+    std::uint32_t meshNode = 0;
 };
 
 struct CameraFrustumInstance {

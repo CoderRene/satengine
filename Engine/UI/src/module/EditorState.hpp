@@ -34,6 +34,7 @@ struct EditorSession::State {
     State(Scene& scene, Project& project, const Input& input);
 
     GLFWwindow* window = nullptr;
+    Window* platformWindow = nullptr;
     Renderer* renderer = nullptr;
     bool glfwReady = false;
     bool dx11Ready = false;

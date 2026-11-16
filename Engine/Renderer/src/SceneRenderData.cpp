@@ -59,6 +59,9 @@ void SceneRenderData::update(const Scene& scene, int width, int height) {
         instance.world = matrixFromTransform(entity.transform, m_camera.renderOrigin);
         instance.meshPath = entity.mesh.meshPath;
         instance.materialPath = entity.mesh.materialPath;
+        instance.worldPosition = entity.transform.position;
+        instance.combineStatic = entity.mesh.combineStatic;
+        instance.meshNode = entity.mesh.meshNode;
         switch (entity.mesh.primitive) {
         case MeshComponent::Primitive::Cube:
             instance.primitive = MeshPrimitive::Cube;

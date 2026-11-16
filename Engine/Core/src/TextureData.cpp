@@ -4,19 +4,63 @@
 #include <stb_image.h>
 
 #include <climits>
+#include <istream>
 #include <memory>
+#include <streambuf>
 #include <utility>
 
 namespace sat {
+namespace {
+bool supportedImage(std::string_view bytes) {
+    return bytes.starts_with("\x89PNG\r\n\x1a\n") || bytes.starts_with("\xff\xd8");
+}
+
+bool validDimensions(int width, int height) {
+    return width >= 1 && height >= 1 && width <= 4096 && height <= 4096;
+}
+}
+
+bool readTextureDimensions(std::istream& stream, int& width, int& height, std::string& error) {
+    error.clear();
+    auto* buffer = stream.rdbuf();
+    char signature[8];
+    const auto count = buffer->sgetn(signature, sizeof(signature));
+    if (!supportedImage(std::string_view(signature, static_cast<std::size_t>(count)))) {
+        error = "Only PNG and JPEG images are supported";
+        return false;
+    }
+    if (!stream.seekg(0)) { error = "Cannot seek image header"; return false; }
+
+    constexpr stbi_io_callbacks callbacks{
+        [](void* user, char* data, int size) {
+            return static_cast<int>(static_cast<std::streambuf*>(user)->sgetn(data, size));
+        },
+        [](void* user, int offset) {
+            static_cast<std::streambuf*>(user)->pubseekoff(offset, std::ios::cur, std::ios::in);
+        },
+        [](void* user) -> int {
+            return static_cast<std::streambuf*>(user)->sgetc() == std::char_traits<char>::eof();
+        }
+    };
+    int sourceWidth = 0;
+    int sourceHeight = 0;
+    if (!stbi_info_from_callbacks(&callbacks, buffer, &sourceWidth, &sourceHeight, nullptr) ||
+        !validDimensions(sourceWidth, sourceHeight)) {
+        error = "Invalid image or dimensions outside 1..4096";
+        return false;
+    }
+    width = sourceWidth;
+    height = sourceHeight;
+    return true;
+}
+
 bool decodeTexture(std::string_view bytes, TextureData& texture, std::string& error) {
     error.clear();
     if (bytes.empty() || bytes.size() > kMaxAssetBytes || bytes.size() > INT_MAX) {
         error = "Invalid image size (1 byte to 64 MiB required)";
         return false;
     }
-    if (!bytes.starts_with("\x89PNG\r\n\x1a\n") &&
-        !(bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xff &&
-          static_cast<unsigned char>(bytes[1]) == 0xd8)) {
+    if (!supportedImage(bytes)) {
         error = "Only PNG and JPEG images are supported";
         return false;
     }
@@ -26,7 +70,7 @@ bool decodeTexture(std::string_view bytes, TextureData& texture, std::string& er
     int channels = 0;
     const int size = static_cast<int>(bytes.size());
     if (!stbi_info_from_memory(encoded, size, &width, &height, &channels) ||
-        width < 1 || height < 1 || width > 4096 || height > 4096) {
+        !validDimensions(width, height)) {
         error = "Invalid image or dimensions outside 1..4096";
         return false;
     }
@@ -37,7 +81,7 @@ bool decodeTexture(std::string_view bytes, TextureData& texture, std::string& er
         error = reason != nullptr ? reason : "Image decode failed";
         return false;
     }
-    if (width < 1 || height < 1 || width > 4096 || height > 4096) {
+    if (!validDimensions(width, height)) {
         error = "Decoded image dimensions exceed 4096";
         return false;
     }

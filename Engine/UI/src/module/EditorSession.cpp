@@ -5,6 +5,7 @@
 #include "Input.hpp"
 #include "LuaToolingSync.hpp"
 #include "Renderer.hpp"
+#include "Window.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -39,8 +40,9 @@ EditorSession::EditorSession(Scene& scene, Project& project, const Input& input)
 
 EditorSession::~EditorSession() = default;
 
-void EditorSession::bind(void* nativeWindow, Renderer& renderer) {
-    m_state->window = static_cast<GLFWwindow*>(nativeWindow);
+void EditorSession::bind(Window& window, Renderer& renderer) {
+    m_state->window = static_cast<GLFWwindow*>(window.nativeHandle());
+    m_state->platformWindow = &window;
     m_state->renderer = &renderer;
 }
 
@@ -235,7 +237,7 @@ void EditorSession::openProjectNow(const std::filesystem::path& folder) {
         state.project = std::move(opened);
         state.scene = std::move(loaded);
         recordLoadedScene();
-        state.renderer->setAssetReader(fileAssetReader(state.project.root()));
+        state.renderer->setProjectAssetRoot(state.project.root());
         state.renderer->setProjectShaderSource(fileAssetReader(state.project.root()));
         state.play.setAssetReader(fileAssetReader(state.project.root()));
         if (state.hierarchy) { state.hierarchy->setSelectedIndex(-1); }
@@ -247,7 +249,7 @@ void EditorSession::openProjectNow(const std::filesystem::path& folder) {
 
 void EditorSession::reloadAssets() {
     m_state->assetImports->request([this] {
-        m_state->renderer->setAssetReader(fileAssetReader(m_state->project.root()));
+        m_state->renderer->setProjectAssetRoot(m_state->project.root());
         m_state->renderer->setProjectShaderSource(fileAssetReader(m_state->project.root()));
         if (m_state->assetImports->active()) { m_state->assetImports->select(m_state->assetImports->path()); }
     });

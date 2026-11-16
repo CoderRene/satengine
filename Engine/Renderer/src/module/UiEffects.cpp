@@ -1,5 +1,6 @@
 #include "UiEffects.hpp"
 
+#include "Renderer.hpp"
 #include "ShaderLayout.hpp"
 #include "UiPass.hpp"
 
@@ -62,6 +63,7 @@ struct UiEffects::State {
     ID3D11DeviceContext* context = nullptr;
     ID3D11RenderTargetView* base = nullptr;
     ShaderProgram shader{};
+    GameViewStats* stats = nullptr;
     ComPtr<ID3D11Buffer> constants;
     ComPtr<ID3D11RasterizerState> rasterizer;
     ComPtr<ID3D11DepthStencilView> stencil;
@@ -126,6 +128,12 @@ struct UiEffects::State {
         ID3D11ShaderResourceView* inputs[]{input, secondary};
         context->PSSetShaderResources(0, 2, inputs);
         context->Draw(3, 0);
+        if (stats) {
+            ++stats->drawCalls;
+            ++stats->setPassCalls;
+            ++stats->triangles;
+            stats->vertices += 3;
+        }
         ID3D11ShaderResourceView* empty[2]{};
         context->PSSetShaderResources(0, 2, empty);
     }
@@ -191,7 +199,7 @@ bool UiEffects::initialize(ID3D11Device& device) {
 }
 
 void UiEffects::begin(ID3D11DeviceContext& context, ID3D11RenderTargetView& target,
-    ShaderProgram program, int width, int height) {
+    ShaderProgram program, int width, int height, GameViewStats* stats) {
     auto& s = *m_state;
     if (s.width != width || s.height != height) {
         s.width = width;
@@ -203,6 +211,7 @@ void UiEffects::begin(ID3D11DeviceContext& context, ID3D11RenderTargetView& targ
     s.context = &context;
     s.base = &target;
     s.shader = program;
+    s.stats = stats;
     s.depth = 0;
     s.scissor = s.clipping = false;
     s.reference = 0;
@@ -211,6 +220,7 @@ void UiEffects::begin(ID3D11DeviceContext& context, ID3D11RenderTargetView& targ
 void UiEffects::end() {
     m_state->context = nullptr;
     m_state->base = nullptr;
+    m_state->stats = nullptr;
 }
 
 void UiEffects::setScissor(bool enabled, Rml::Rectanglei region) {

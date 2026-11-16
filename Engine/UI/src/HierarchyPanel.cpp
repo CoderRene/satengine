@@ -1,6 +1,11 @@
 #include "HierarchyPanel.hpp"
 
+#include "AssetData.hpp"
+#include "AssetImportSettings.hpp"
+#include "AssetLibrary.hpp"
+#include "Project.hpp"
 #include "Scene.hpp"
+#include "module/ContentDragDrop.hpp"
 #include "module/HierarchyDragDrop.hpp"
 
 #include <imgui.h>
@@ -11,6 +16,9 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -39,6 +47,7 @@ struct HierarchyPanel::Impl {
     };
 
     Scene* m_scene = nullptr;
+    const Project* m_project = nullptr;
     bool m_selectionActivated = false;
     std::uint64_t m_destructionRevision = 0;
     EntityId m_primary = kInvalidEntityId;
@@ -55,10 +64,12 @@ struct HierarchyPanel::Impl {
     std::vector<Links> m_links;
     std::vector<std::size_t> m_branchEnds;
 
-    enum class Action { None, Remove, AddChild, Group, Reparent };
+    enum class Action { None, Remove, AddChild, Group, Reparent, AddMesh };
     Action m_action = Action::None;
     EntityId m_target = kInvalidEntityId;
     EntityId m_parent = kInvalidEntityId;
+    std::string m_droppedMeshPath;
+    std::string m_meshDropError;
 
     void selectOnly(EntityId id) {
         m_clicked = kInvalidEntityId;
@@ -205,14 +216,48 @@ struct HierarchyPanel::Impl {
         m_parent = parent;
     }
 
+    void removeSelection() {
+        const auto& entities = m_scene->entities();
+        // The background menu can add roots after drawTree builds the links.
+        m_links.resize(entities.size());
+        std::vector<bool> scheduled(entities.size());
+        std::vector<EntityId> removalOrder;
+        removalOrder.reserve(m_selected.size());
+        for (const EntityId id : m_selected) {
+            const auto root = m_scene->entityIndex(id);
+            if (!root || scheduled[*root]) {
+                continue;
+            }
+
+            const auto subtreeStart = removalOrder.size();
+            scheduled[*root] = true;
+            removalOrder.push_back(id);
+            for (std::size_t i = subtreeStart; i < removalOrder.size(); ++i) {
+                const auto index = *m_scene->entityIndex(removalOrder[i]);
+                for (std::size_t child = m_links[index].firstChild; child != kNoIndex;
+                     child = m_links[child].nextSibling) {
+                    if (!scheduled[child]) {
+                        scheduled[child] = true;
+                        removalOrder.push_back(entities[child].id());
+                    }
+                }
+            }
+            // Earlier subtrees already precede this one. Reverse the new entries
+            // so every child is removed before its parent and removal never has to orphan it.
+            std::reverse(removalOrder.begin() + subtreeStart, removalOrder.end());
+        }
+
+        for (const EntityId id : removalOrder) {
+            (void)m_scene->destroyEntity(id);
+        }
+    }
+
     void applyQueuedAction() {
         // Apply structural edits after traversal, since removal can swap indices
         // and creation can invalidate references into the scene.
         switch (m_action) {
         case Action::Remove:
-            for (const EntityId id : m_selected) {
-                (void)m_scene->destroyEntity(id);
-            }
+            removeSelection();
             cancelRename();
             selectOnly(kInvalidEntityId);
             break;
@@ -257,10 +302,69 @@ struct HierarchyPanel::Impl {
                 m_reveal = m_target;
             }
             break;
+        case Action::AddMesh:
+            addDroppedMesh();
+            break;
         case Action::None:
             break;
         }
         m_action = Action::None;
+    }
+
+    void addDroppedMesh() {
+        m_meshDropError.clear();
+        const std::string_view path = m_droppedMeshPath;
+        const auto nameStart = path.rfind('/') + 1;
+        const auto nameEnd = path.rfind('.');
+        std::string name(path.substr(nameStart, nameEnd - nameStart));
+        if (m_scene->entityCount() >= kMaxSceneEntities) {
+            m_meshDropError = "The scene has reached its entity limit.";
+            return;
+        }
+
+        AssetImportSettings settings;
+        PreparedAssetImport imported;
+        if (m_project && isGltfAssetPath(path)) {
+            const auto reader = fileAssetReader(m_project->root());
+            std::string metadata;
+            const auto result = reader(m_droppedMeshPath + ".satimport", metadata, m_meshDropError);
+            if (result == AssetReadResult::Error ||
+                (result == AssetReadResult::Found && !parseImportSettings(metadata, settings, m_meshDropError))) {
+                return;
+            }
+            if (settings.preserveNodeHierarchy) {
+                settings.mergeGeometry = false;
+                if (!decodeAssetImport(reader, path, &settings, imported, m_meshDropError)) { return; }
+                if (imported.mesh.nodes.size() >= kMaxSceneEntities - m_scene->entityCount()) {
+                    m_meshDropError = "This glTF hierarchy would exceed the scene entity limit.";
+                    return;
+                }
+            }
+        }
+
+        auto& root = m_scene->createEntity(std::move(name));
+        const EntityId rootId = root.id();
+        (void)m_scene->setParent(rootId, m_parent);
+        if (!settings.preserveNodeHierarchy) {
+            root.hasMesh = true;
+            root.mesh.meshPath = path;
+        } else {
+            std::unordered_map<std::uint32_t, EntityId> ids;
+            ids.reserve(imported.mesh.nodes.size());
+            for (const auto& source : imported.mesh.nodes) {
+                auto& child = m_scene->createEntity(source.name);
+                child.transform.position = {source.origin[0], source.origin[1], source.origin[2]};
+                if (source.sectionCount != 0) {
+                    child.hasMesh = true;
+                    child.mesh.meshPath = path;
+                    child.mesh.meshNode = source.id;
+                }
+                (void)m_scene->setParent(child.id(), source.parent == 0 ? rootId : ids.at(source.parent));
+                ids.emplace(source.id, child.id());
+            }
+        }
+        m_reveal = rootId;
+        selectOnly(rootId);
     }
 
     void acceptDrop(EntityId parent) {
@@ -272,6 +376,11 @@ struct HierarchyPanel::Impl {
             if (ImGui::AcceptDragDropPayload(kEntityPayload)) {
                 queue(Action::Reparent, child, parent);
             }
+        }
+        const auto path = draggedContentPath(ImGui::GetDragDropPayload());
+        if (isMeshAssetPath(path) && ImGui::AcceptDragDropPayload(kContentFilePayload)) {
+            m_droppedMeshPath = path;
+            queue(Action::AddMesh, kInvalidEntityId, parent);
         }
         ImGui::EndDragDropTarget();
     }
@@ -397,9 +506,10 @@ struct HierarchyPanel::Impl {
     }
 };
 
-HierarchyPanel::HierarchyPanel(Scene& scene)
+HierarchyPanel::HierarchyPanel(Scene& scene, const Project* project)
     : m_impl(std::make_unique<Impl>()) {
     m_impl->m_scene = &scene;
+    m_impl->m_project = project;
 }
 
 HierarchyPanel::~HierarchyPanel() = default;
@@ -440,6 +550,9 @@ void HierarchyPanel::onImGuiRender(bool readOnly) {
     if (readOnly || !impl.m_scene->entityById(impl.m_renaming)) {
         impl.cancelRename();
     }
+    if (!impl.m_meshDropError.empty()) {
+        ImGui::TextWrapped("%s", impl.m_meshDropError.c_str());
+    }
     const bool wasRenaming = impl.m_renaming != kInvalidEntityId;
     impl.m_rowSelection = kInvalidEntityId;
     impl.drawTree(readOnly);
@@ -458,6 +571,10 @@ void HierarchyPanel::onImGuiRender(bool readOnly) {
 
     if (draggedEntity() != kInvalidEntityId) {
         ImGui::Selectable("Drop here to move to root");
+        impl.acceptDrop(kInvalidEntityId);
+    } else if (isMeshAssetPath(draggedContentPath(ImGui::GetDragDropPayload()))) {
+        const float height = std::max(ImGui::GetFrameHeight(), ImGui::GetContentRegionAvail().y);
+        ImGui::Selectable("Drop here to add mesh at root", false, ImGuiSelectableFlags_None, ImVec2(0, height));
         impl.acceptDrop(kInvalidEntityId);
     }
 

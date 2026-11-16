@@ -10,13 +10,14 @@ cbuffer MaterialParameters : register(b2)
     float alphaMode;
     float alphaCutoff;
     float specularStrength;
-    float alphaPadding;
+    float occlusionStrength;
 };
 
 Texture2D<float4> baseMap : register(t0);
 Texture2D<float4> metallicRoughnessMap : register(t1);
 Texture2D<float4> normalMap : register(t2);
 Texture2D<float4> emissiveMap : register(t3);
+Texture2D<float4> occlusionMap : register(t6);
 SamplerState materialSampler : register(s0);
 
 public float materialSpecularStrength()
@@ -47,6 +48,7 @@ public struct Surface
     public float3 emission;
     public float metal;
     public float rough;
+    public float occlusion;
 };
 
 public Surface sampleMaterial(float2 uv, float3 albedo, float3 n, float4 tangent)
@@ -61,5 +63,7 @@ public Surface sampleMaterial(float2 uv, float3 albedo, float3 n, float4 tangent
     float3 mapped = normalMap.Sample(materialSampler, uv).xyz * 2.0 - 1.0;
     surface.normal = normalize(t * mapped.x * normalScale + b * mapped.y * normalScale + n * mapped.z);
     surface.emission = emissive * lerp(float3(1, 1, 1), emissiveMap.Sample(materialSampler, uv).rgb, hasEmissiveTexture);
+    surface.occlusion = occlusionStrength > 0.0 ?
+        lerp(1.0, occlusionMap.Sample(materialSampler, uv).r, occlusionStrength) : 1.0;
     return surface;
 }

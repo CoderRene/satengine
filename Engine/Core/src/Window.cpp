@@ -9,14 +9,23 @@
 
 #include <stb_image.h>
 
+#include <cstddef>
+#include <exception>
+#include <filesystem>
 #include <iostream>
 #include <memory>
+#include <span>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace sat {
 
 struct Window::Impl {
     GLFWwindow* window = nullptr;
     Input input;
+    std::vector<FileDrop> fileDrops;
 };
 
 #if defined(_WIN32)
@@ -110,6 +119,26 @@ Window::Window(int width, int height, const char* title)
     glfwGetCursorPos(m_impl->window, &x, &y);
     m_impl->input.setCursorPosition(x, y);
 
+    glfwSetDropCallback(m_impl->window, [](GLFWwindow* window, int count, const char** paths) {
+        auto& impl = *static_cast<Impl*>(glfwGetWindowUserPointer(window));
+        try {
+            // GLFW dispatches the drop's client coordinates to the cursor callback first.
+            FileDrop drop{impl.input.cursorPosition(), {}};
+            drop.paths.reserve(static_cast<std::size_t>(count));
+            for (int i = 0; i < count; ++i) {
+                if (paths[i] != nullptr) {
+                    const std::string_view path(paths[i]);
+                    drop.paths.emplace_back(std::u8string(path.begin(), path.end()));
+                }
+            }
+            if (!drop.paths.empty()) {
+                impl.fileDrops.push_back(std::move(drop));
+            }
+        } catch (const std::exception& error) {
+            std::cerr << "Cannot receive dropped files: " << error.what() << '\n';
+        }
+    });
+
     glfwShowWindow(m_impl->window);
     glfwFocusWindow(m_impl->window);
 }
@@ -126,11 +155,14 @@ bool Window::shouldClose() const {
 }
 
 void Window::pollEvents() {
+    m_impl->fileDrops.clear();
     m_impl->input.beginFrame();
     glfwPollEvents();
 }
 
 const Input& Window::input() const { return m_impl->input; }
+
+std::span<const FileDrop> Window::fileDrops() const { return m_impl->fileDrops; }
 
 void* Window::nativeHandle() const {
     return m_impl->window;

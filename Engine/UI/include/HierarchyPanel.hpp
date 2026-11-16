@@ -4,11 +4,12 @@
 
 namespace sat {
 
+class Project;
 class Scene;
 
 class HierarchyPanel {
 public:
-    explicit HierarchyPanel(Scene& scene);
+    explicit HierarchyPanel(Scene& scene, const Project* project = nullptr);
     ~HierarchyPanel();
 
     HierarchyPanel(const HierarchyPanel&) = delete;

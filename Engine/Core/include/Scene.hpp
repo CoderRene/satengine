@@ -15,6 +15,8 @@
 
 namespace sat {
 
+inline constexpr std::size_t kMaxSceneEntities = 100000;
+
 struct Transform {
     DVec3 position{};
     Vec3 rotation{};
@@ -79,6 +81,8 @@ struct MeshComponent {
     // Both paths are relative to the project root, under Assets/.
     std::string meshPath;
     std::string materialPath;
+    bool combineStatic = false;
+    std::uint32_t meshNode = 0; // Zero selects the complete asset.
 };
 
 // Paths are relative to the project's Scripts folder. Disabled components do not run.

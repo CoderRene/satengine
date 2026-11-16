@@ -16,8 +16,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -263,6 +265,10 @@ struct ViewportPanel::Impl {
     bool showColliders = false;
     bool showLiveScene = true;
     bool liveSceneVisible = false;
+    bool m_showGameStats = false;
+    ImDrawList* m_gameStatsDrawList = nullptr;
+    ImVec2 m_gameStatsClipMin{};
+    ImVec2 m_gameStatsClipMax{};
     TransformTool tool = TransformTool::Move;
     int gameViewWidth = 0;
     int gameViewHeight = 0;
@@ -587,7 +593,7 @@ struct ViewportPanel::Impl {
                                             Vec3 minimum{-0.5f, -0.5f, -0.5f};
                                             Vec3 maximum{0.5f, 0.5f, 0.5f};
                                             if (entity.mesh.meshPath.empty() ||
-                                                renderer->meshBounds(entity.mesh.meshPath, minimum, maximum)) {
+                                                renderer->meshBounds(entity.mesh.meshPath, minimum, maximum, entity.mesh.meshNode)) {
                                                 hit = intersectRayBounds(mouseRay, world, t, minimum, maximum);
                                             }
                                         } else if (entity.hasCamera) {
@@ -633,6 +639,7 @@ struct ViewportPanel::Impl {
     }
 
     void drawGamePanel(const Scene& gameScene, bool focusGameView, GameUi* ui, const Input* input) {
+        m_gameStatsDrawList = nullptr;
         ImVec2 imageOrigin{};
         bool hovered = false;
         bool focused = false;
@@ -643,6 +650,7 @@ struct ViewportPanel::Impl {
                 "Game",
                 nullptr,
                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+            ImGui::Checkbox("Stats", &m_showGameStats);
             const ImVec2 gameSize = ImGui::GetContentRegionAvail();
             const int gameWidth = static_cast<int>(gameSize.x);
             const int gameHeight = static_cast<int>(gameSize.y);
@@ -658,6 +666,14 @@ struct ViewportPanel::Impl {
                         ImTextureRef((ImTextureID)gameTexture),
                         ImVec2(static_cast<float>(gameWidth), static_cast<float>(gameHeight)));
                     imageOrigin = ImGui::GetItemRectMin();
+                    if (m_showGameStats) {
+                        m_gameStatsDrawList = ImGui::GetWindowDrawList();
+                        const ImVec2 imageEnd = ImGui::GetItemRectMax();
+                        const ImVec2 clipMin = m_gameStatsDrawList->GetClipRectMin();
+                        const ImVec2 clipMax = m_gameStatsDrawList->GetClipRectMax();
+                        m_gameStatsClipMin = {std::max(imageOrigin.x, clipMin.x), std::max(imageOrigin.y, clipMin.y)};
+                        m_gameStatsClipMax = {std::min(imageEnd.x, clipMax.x), std::min(imageEnd.y, clipMax.y)};
+                    }
                     if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
                         int windowX = 0;
                         int windowY = 0;
@@ -715,6 +731,37 @@ void ViewportPanel::onImGuiRender(int& selectedIndex, const Scene& gameScene, bo
     m_impl->liveSceneVisible = false;
     m_impl->drawScenePanel(selectedIndex, gameScene, sceneReadOnly);
     m_impl->drawGamePanel(gameScene, focusGameView, ui, input);
+}
+
+void ViewportPanel::drawGameStats() {
+    auto& panel = *m_impl;
+    auto* draw = std::exchange(panel.m_gameStatsDrawList, nullptr);
+    if (!draw || panel.m_gameStatsClipMin.x >= panel.m_gameStatsClipMax.x ||
+        panel.m_gameStatsClipMin.y >= panel.m_gameStatsClipMax.y) {
+        return;
+    }
+
+    const auto stats = panel.renderer->gameViewStats();
+    char gpuTime[32] = "N/A";
+    if (stats.gpuFrameTimeMs) {
+        std::snprintf(gpuTime, sizeof(gpuTime), "%.2f ms", *stats.gpuFrameTimeMs);
+    }
+    char text[256];
+    std::snprintf(text, sizeof(text),
+        "Global Frametime  %.2f ms\nGPU Frametime  %s\n"
+        "Draw Calls  %" PRIu64 "\nSetPass Calls  %" PRIu64 "\nTriangles  %" PRIu64 "\nVertices  %" PRIu64,
+        static_cast<double>(ImGui::GetIO().DeltaTime) * 1000.0, gpuTime,
+        stats.drawCalls, stats.setPassCalls, stats.triangles, stats.vertices);
+    const ImVec2 size = ImGui::CalcTextSize(text);
+    constexpr float kPadding = 8.0f;
+    const ImVec2 origin{
+        std::max(panel.m_gameStatsClipMin.x + kPadding, panel.m_gameStatsClipMax.x - size.x - 3.0f * kPadding),
+        panel.m_gameStatsClipMin.y + kPadding};
+    const ImVec2 end{origin.x + size.x + 2.0f * kPadding, origin.y + size.y + 2.0f * kPadding};
+    draw->PushClipRect(panel.m_gameStatsClipMin, panel.m_gameStatsClipMax);
+    draw->AddRectFilled(origin, end, IM_COL32(16, 18, 22, 225), 4.0f);
+    draw->AddText(ImVec2(origin.x + kPadding, origin.y + kPadding), IM_COL32_WHITE, text);
+    draw->PopClipRect();
 }
 
 TransformGizmoInstance ViewportPanel::gizmo(const Entity& entity) const { return m_impl->gizmo(entity); }

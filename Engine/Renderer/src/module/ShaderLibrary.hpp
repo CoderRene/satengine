@@ -31,9 +31,11 @@ class ShaderLibrary {
 public:
     using ProjectCompiler = std::function<bool(std::string_view, std::string_view, std::string&)>;
     void setReader(AssetReader reader);
+    void invalidateProjectShader(std::string_view path);
     void setProjectReader(AssetReader reader);
     void setProjectCompiler(ProjectCompiler compiler);
     void pollProjectShaders(ID3D11Device* device, bool sharedChanged);
+    [[nodiscard]] ID3D11PixelShader* cachedProjectPixel(std::string_view path) const;
     [[nodiscard]] ID3D11PixelShader* projectPixel(ID3D11Device* device, std::string_view path);
     void release();
     [[nodiscard]] std::uint64_t revision() const { return m_revision; }

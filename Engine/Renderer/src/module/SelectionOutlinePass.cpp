@@ -186,6 +186,12 @@ void SelectionOutlinePass::draw(
         return;
     }
 
+    const auto* node = geometry.node(selected.meshNode);
+    if (selected.meshNode != 0 && !node) { return; }
+    const UINT firstIndex = node ? node->firstIndex : 0;
+    const UINT indexCount = node ? node->indexCount : geometry.indexCount;
+    const Mat4 world = meshWorld(selected.world, node);
+
     D3D11_MAPPED_SUBRESOURCE mapped{};
     if (FAILED(context->Map(m_impl->frameCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
         return;
@@ -213,7 +219,7 @@ void SelectionOutlinePass::draw(
         return;
     }
     auto* object = static_cast<OutlineObjectCb*>(mapped.pData);
-    std::memcpy(object->world, selected.world.m, sizeof(object->world));
+    std::memcpy(object->world, world.m, sizeof(object->world));
     object->color[0] = 0.0f;
     object->color[1] = 0.0f;
     object->color[2] = 0.0f;
@@ -223,10 +229,10 @@ void SelectionOutlinePass::draw(
     context->RSSetState(m_impl->backCull);
     context->OMSetDepthStencilState(m_impl->stencilWrite, 1);
     context->OMSetBlendState(m_impl->noColorWrite, blendFactor, 0xffffffff);
-    context->DrawIndexed(geometry.indexCount, 0, 0);
+    context->DrawIndexed(indexCount, firstIndex, 0);
 
     // Expanded inverted hull where stencil is not marked.
-    const Mat4 outlineWorld = selected.world * scaleUniform(kOutlineScale);
+    const Mat4 outlineWorld = meshWorld(selected.world * scaleUniform(kOutlineScale), node);
     if (FAILED(context->Map(m_impl->objectCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
         context->OMSetBlendState(nullptr, blendFactor, 0xffffffff);
         return;
@@ -239,7 +245,7 @@ void SelectionOutlinePass::draw(
     context->RSSetState(m_impl->frontCull);
     context->OMSetDepthStencilState(m_impl->stencilOutline, 1);
     context->OMSetBlendState(nullptr, blendFactor, 0xffffffff);
-    context->DrawIndexed(geometry.indexCount, 0, 0);
+    context->DrawIndexed(indexCount, firstIndex, 0);
     context->OMSetDepthStencilState(nullptr, 0);
 }
 

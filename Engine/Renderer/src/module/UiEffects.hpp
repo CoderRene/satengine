@@ -8,6 +8,7 @@
 
 namespace sat {
 
+struct GameViewStats;
 class UiPass;
 
 class UiEffects {
@@ -16,7 +17,7 @@ public:
     ~UiEffects();
     [[nodiscard]] bool initialize(ID3D11Device& device);
     void begin(ID3D11DeviceContext& context, ID3D11RenderTargetView& target,
-        ShaderProgram program, int width, int height);
+        ShaderProgram program, int width, int height, GameViewStats* stats);
     void end();
     void setScissor(bool enabled, Rml::Rectanglei region);
     void enableClipMask(bool enabled);

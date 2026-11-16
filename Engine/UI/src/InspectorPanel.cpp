@@ -354,8 +354,18 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
     };
 
     if (entity->hasMesh && componentHeader("Mesh", {entity->mesh.meshPath, entity->mesh.materialPath})) {
-        changed |= m_impl->assetPicker("Geometry", "Built-in Cube", entity->mesh.meshPath, m_impl->meshes);
-        changed |= m_impl->assetPicker("Material", "Default", entity->mesh.materialPath, m_impl->materials);
+        if (m_impl->assetPicker("Geometry", "Built-in Cube", entity->mesh.meshPath, m_impl->meshes)) {
+            entity->mesh.meshNode = 0;
+            changed = true;
+        }
+        const char* defaultMaterial = isGltfAssetPath(entity->mesh.meshPath) ? "glTF Materials" : "Default";
+        changed |= m_impl->assetPicker("Material", defaultMaterial, entity->mesh.materialPath, m_impl->materials);
+        if (!entity->mesh.meshPath.empty() && entity->mesh.meshNode == 0) {
+            changed |= ImGui::Checkbox("Combine Static at Runtime", &entity->mesh.combineStatic);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Combine nearby imported geometry that uses the same material.");
+            }
+        }
 
         if (entity->hasMesh && ImGui::Button("Remove Mesh")) {
             entity->hasMesh = false;

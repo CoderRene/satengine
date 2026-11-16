@@ -42,6 +42,8 @@ void applyEntityEdits(const Entity& before, const Entity& after, Entity& live, L
     applyEdit(before.mesh.meshPath, after.mesh.meshPath, live.mesh.meshPath);
     applyEdit(before.mesh.materialPath, after.mesh.materialPath, live.mesh.materialPath);
     applyEdit(before.mesh.primitive, after.mesh.primitive, live.mesh.primitive);
+    applyEdit(before.mesh.combineStatic, after.mesh.combineStatic, live.mesh.combineStatic);
+    applyEdit(before.mesh.meshNode, after.mesh.meshNode, live.mesh.meshNode);
     applyEdit(before.hasLight, after.hasLight, live.hasLight);
     if (before.hasLight != after.hasLight) { live.light = after.light; }
     applyEdit(before.light.type, after.light.type, live.light.type);

@@ -1,7 +1,6 @@
 #include "RenderState.hpp"
 
 #include "AssetData.hpp"
-
 #include "GameUi.hpp"
 
 #include <GLFW/glfw3.h>
@@ -63,6 +62,7 @@ RenderSession::RenderSession(void* glfwWindow)
 }
 
 RenderSession::~RenderSession() {
+    m_state->thumbnailLoader.stop();
     if (m_state->context != nullptr) {
         // Drop context refs to RTVs/SRVs/shaders/buffers before Release.
         m_state->context->ClearState();
@@ -95,6 +95,14 @@ void RenderSession::invalidateMaterial(std::string_view path) {
     noteContentChanged();
 }
 
+void RenderSession::invalidateAsset(std::string_view path) {
+    if (!isValidAssetPath(path)) { return; }
+    if (isShaderAssetPath(path)) { m_state->shaders.invalidateProjectShader(path); }
+    m_state->meshPass.invalidateAsset(path);
+    m_state->thumbnailsDirty = true;
+    noteContentChanged();
+}
+
 void RenderSession::setShaderReader(AssetReader reader) {
     m_state->shaders.setReader(std::move(reader));
 }
@@ -110,7 +118,7 @@ void RenderSession::renderUi(GameUi& ui, UiTarget target) {
     m_state->uiPass.draw(m_state->context, m_state->shaders,
         window ? m_state->backBuffer : m_state->game.rtv,
         window ? m_state->swapWidth : m_state->game.width,
-        window ? m_state->swapHeight : m_state->game.height, ui);
+        window ? m_state->swapHeight : m_state->game.height, ui, window ? nullptr : &m_state->gameStats);
 }
 
 bool RenderSession::initializeShaders() {
@@ -118,9 +126,35 @@ bool RenderSession::initializeShaders() {
 }
 
 void RenderSession::setAssetReader(AssetReader reader) {
+    // The worker uses the free-threaded D3D11 device for resource creation.
+    // Drawing and all immediate-context operations stay on the render thread.
+    Microsoft::WRL::ComPtr<ID3D11Device> device(m_state->device);
+    m_state->thumbnailLoader.setReader(reader, [device](const AssetReader& source, std::string_view path) {
+        auto pass = std::make_shared<MeshPass>();
+        if (!pass->ensure(device.Get())) { return std::shared_ptr<MeshPass>{}; }
+        pass->setAssetReader(source);
+        MeshInstance mesh;
+        if (isMeshAssetPath(path)) {
+            mesh.meshPath = path;
+        } else {
+            mesh.materialPath = path;
+        }
+        SceneDrawList draw;
+        draw.meshes = &mesh;
+        draw.meshCount = 1;
+        pass->prepareAssets(device.Get(), draw);
+        // Drop file readers and decoded CPU cache entries before handing over
+        // the pass. Only prepared GPU resources are needed for the draw.
+        pass->releaseDecodedAssets();
+        return pass;
+    });
     m_state->thumbnailsDirty = true;
     m_state->meshPass.setAssetReader(std::move(reader));
     noteContentChanged();
+}
+
+void RenderSession::setProjectAssetRoot(const std::filesystem::path& root) {
+    setAssetReader(fileAssetReader(root));
 }
 
 void RenderSession::setProjectShaderSource(AssetReader reader) {
@@ -142,10 +176,17 @@ bool RenderSession::reimportAsset(std::string_view path, const AssetImportSettin
     const AssetImportWriter& writer, std::string& error) {
     const bool imported = m_state->meshPass.reimportAsset(m_state->device, path, settings, writer, error);
     if (imported) {
-        if (isTextureAssetPath(path)) { m_state->thumbnailsDirty = true; }
+        m_state->thumbnailsDirty = true;
         noteContentChanged();
     }
     return imported;
+}
+
+bool RenderSession::publishAssetImport(PreparedAssetImport&& prepared, const AssetImportWriter& writer, std::string& error) {
+    if (!m_state->meshPass.publishAssetImport(m_state->device, std::move(prepared), writer, error)) { return false; }
+    m_state->thumbnailsDirty = true;
+    noteContentChanged();
+    return true;
 }
 
 std::string RenderSession::assetInfo(std::string_view path) {
@@ -156,8 +197,8 @@ const std::vector<std::string>& RenderSession::assetErrors() const {
     return m_state->meshPass.assetErrors();
 }
 
-bool RenderSession::meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum) {
-    return m_state->meshPass.meshBounds(path, minimum, maximum);
+bool RenderSession::meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum, std::uint32_t meshNode) {
+    return m_state->meshPass.meshBounds(path, minimum, maximum, meshNode);
 }
 
 void RenderSession::noteContentChanged() {
@@ -177,15 +218,17 @@ void RenderSession::newFrame() {
         noteContentChanged();
     }
     if (m_state->thumbnailsDirty || m_state->thumbnailShaderRevision != m_state->shaders.revision()) {
+        m_state->thumbnailLoader.clear();
         m_state->thumbnails.clear();
         m_state->thumbnailsDirty = false;
         m_state->thumbnailShaderRevision = m_state->shaders.revision();
     }
     ++m_state->thumbnailFrame;
-    m_state->thumbnailBudget = 4;
     if (!valid()) {
         return;
     }
+    beginGpuFrameTiming();
+    uploadReadyThumbnails();
 
     int width = 0;
     int height = 0;
@@ -228,11 +271,18 @@ void RenderSession::resizeSceneView(int width, int height) {
 }
 
 void RenderSession::renderGameView(const GameViewCamera& camera, const SceneDrawList& drawList) {
-    renderOffscreenView(m_state->game, camera, drawList);
+    m_state->gameStats = {};
+    renderOffscreenView(m_state->game, camera, drawList, nullptr, &m_state->gameStats);
 }
 
 void RenderSession::renderSceneView(const GameViewCamera& camera, const SceneDrawList& drawList) {
     renderOffscreenView(m_state->scene, camera, drawList);
+}
+
+GameViewStats RenderSession::gameViewStats() const {
+    auto stats = m_state->gameStats;
+    stats.gpuFrameTimeMs = m_state->gpuFrameTimeMs;
+    return stats;
 }
 
 std::uintptr_t RenderSession::gameColorTexture() const {

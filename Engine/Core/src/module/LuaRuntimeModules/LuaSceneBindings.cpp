@@ -298,7 +298,11 @@ int setAsset(lua_State* state) {
         return luaL_argerror(state, 2, "expected a supported project-relative Assets/ path");
     }
     auto& destination = entity.mesh.*member;
-    if (destination != path) { destination.assign(path); sceneFor(state).markEdited(); }
+    if (destination != path) {
+        destination.assign(path);
+        if constexpr (member == &MeshComponent::meshPath) { entity.mesh.meshNode = 0; }
+        sceneFor(state).markEdited();
+    }
     return 0;
 }
 

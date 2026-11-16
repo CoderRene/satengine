@@ -28,6 +28,8 @@ public:
     void onImGuiRender(int& selectedIndex, const Scene& gameScene, bool sceneReadOnly, bool focusGameView,
         GameUi* ui = nullptr, const Input* input = nullptr);
 
+    // Append the overlay after the game target is rendered, before ImGui::Render().
+    void drawGameStats();
     void resetInteraction();
     [[nodiscard]] bool showColliders() const;
     [[nodiscard]] bool showingLiveScene() const;

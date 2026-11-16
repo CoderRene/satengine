@@ -1,6 +1,10 @@
 #include "EditorState.hpp"
 
+#include "Window.hpp"
+
 #include <imgui.h>
+
+#include <span>
 
 namespace sat {
 
@@ -41,7 +45,9 @@ void EditorSession::drawPanels() {
 
     ImGui::BeginDisabled(sceneReadOnly);
     if (state.assetImports->active()) {
+        ImGui::BeginDisabled(state.content && state.content->deletingFiles());
         state.assetImports->draw(playing);
+        ImGui::EndDisabled();
     } else if (state.inspector) {
         const int selected = state.hierarchy ? state.hierarchy->selectedIndex() : -1;
         const Entity* authored = selected >= 0 ? state.scene.entity(static_cast<std::size_t>(selected)) : nullptr;
@@ -51,7 +57,8 @@ void EditorSession::drawPanels() {
     ImGui::EndDisabled();
 
     if (state.content) {
-        state.content->onImGuiRender(playing);
+        const auto drops = sceneReadOnly ? std::span<const FileDrop>{} : state.platformWindow->fileDrops();
+        state.content->onImGuiRender(playing, drops, !sceneReadOnly && !state.assetImports->dirty());
     }
 
     if (state.luaLog) {

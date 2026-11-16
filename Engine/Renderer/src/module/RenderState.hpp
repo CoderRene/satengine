@@ -2,10 +2,13 @@
 
 #include "RenderSession.hpp"
 
+#include "AssetData.hpp"
+
 #include "module/CameraFrustumPass.hpp"
 #include "module/MeshPass.hpp"
 #include "module/SelectionOutlinePass.hpp"
 #include "module/ShaderLibrary.hpp"
+#include "module/AssetThumbnailLoader.hpp"
 #include "module/TransformGizmoPass.hpp"
 #include "module/UiPass.hpp"
 #ifdef SAT_SHADER_HOT_RELOAD
@@ -15,7 +18,10 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -71,16 +77,29 @@ struct RenderSession::State {
     int swapWidth = 0;
     int swapHeight = 0;
     OffscreenView game;
+    GameViewStats gameStats;
+    struct GpuFrameQueries {
+        Microsoft::WRL::ComPtr<ID3D11Query> disjoint;
+        Microsoft::WRL::ComPtr<ID3D11Query> start;
+        Microsoft::WRL::ComPtr<ID3D11Query> end;
+        bool pending = false;
+    };
+    std::array<GpuFrameQueries, 4> gpuFrameQueries;
+    std::size_t gpuFrameQueryIndex = 0;
+    bool gpuFrameQueryActive = false;
+    bool gpuFrameQueriesUnavailable = false;
+    std::optional<double> gpuFrameTimeMs;
     OffscreenView scene;
     OffscreenView thumbnail;
+    AssetThumbnailLoader thumbnailLoader;
     struct Thumbnail {
         Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
         std::uint64_t lastUsed = 0;
+        float aspectRatio = 1.0f;
     };
     std::unordered_map<std::string, Thumbnail> thumbnails;
     std::uint64_t thumbnailFrame = 0;
     std::uint64_t thumbnailShaderRevision = 0;
-    unsigned thumbnailBudget = 0;
     bool thumbnailsDirty = false;
 
     ID3D11Buffer* lineVb = nullptr;

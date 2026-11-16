@@ -23,6 +23,10 @@ void Renderer::invalidateMaterial(std::string_view path) {
     m_impl->invalidateMaterial(path);
 }
 
+void Renderer::invalidateAsset(std::string_view path) {
+    m_impl->invalidateAsset(path);
+}
+
 void Renderer::setShaderReader(AssetReader reader) {
     m_impl->setShaderReader(std::move(reader));
 }
@@ -35,6 +39,10 @@ void Renderer::setAssetReader(AssetReader reader) {
     m_impl->setAssetReader(std::move(reader));
 }
 
+void Renderer::setProjectAssetRoot(const std::filesystem::path& root) {
+    m_impl->setProjectAssetRoot(root);
+}
+
 void Renderer::setProjectShaderSource(AssetReader reader) {
     m_impl->setProjectShaderSource(std::move(reader));
 }
@@ -42,6 +50,10 @@ void Renderer::setProjectShaderSource(AssetReader reader) {
 bool Renderer::reimportAsset(std::string_view path, const AssetImportSettings* settings,
     const AssetImportWriter& writer, std::string& error) {
     return m_impl->reimportAsset(path, settings, writer, error);
+}
+
+bool Renderer::publishAssetImport(PreparedAssetImport&& prepared, const AssetImportWriter& writer, std::string& error) {
+    return m_impl->publishAssetImport(std::move(prepared), writer, error);
 }
 
 std::string Renderer::assetInfo(std::string_view path) {
@@ -52,8 +64,8 @@ const std::vector<std::string>& Renderer::assetErrors() const {
     return m_impl->assetErrors();
 }
 
-bool Renderer::meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum) {
-    return m_impl->meshBounds(path, minimum, maximum);
+bool Renderer::meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum, std::uint32_t meshNode) {
+    return m_impl->meshBounds(path, minimum, maximum, meshNode);
 }
 
 void Renderer::newFrame() {
@@ -76,6 +88,10 @@ void Renderer::renderSceneView(const GameViewCamera& camera, const SceneDrawList
     m_impl->renderSceneView(camera, drawList);
 }
 
+GameViewStats Renderer::gameViewStats() const {
+    return m_impl->gameViewStats();
+}
+
 std::uintptr_t Renderer::gameColorTexture() const {
     return m_impl->gameColorTexture();
 }
@@ -96,8 +112,8 @@ std::uint64_t Renderer::contentRevision() const {
     return m_impl->contentRevision();
 }
 
-std::uintptr_t Renderer::materialThumbnail(std::string_view path) {
-    return m_impl->materialThumbnail(path);
+AssetThumbnail Renderer::assetThumbnail(std::string_view path) {
+    return m_impl->assetThumbnail(path);
 }
 
 std::uintptr_t Renderer::createTexture(const unsigned char* rgba, int width, int height) {

@@ -19,7 +19,7 @@ struct UiLayer::Impl : EditorSession {
 
 UiLayer::UiLayer(Window& window, Renderer& renderer, Scene& scene, Project& project)
     : m_impl(std::make_unique<Impl>(scene, project, window.input())) {
-    m_impl->bind(window.nativeHandle(), renderer);
+    m_impl->bind(window, renderer);
     if (!m_impl->windowBound()) {
         std::cerr << "Failed to start UI: window has no native handle\n";
         return;

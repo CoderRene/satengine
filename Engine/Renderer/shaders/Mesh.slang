@@ -22,11 +22,6 @@ cbuffer Frame : register(b0)
     float cascadeNear;
     float orthoDepthScale;
 };
-cbuffer Object : register(b1)
-{
-    float4x4 world;
-    float4x4 normalMatrix;
-};
 cbuffer Lights : register(b3)
 {
     PackedLight lights[128];
@@ -105,18 +100,29 @@ struct VertexInput
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
     float4 tangent : TANGENT;
+    float4 worldX : INSTANCE0;
+    float4 worldY : INSTANCE1;
+    float4 worldZ : INSTANCE2;
+    float4 worldTranslation : INSTANCE3;
+    float4 normalX : INSTANCE4;
+    float3 normalY : INSTANCE5;
+    float3 normalZ : INSTANCE6;
 };
 
 [shader("vertex")]
 MeshFragment vsMain(VertexInput input)
 {
     MeshFragment output;
-    float4 position = mul(world, float4(input.position, 1.0));
+    float4 position = input.worldX * input.position.x + input.worldY * input.position.y +
+        input.worldZ * input.position.z + input.worldTranslation;
     output.position = mul(viewProj, position);
     output.worldPosition = position.xyz;
     output.clipW = output.position.w;
-    output.normal = mul((float3x3)normalMatrix, input.normal);
-    output.tangent = float4(mul((float3x3)world, input.tangent.xyz), input.tangent.w * normalMatrix[3][3]);
+    output.normal = input.normalX.xyz * input.normal.x + input.normalY * input.normal.y +
+        input.normalZ * input.normal.z;
+    float3 tangent = input.worldX.xyz * input.tangent.x + input.worldY.xyz * input.tangent.y +
+        input.worldZ.xyz * input.tangent.z;
+    output.tangent = float4(tangent, input.tangent.w * input.normalX.w);
     output.uv = input.uv;
     return output;
 }
@@ -130,7 +136,7 @@ float4 psMain(MeshFragment input) : SV_Target
     Surface surface = sampleMaterial(input.uv, base.rgb, normalize(input.normal), input.tangent);
     float3 toEye = eye - input.worldPosition;
     float3 v = toEye * rsqrt(max(dot(toEye, toEye), 1e-8));
-    float3 color = ambient.rgb * surface.albedo * (1.0 - surface.metal) + surface.emission;
+    float3 color = ambient.rgb * surface.albedo * (1.0 - surface.metal) * surface.occlusion + surface.emission;
     float specularStrength = materialSpecularStrength();
     if (environmentIntensity > 0.0)
     {
@@ -142,7 +148,7 @@ float4 psMain(MeshFragment input) : SV_Target
         float3 specular = environmentMap.SampleLevel(environmentSampler, environmentUv(reflection), surface.rough * maxLod).rgb;
         float3 f0 = lerp(float3(0.04, 0.04, 0.04), surface.albedo, surface.metal);
         float3 fresnel = specularStrength * (f0 + (1.0 - f0) * pow(1.0 - saturate(dot(surface.normal, v)), 5.0));
-        color += environmentIntensity * (diffuse * surface.albedo * (1.0 - surface.metal) * (1.0 - fresnel) +
+        color += environmentIntensity * surface.occlusion * (diffuse * surface.albedo * (1.0 - surface.metal) * (1.0 - fresnel) +
             specular * fresnel);
     }
     PunctualLight evaluator;

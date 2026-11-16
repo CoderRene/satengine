@@ -195,10 +195,80 @@ bool RenderSession::renderWindow(const GameViewCamera& camera, const SceneDrawLi
     return true;
 }
 
+void RenderSession::beginGpuFrameTiming() {
+    auto& state = *m_state;
+    if (state.gpuFrameQueriesUnavailable || state.gpuFrameQueryActive) {
+        return;
+    }
+
+    auto& queries = state.gpuFrameQueries[state.gpuFrameQueryIndex];
+    if (!queries.disjoint) {
+        const D3D11_QUERY_DESC disjointDesc{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+        const D3D11_QUERY_DESC timestampDesc{D3D11_QUERY_TIMESTAMP, 0};
+        if (FAILED(state.device->CreateQuery(&disjointDesc, queries.disjoint.GetAddressOf())) ||
+            FAILED(state.device->CreateQuery(&timestampDesc, queries.start.GetAddressOf())) ||
+            FAILED(state.device->CreateQuery(&timestampDesc, queries.end.GetAddressOf()))) {
+            std::cerr << "Failed to create Direct3D frame timing queries\n";
+            state.gpuFrameQueriesUnavailable = true;
+            state.gpuFrameTimeMs.reset();
+            return;
+        }
+    }
+
+    auto* context = state.context;
+    if (queries.pending) {
+        // If the GPU is still using this slot, skip sampling this frame.
+        constexpr UINT kReadFlags = D3D11_ASYNC_GETDATA_DONOTFLUSH;
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT timing{};
+        UINT64 start = 0;
+        UINT64 end = 0;
+        HRESULT result = context->GetData(queries.disjoint.Get(), &timing, sizeof(timing), kReadFlags);
+        if (result == S_OK && !timing.Disjoint && timing.Frequency != 0) {
+            result = context->GetData(queries.start.Get(), &start, sizeof(start), kReadFlags);
+            if (result == S_OK) {
+                result = context->GetData(queries.end.Get(), &end, sizeof(end), kReadFlags);
+            }
+            if (result == S_OK && end >= start) {
+                state.gpuFrameTimeMs = static_cast<double>(end - start) * 1000.0
+                    / static_cast<double>(timing.Frequency);
+            }
+        }
+        if (result == S_FALSE) {
+            return;
+        }
+        if (FAILED(result)) {
+            std::cerr << "Failed to read Direct3D frame timing queries\n";
+            state.gpuFrameQueriesUnavailable = true;
+            state.gpuFrameTimeMs.reset();
+            return;
+        }
+        queries.pending = false;
+    }
+
+    context->Begin(queries.disjoint.Get());
+    context->End(queries.start.Get());
+    state.gpuFrameQueryActive = true;
+}
+
+void RenderSession::endGpuFrameTiming() {
+    auto& state = *m_state;
+    if (!state.gpuFrameQueryActive) {
+        return;
+    }
+
+    auto& queries = state.gpuFrameQueries[state.gpuFrameQueryIndex];
+    state.context->End(queries.end.Get());
+    state.context->End(queries.disjoint.Get());
+    queries.pending = true;
+    state.gpuFrameQueryIndex = (state.gpuFrameQueryIndex + 1) % state.gpuFrameQueries.size();
+    state.gpuFrameQueryActive = false;
+}
+
 void RenderSession::present() {
     if (m_state->swapChain == nullptr) {
         return;
     }
+    endGpuFrameTiming();
     // Sync interval 0: presentation is not capped by the monitor refresh rate.
     const UINT flags = m_state->allowTearing ? DXGI_PRESENT_ALLOW_TEARING : 0u;
     m_state->swapChain->Present(0, flags);

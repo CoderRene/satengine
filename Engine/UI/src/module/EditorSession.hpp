@@ -12,9 +12,10 @@ namespace sat {
 class Input;
 class Project;
 class Renderer;
+class Window;
 
 // Editor composition root. Window thread only.
-// The borrowed scene, project, and input must outlive this object.
+// The borrowed scene, project, input, window, and renderer must outlive this object.
 class EditorSession {
 public:
     EditorSession(Scene& scene, Project& project, const Input& input);
@@ -24,7 +25,7 @@ public:
     EditorSession(EditorSession&&) = delete;
     EditorSession& operator=(EditorSession&&) = delete;
 
-    void bind(void* nativeWindow, Renderer& renderer);
+    void bind(Window& window, Renderer& renderer);
     [[nodiscard]] bool windowBound() const;
     void initialize();
 

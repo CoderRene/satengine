@@ -1,8 +1,11 @@
 #include "AssetImporter.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -12,6 +15,54 @@ bool valid(const AssetImportSettings& settings, std::string& error) {
     AssetImportSettings checked;
     return parseImportSettings(serializeImportSettings(settings), checked, error);
 }
+// Group opaque and alpha-masked ranges in first-use order. Blended ranges
+// retain separate bounds and draw order for back-to-front sorting.
+void mergeMeshSections(MeshData& mesh) {
+    if (mesh.sections.size() < 2) { return; }
+
+    constexpr auto kUnassigned = std::numeric_limits<std::size_t>::max();
+    std::vector<std::size_t> materialGroups(mesh.materials.size() + 1, kUnassigned);
+    std::vector<std::size_t> sectionGroups;
+    sectionGroups.reserve(mesh.sections.size());
+    std::vector<MeshSection> merged;
+    merged.reserve(mesh.sections.size());
+    for (const auto& section : mesh.sections) {
+        const bool hasMaterial = section.materialIndex < mesh.materials.size();
+        const bool blended = hasMaterial && mesh.materials[section.materialIndex].alphaMode == AlphaMode::Blend;
+        auto& materialGroup = materialGroups[hasMaterial ? section.materialIndex : mesh.materials.size()];
+        if (blended || materialGroup == kUnassigned) {
+            if (!blended) { materialGroup = merged.size(); }
+            sectionGroups.push_back(merged.size());
+            merged.push_back({0, section.indexCount, section.materialIndex});
+        } else {
+            sectionGroups.push_back(materialGroup);
+            merged[materialGroup].indexCount += section.indexCount;
+        }
+    }
+    if (merged.size() == mesh.sections.size()) { return; }
+
+    std::vector<std::uint32_t> nextIndex;
+    nextIndex.reserve(merged.size());
+    std::uint32_t firstIndex = 0;
+    for (auto& section : merged) {
+        section.firstIndex = firstIndex;
+        nextIndex.push_back(firstIndex);
+        firstIndex += section.indexCount;
+    }
+
+    std::vector<std::uint32_t> indices(mesh.indices.size());
+    for (std::size_t i = 0; i < mesh.sections.size(); ++i) {
+        const auto& section = mesh.sections[i];
+        auto& next = nextIndex[sectionGroups[i]];
+        std::copy_n(mesh.indices.data() + section.firstIndex, section.indexCount, indices.data() + next);
+        next += section.indexCount;
+    }
+    mesh.nodeIndices = std::move(mesh.indices);
+    mesh.nodeSections = std::move(mesh.sections);
+    mesh.indices = std::move(indices);
+    mesh.sections = std::move(merged);
+}
+
 std::vector<unsigned char> resize(const std::vector<unsigned char>& source, int width, int height, int outWidth, int outHeight) {
     std::vector<unsigned char> output(static_cast<std::size_t>(outWidth) * outHeight * 4);
     // Area-weighted box filter includes the full image, including odd edges.
@@ -41,10 +92,12 @@ std::vector<unsigned char> resize(const std::vector<unsigned char>& source, int 
     return output;
 }
 }
-bool importMesh(std::string_view bytes, const AssetImportSettings& settings, MeshData& mesh, std::string& error) {
+bool importMesh(std::string_view path, std::string_view bytes, const AssetReader& reader,
+    const AssetImportSettings& settings, MeshData& mesh, std::string& error) {
     if (!valid(settings, error)) { return false; }
     MeshData candidate;
-    if (!decodeObj(bytes, candidate, error, settings.rightHanded, settings.flipV)) { return false; }
+    if (isGltfAssetPath(path) ? !decodeGltf(bytes, path, reader, candidate, error) :
+        !decodeObj(bytes, candidate, error, settings.rightHanded, settings.flipV)) { return false; }
     for (auto& vertex : candidate.vertices) {
         vertex.x *= settings.scale;
         vertex.y *= settings.scale;
@@ -53,6 +106,21 @@ bool importMesh(std::string_view bytes, const AssetImportSettings& settings, Mes
             error = "Mesh import transform produced nonfinite coordinates";
             return false;
         }
+    }
+    for (auto& node : candidate.nodes) {
+        for (int axis = 0; axis < 3; ++axis) {
+            node.origin[axis] *= settings.scale;
+            node.minimum[axis] *= settings.scale;
+            node.maximum[axis] *= settings.scale;
+            if (!std::isfinite(node.origin[axis])) {
+                error = "Mesh import produced a nonfinite node origin";
+                return false;
+            }
+        }
+    }
+    if (settings.mergeGeometry) {
+        mergeMeshSections(candidate);
+        candidate.mergeNodeDraws = !candidate.nodes.empty();
     }
     const auto& first = candidate.vertices.front();
     candidate.minimum[0] = candidate.maximum[0] = first.x;
@@ -68,17 +136,25 @@ bool importMesh(std::string_view bytes, const AssetImportSettings& settings, Mes
     mesh = std::move(candidate);
     return true;
 }
+TextureInfo textureImportInfo(int width, int height, const AssetImportSettings& settings) {
+    const int largest = std::max(width, height);
+    if (largest > settings.maximumSize) {
+        width = std::max(1, static_cast<int>(std::lround(static_cast<double>(width) * settings.maximumSize / largest)));
+        height = std::max(1, static_cast<int>(std::lround(static_cast<double>(height) * settings.maximumSize / largest)));
+    }
+    const int mipLevels = settings.mipmaps ? static_cast<int>(std::bit_width(static_cast<unsigned>(std::max(width, height)))) : 1;
+    return {width, height, mipLevels};
+}
+
 bool importTexture(std::string_view bytes, const AssetImportSettings& settings, TextureData& texture, std::string& error) {
     if (!valid(settings, error)) { return false; }
     TextureData candidate;
     if (!decodeTexture(bytes, candidate, error)) { return false; }
-    const int largest = std::max(candidate.width, candidate.height);
-    if (largest > settings.maximumSize) {
-        const int width = std::max(1, static_cast<int>(std::lround(static_cast<double>(candidate.width) * settings.maximumSize / largest)));
-        const int height = std::max(1, static_cast<int>(std::lround(static_cast<double>(candidate.height) * settings.maximumSize / largest)));
-        candidate.pixels = resize(candidate.pixels, candidate.width, candidate.height, width, height);
-        candidate.width = width;
-        candidate.height = height;
+    const auto info = textureImportInfo(candidate.width, candidate.height, settings);
+    if (candidate.width != info.width || candidate.height != info.height) {
+        candidate.pixels = resize(candidate.pixels, candidate.width, candidate.height, info.width, info.height);
+        candidate.width = info.width;
+        candidate.height = info.height;
     }
     candidate.filter = settings.filter;
     candidate.wrap = settings.wrap;
@@ -87,7 +163,7 @@ bool importTexture(std::string_view bytes, const AssetImportSettings& settings, 
         int height = candidate.height;
         const std::vector<unsigned char>* pixels = &candidate.pixels;
         // Reserve so pointers to previously generated levels remain stable.
-        candidate.mips.reserve(12);
+        candidate.mips.reserve(static_cast<std::size_t>(info.mipLevels - 1));
         while (width > 1 || height > 1) {
             const int nextWidth = std::max(1, width / 2);
             const int nextHeight = std::max(1, height / 2);

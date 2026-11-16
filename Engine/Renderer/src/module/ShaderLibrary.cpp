@@ -15,6 +15,13 @@ void ShaderLibrary::setReader(AssetReader reader) {
     m_reader = std::move(reader);
 }
 
+void ShaderLibrary::invalidateProjectShader(std::string_view path) {
+    if (const auto found = m_projectShaders.find(path); found != m_projectShaders.end()) {
+        m_projectShaders.erase(found);
+        ++m_revision;
+    }
+}
+
 void ShaderLibrary::setProjectReader(AssetReader reader) {
     m_projectShaders.clear();
     m_projectReader = std::move(reader);
@@ -56,6 +63,11 @@ void ShaderLibrary::loadProjectPixel(ID3D11Device* device, std::string_view path
     }
     entry.pixel = std::move(candidate);
     ++m_revision;
+}
+
+ID3D11PixelShader* ShaderLibrary::cachedProjectPixel(std::string_view path) const {
+    const auto found = m_projectShaders.find(path);
+    return found == m_projectShaders.end() ? nullptr : found->second.pixel.Get();
 }
 
 ID3D11PixelShader* ShaderLibrary::projectPixel(ID3D11Device* device, std::string_view path) {

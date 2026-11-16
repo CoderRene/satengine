@@ -2,9 +2,17 @@
 
 #include "Input.hpp"
 
+#include <filesystem>
 #include <memory>
+#include <span>
+#include <vector>
 
 namespace sat {
+
+struct FileDrop {
+    CursorPosition position;
+    std::vector<std::filesystem::path> paths;
+};
 
 class Window {
 public:
@@ -17,6 +25,8 @@ public:
     [[nodiscard]] bool shouldClose() const;
     void pollEvents();
     [[nodiscard]] const Input& input() const;
+    // Window-thread only. The client-coordinate drops are borrowed until the next pollEvents().
+    [[nodiscard]] std::span<const FileDrop> fileDrops() const;
     void setIcon(const char* path);
     [[nodiscard]] void* nativeHandle() const;
 

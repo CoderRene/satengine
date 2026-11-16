@@ -19,7 +19,7 @@ bool decodeMaterial(std::string_view bytes, MaterialData& material, std::string&
     MaterialData candidate;
     std::string magic;
     int version = 0;
-    if (!(in >> magic >> version) || magic != "SatMaterial" || (version < 1 || version > 5)) { return false; }
+    if (!(in >> magic >> version) || magic != "SatMaterial" || (version < 1 || version > 6)) { return false; }
 
     if (version >= 2) {
         std::string shader;
@@ -51,11 +51,15 @@ bool decodeMaterial(std::string_view bytes, MaterialData& material, std::string&
     for (float& value : candidate.emissive) { if (!channel(value)) { return false; } }
     if (!channel(candidate.normalScale)) { return false; }
 
-    for (auto* path : {&candidate.baseColorTexture, &candidate.metallicRoughnessTexture,
-                       &candidate.normalTexture, &candidate.emissiveTexture}) {
+    const auto texturePath = [&](std::string& path) {
         in >> std::ws;
-        if (in.peek() != '"' || !(in >> std::quoted(*path)) ||
-            (!path->empty() && !isTextureAssetPath(*path))) { return false; }
+        return in.peek() == '"' && (in >> std::quoted(path)) &&
+            (path.empty() || isTextureAssetPath(path));
+    };
+    if (!texturePath(candidate.baseColorTexture) || !texturePath(candidate.metallicRoughnessTexture) ||
+        !texturePath(candidate.normalTexture) || !texturePath(candidate.emissiveTexture)) { return false; }
+    if (version >= 6 && (!channel(candidate.occlusionStrength) || !texturePath(candidate.occlusionTexture))) {
+        return false;
     }
     in >> std::ws;
     if (!in.eof()) { return false; }
@@ -67,7 +71,8 @@ bool decodeMaterial(std::string_view bytes, MaterialData& material, std::string&
 std::string encodeMaterial(const MaterialData& material) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
-    out << "SatMaterial 5\n" << std::setprecision(std::numeric_limits<float>::max_digits10);
+    const bool hasOcclusion = !material.occlusionTexture.empty() || material.occlusionStrength != 1.0f;
+    out << (hasOcclusion ? "SatMaterial 6\n" : "SatMaterial 5\n") << std::setprecision(std::numeric_limits<float>::max_digits10);
     if (material.shader == MaterialShader::Custom) {
         out << "custom " << std::quoted(material.shaderPath) << '\n';
     } else {
@@ -84,6 +89,9 @@ std::string encodeMaterial(const MaterialData& material) {
         << material.normalScale << '\n'
         << std::quoted(material.baseColorTexture) << '\n' << std::quoted(material.metallicRoughnessTexture) << '\n'
         << std::quoted(material.normalTexture) << '\n' << std::quoted(material.emissiveTexture) << '\n';
+    if (hasOcclusion) {
+        out << material.occlusionStrength << '\n' << std::quoted(material.occlusionTexture) << '\n';
+    }
     return out.str();
 }
 

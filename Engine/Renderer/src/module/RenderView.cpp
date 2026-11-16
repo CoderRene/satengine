@@ -1,6 +1,7 @@
 #include "RenderState.hpp"
 
 #include "Math.hpp"
+#include "Renderer.hpp"
 #include "ShaderLayout.hpp"
 
 #include <algorithm>
@@ -12,7 +13,8 @@
 namespace sat {
 
 void RenderSession::renderOffscreenView(
-    OffscreenView& view, const GameViewCamera& camera, const SceneDrawList& drawList) {
+    OffscreenView& view, const GameViewCamera& camera, const SceneDrawList& drawList,
+    MeshPass* preparedPass, GameViewStats* stats) {
     if (view.rtv == nullptr || view.dsv == nullptr || m_state->context == nullptr) {
         return;
     }
@@ -69,12 +71,14 @@ void RenderSession::renderOffscreenView(
         hdrClear[i] = linear / std::max(1.0f - linear, 0.001f);
     }
     context->ClearRenderTargetView(hdrTarget, hdrClear);
-    if (drawList.meshCount > 0 && m_state->meshPass.ensure(m_state->device)) {
+    auto& pass = preparedPass ? *preparedPass : m_state->meshPass;
+    if (drawList.meshCount > 0 && pass.ensure(m_state->device)) {
         const Mat4 invView = inverse(viewMat);
-        m_state->meshPass.prepareAssets(m_state->device, drawList);
-        m_state->meshPass.draw(context, m_state->shaders.program(ShaderId::Mesh), viewMat, projMat,
+        if (!preparedPass) { pass.prepareAssets(m_state->device, drawList); }
+        pass.draw(context, m_state->shaders.program(ShaderId::Mesh), viewMat, projMat,
             {invView.m[12], invView.m[13], invView.m[14]}, drawList, true,
-            m_state->shaders.program(ShaderId::Shadow).pixel, &m_state->shaders, camera.renderOrigin);
+            m_state->shaders.program(ShaderId::Shadow).pixel, &m_state->shaders, camera.renderOrigin,
+            preparedPass == nullptr, stats);
     }
 
     const auto post = m_state->shaders.program(ShaderId::PostProcess);
@@ -103,6 +107,12 @@ void RenderSession::renderOffscreenView(
         context->PSSetShaderResources(0, 2, inputs);
         context->UpdateSubresource(bloomBuffer, 0, nullptr, &constants, 0, 0);
         context->Draw(3, 0);
+        if (stats) {
+            ++stats->drawCalls;
+            ++stats->setPassCalls;
+            ++stats->triangles;
+            stats->vertices += 3;
+        }
         ID3D11ShaderResourceView* unbound[2]{};
         context->PSSetShaderResources(0, 2, unbound);
     };
@@ -184,6 +194,11 @@ void RenderSession::renderOffscreenView(
             m_state->context->RSSetState(m_state->lineRasterizer);
             m_state->context->OMSetDepthStencilState(m_state->lineDepthState, 0);
             m_state->context->Draw(m_state->lineVertexCount, 0);
+            if (stats) {
+                ++stats->drawCalls;
+                ++stats->setPassCalls;
+                stats->vertices += m_state->lineVertexCount;
+            }
         }
     }
 

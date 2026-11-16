@@ -23,12 +23,13 @@
 
 namespace sat {
 namespace {
+constexpr int kSceneVersionWithMeshNodes = 16;
+constexpr int kSceneVersionWithStaticMeshes = 15;
 constexpr int kSceneVersionWithEntityReferences = 14;
 constexpr int kSceneVersionWithScriptFields = 13;
 constexpr int kSceneVersionWithUi = 12;
 constexpr int kSceneVersionWithoutUi = 11;
 constexpr std::size_t kMaxSceneBytes = 16 * 1024 * 1024;
-constexpr std::size_t kMaxEntities = 100000;
 constexpr std::size_t kMaxScripts = 128;
 
 bool finite(const Vec3& value) {
@@ -126,9 +127,17 @@ std::string serializeScene(const Scene& scene) {
             if (std::any_of(script.fieldOverrides.begin(), script.fieldOverrides.end(), [](const auto& field) {
                 return std::holds_alternative<ScriptEntityReference>(field.second);
             })) {
-                version = kSceneVersionWithEntityReferences;
+                version = std::max(version, kSceneVersionWithEntityReferences);
             }
         }
+    }
+    if (std::any_of(scene.entities().begin(), scene.entities().end(),
+            [](const Entity& entity) { return entity.mesh.combineStatic; })) {
+        version = kSceneVersionWithStaticMeshes;
+    }
+    if (std::any_of(scene.entities().begin(), scene.entities().end(),
+            [](const Entity& entity) { return entity.mesh.meshNode != 0; })) {
+        version = kSceneVersionWithMeshNodes;
     }
     out << "SatScene " << version << '\n' << scene.entityCount() << '\n';
     writePhysicsSettings(out, scene.physicsSettings);
@@ -153,8 +162,12 @@ std::string serializeScene(const Scene& scene) {
             << t.rotation.x << ' ' << t.rotation.y << ' ' << t.rotation.z << ' '
             << t.scale.x << ' ' << t.scale.y << ' ' << t.scale.z << '\n'
             << entity.hasMesh << ' ' << static_cast<int>(entity.mesh.primitive) << ' '
-            << std::quoted(entity.mesh.meshPath) << ' ' << std::quoted(entity.mesh.materialPath) << '\n'
-            << entity.hasCamera << ' ' << c.isMain << ' ' << c.fieldOfView << ' '
+            << std::quoted(entity.mesh.meshPath) << ' ' << std::quoted(entity.mesh.materialPath);
+        if (version >= kSceneVersionWithStaticMeshes) {
+            out << ' ' << entity.mesh.combineStatic;
+        }
+        if (version >= kSceneVersionWithMeshNodes) { out << ' ' << entity.mesh.meshNode; }
+        out << '\n' << entity.hasCamera << ' ' << c.isMain << ' ' << c.fieldOfView << ' '
             << c.nearClip << ' ' << c.farClip;
         for (float channel : c.clearColor) {
             out << ' ' << channel;
@@ -201,7 +214,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
     std::string magic;
     int version = 0;
     std::size_t count = 0;
-    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > kSceneVersionWithEntityReferences) || count > kMaxEntities) {
+    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > kSceneVersionWithMeshNodes) || count > kMaxSceneEntities) {
         return fail("Invalid scene header, version or entity count.");
     }
     Scene candidate;
@@ -275,6 +288,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
         auto& t = e.transform;
         auto& c = e.camera;
         int primitive = 0;
+        std::int64_t meshNode = 0;
         std::string legacyTexture;
         auto& surfacePath = version >= 6 ? e.mesh.materialPath : legacyTexture;
         if (!(in >> t.position.x >> t.position.y >> t.position.z
@@ -284,6 +298,10 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
             (version >= 2 && (!(in >> std::quoted(e.mesh.meshPath) >> std::quoted(surfacePath)) ||
                 (!e.mesh.meshPath.empty() && !isMeshAssetPath(e.mesh.meshPath)) ||
                 (!surfacePath.empty() && !(version >= 6 ? isMaterialAssetPath(surfacePath) : isTextureAssetPath(surfacePath))))) ||
+            (version >= kSceneVersionWithStaticMeshes && !(in >> e.mesh.combineStatic)) ||
+            (version >= kSceneVersionWithMeshNodes && (!(in >> meshNode) || meshNode < 0 ||
+                meshNode > std::numeric_limits<std::uint32_t>::max() ||
+                (meshNode != 0 && !isGltfAssetPath(e.mesh.meshPath)))) ||
             !(in >> e.hasCamera >> c.isMain
                  >> c.fieldOfView >> c.nearClip >> c.farClip) ||
             !finite(t.position) || !finite(t.rotation) || !finite(t.scale) || primitive != 0 ||
@@ -291,6 +309,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
             c.fieldOfView <= 0.0f || c.fieldOfView >= 180.0f || c.nearClip <= 0.0f || c.farClip <= c.nearClip) {
             return fail("Invalid components on entity " + e.name);
         }
+        e.mesh.meshNode = static_cast<std::uint32_t>(meshNode);
         for (float& channel : c.clearColor) {
             if (!(in >> channel) || !std::isfinite(channel)) {
                 return fail("Invalid camera color on entity " + e.name);
