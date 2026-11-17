@@ -632,11 +632,23 @@ void MeshPass::draw(
             const Vec3 worldCenter = transformPoint(world, localCenter);
             const auto lightCenter = shadowMap.lightSpaceCenter(worldCenter);
             const float radius = (node ? length(node->maximum - localCenter) : mesh->boundsRadius) * scale;
+            const auto firstCaster = casters.size();
             visitSections(instance, mesh, [&](const Impl::DrawRange& draw, Vec3) {
                 const auto mode = draw.material->alphaMode;
-                if (mode != AlphaMode::Blend && (mode != AlphaMode::Mask || shadowPixel)) {
-                    casters.push_back({draw, lightCenter, radius});
+                if (mode == AlphaMode::Blend || (mode == AlphaMode::Mask && !shadowPixel)) { return; }
+
+                // Sections arrive in index order and share this instance's transform and bounds.
+                // Opaque shadow draws use no pixel shader, so adjacent ranges can share a draw.
+                if (mode == AlphaMode::Opaque && casters.size() > firstCaster) {
+                    auto& previous = casters.back().draw;
+                    if (previous.material->alphaMode == AlphaMode::Opaque &&
+                        previous.firstIndex + previous.indexCount == draw.firstIndex) {
+                        previous.indexCount += draw.indexCount;
+                        previous.vertexCount += draw.vertexCount;
+                        return;
+                    }
                 }
+                casters.push_back({draw, lightCenter, radius});
             });
         }
 
