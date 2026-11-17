@@ -5,12 +5,12 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
-#include <string>
 
 namespace sat {
 
 class Input;
 class Project;
+struct ProjectOpenResult;
 class Renderer;
 class Window;
 
@@ -39,6 +39,7 @@ public:
     void paceEditor();
 
     [[nodiscard]] bool canSaveScene() const;
+    [[nodiscard]] bool projectOpening() const;
     bool saveScene();
     void tickScripts(float deltaSeconds);
     void drawInterface(bool canSaveScene);
@@ -61,6 +62,9 @@ private:
     void startPlayNow();
     void openProject(const std::filesystem::path& folder);
     void openProjectNow(const std::filesystem::path& folder);
+    void prepareProjectSwitch(ProjectOpenResult opened);
+    void finishProjectOpen();
+    void drawProjectProgress();
     void reloadAssets();
     void selectEntity(EntityId id, bool keepHierarchySelection = false);
     void syncLuaTooling() const;

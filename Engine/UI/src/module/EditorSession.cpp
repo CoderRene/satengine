@@ -1,9 +1,8 @@
 #include "EditorState.hpp"
 
 #include "AssetLibrary.hpp"
-#include "EditorLuaDefs.hpp"
 #include "Input.hpp"
-#include "LuaToolingSync.hpp"
+#include "ProjectOpen.hpp"
 #include "Renderer.hpp"
 #include "Window.hpp"
 
@@ -18,6 +17,7 @@
 #include <imgui.h>
 
 #include <chrono>
+#include <exception>
 #include <filesystem>
 #include <iostream>
 #include <system_error>
@@ -130,7 +130,12 @@ void EditorSession::paceEditor() {
 }
 
 bool EditorSession::canSaveScene() const {
-    return m_state->project.isOpen() && !m_state->play.active() && !m_state->play.decisionPending();
+    return !projectOpening() && m_state->project.isOpen() &&
+        !m_state->play.active() && !m_state->play.decisionPending();
+}
+
+bool EditorSession::projectOpening() const {
+    return m_state->projectOpen.valid();
 }
 
 bool EditorSession::hasUnsavedChanges() const {
@@ -214,37 +219,65 @@ void EditorSession::openProject(const std::filesystem::path& folder) {
 }
 
 void EditorSession::openProjectNow(const std::filesystem::path& folder) {
-    Project opened;
-    if (!opened.open(folder)) {
-        m_state->recent.remove(folder);
+    auto& state = *m_state;
+    if (projectOpening()) { return; }
+    state.projectOpenFolder = folder;
+    state.preparingProject = false;
+    state.projectProgressShown = false;
+    try {
+        state.projectOpen = loadEditorProject(folder, state.project.root());
+    } catch (const std::exception& error) {
+        state.sceneError = std::string("Could not start opening project: ") + error.what();
+    }
+}
+
+void EditorSession::prepareProjectSwitch(ProjectOpenResult opened) {
+    auto& state = *m_state;
+    if (state.viewport) { state.viewport->resetInteraction(); }
+    state.preparingProject = true;
+    state.projectProgressShown = false;
+    try {
+        state.projectOpen = prepareEditorProject(std::move(opened), state.project, state.scene);
+    } catch (const std::exception& error) {
+        state.sceneError = std::string("Could not start preparing project: ") + error.what();
+    }
+}
+
+void EditorSession::finishProjectOpen() {
+    auto& state = *m_state;
+    ProjectOpenResult result;
+    try {
+        result = state.projectOpen.get();
+    } catch (const std::exception& error) {
+        state.sceneError = std::string("Could not open project: ") + error.what();
         return;
     }
-    if (m_state->project.isOpen() && opened.root() == m_state->project.root()) {
+    if (result.invalidFolder) {
+        state.recent.remove(state.projectOpenFolder);
+    }
+    if (!result.scene) {
+        if (!result.error.empty()) { state.sceneError = std::move(result.error); }
         return;
     }
-    Scene loaded;
-    if (!opened.loadScene(loaded, m_state->sceneError)) {
+    state.sceneError = std::move(result.error);
+    if (!state.preparingProject) {
+        afterStoppingPlay([this, opened = std::move(result)]() mutable {
+            prepareProjectSwitch(std::move(opened));
+        });
         return;
     }
-    afterStoppingPlay([this, opened = std::move(opened), loaded = std::move(loaded)]() mutable {
-        auto& state = *m_state;
-        if (state.viewport) { state.viewport->resetInteraction(); }
-        if (!saveScene()) {
-            return;
-        }
-        state.assetImports->clear();
-        state.content->setSelectedAsset({});
-        state.project = std::move(opened);
-        state.scene = std::move(loaded);
-        recordLoadedScene();
-        state.renderer->setProjectAssetRoot(state.project.root());
-        state.renderer->setProjectShaderSource(fileAssetReader(state.project.root()));
-        state.play.setAssetReader(fileAssetReader(state.project.root()));
-        if (state.hierarchy) { state.hierarchy->setSelectedIndex(-1); }
-        if (state.viewport) { state.viewport->resetInteraction(); }
-        state.recent.add(state.project.root());
-        syncLuaTooling();
-    });
+    state.assetImports->clear();
+    state.content->setSelectedAsset({});
+    state.project = std::move(result.project);
+    state.scene = std::move(*result.scene);
+    recordLoadedScene();
+    state.renderer->setProjectAssetRoot(state.project.root());
+    state.renderer->setProjectShaderSource(fileAssetReader(state.project.root()));
+    state.play.setAssetReader(fileAssetReader(state.project.root()));
+    if (state.hierarchy) { state.hierarchy->setSelectedIndex(-1); }
+    if (state.viewport) { state.viewport->resetInteraction(); }
+    state.recent.add(state.project.root());
+    if (!state.sceneError.empty()) { std::cerr << state.sceneError << '\n'; }
 }
 
 void EditorSession::reloadAssets() {
@@ -268,9 +301,8 @@ void EditorSession::selectEntity(EntityId id, bool keepHierarchySelection) {
 }
 
 void EditorSession::syncLuaTooling() const {
-    const auto defs = editorLuaDefsDirectory();
-    if (defs.empty() || !syncProjectLuaTooling(m_state->project.root(), defs)) {
-        m_state->sceneError = "Could not update LuaDefs in the project. Check the project folder permissions and editor log.";
+    if (auto error = updateEditorProjectLuaTooling(m_state->project.root()); !error.empty()) {
+        m_state->sceneError = std::move(error);
         std::cerr << m_state->sceneError << '\n';
     }
 }
@@ -304,6 +336,7 @@ bool EditorSession::createProjectThunk(void* context) {
 }
 
 void EditorSession::prepareClose() {
+    if (projectOpening()) { m_state->projectOpen.wait(); }
     if (m_state->viewport) { m_state->viewport->resetInteraction(); }
     stopPlay();
     if (m_state->play.decisionPending()) { discardPlayEdits(); }

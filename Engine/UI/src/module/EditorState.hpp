@@ -4,6 +4,7 @@
 
 #include "module/AssetImportPanel.hpp"
 #include "module/PlaySession.hpp"
+#include "module/ProjectOpen.hpp"
 
 #include "ContentPanel.hpp"
 #include "EnginePaths.hpp"
@@ -22,6 +23,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -72,6 +74,13 @@ struct EditorSession::State {
     bool openNewProjectModal = false;
     std::filesystem::path newProjectParent;
     char newProjectName[128] = {};
+
+    std::filesystem::path projectOpenFolder;
+    bool preparingProject = false;
+    bool projectProgressShown = false;
+    // The preparation job can borrow the authored scene for saving. The window
+    // thread pauses scene work until the job is consumed and joins it on shutdown.
+    std::future<ProjectOpenResult> projectOpen;
 
     // Edit mode keeps the previous scene and game targets while these match.
     std::uint64_t sceneViewKey = 0;

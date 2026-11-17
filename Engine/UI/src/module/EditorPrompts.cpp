@@ -4,14 +4,15 @@
 
 #include <GLFW/glfw3.h>
 
-#include <utility>
+#include <chrono>
+#include <future>
 
 namespace sat {
 
 bool EditorSession::requestClose() {
     auto& state = *m_state;
     if (state.closeApproved) { return true; }
-    if (state.play.decisionPending()) { return false; }
+    if (projectOpening() || state.play.decisionPending()) { return false; }
     if (state.play.active()) {
         stopPlay();
         if (state.play.decisionPending()) {
@@ -36,6 +37,10 @@ bool EditorSession::requestClose() {
 }
 
 void EditorSession::drawPrompts() {
+    if (projectOpening()) {
+        drawProjectProgress();
+        return;
+    }
     auto& state = *m_state;
     state.assetImports->drawPrompt();
 
@@ -95,6 +100,31 @@ void EditorSession::drawPrompts() {
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) {
             ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    if (projectOpening()) { drawProjectProgress(); }
+}
+
+void EditorSession::drawProjectProgress() {
+    auto& state = *m_state;
+    constexpr auto kPopup = "Opening Project";
+    if (!ImGui::IsPopupOpen(kPopup)) {
+        ImGui::OpenPopup(kPopup);
+    }
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal(kPopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        const char* step = !state.preparingProject ? "Loading scene..." :
+            (state.project.isOpen() ? "Saving scene and preparing project..." : "Preparing project...");
+        ImGui::TextUnformatted(step);
+        ImGui::ProgressBar(-static_cast<float>(ImGui::GetTime()), ImVec2(360.0f, 0.0f), "");
+        // Present a frame of progress before consuming even an immediately ready job.
+        const bool ready = state.projectProgressShown &&
+            state.projectOpen.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+        state.projectProgressShown = true;
+        if (ready) {
+            finishProjectOpen();
+            if (!projectOpening()) { ImGui::CloseCurrentPopup(); }
         }
         ImGui::EndPopup();
     }

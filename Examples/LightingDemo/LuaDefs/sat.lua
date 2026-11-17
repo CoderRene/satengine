@@ -305,6 +305,26 @@ function SatTime.setTimeScale(scale) end
 ---@class SatUi
 local SatUi = {}
 
+---@param name string
+---@param fields table
+---@return boolean
+function SatUi.createModel(name, fields) end
+
+---@param model string
+---@param field string
+---@param value boolean|number|string
+---@return boolean
+function SatUi.setModelValue(model, field, value) end
+
+---@param model string
+---@param field string
+---@return boolean|number|string|nil
+function SatUi.getModelValue(model, field) end
+
+---@param entity EntityId
+---@return userdata|nil
+function SatUi.getDocument(entity) end
+
 ---@param path string
 ---@return boolean
 function SatUi.loadFont(path) end

@@ -142,6 +142,8 @@ private:
     std::size_t m_childCount = 0;
 };
 
+// Access each scene from one thread at a time. Copies preserve entity IDs for
+// snapshots. Newly created entities get fresh IDs. Loading assigns new IDs.
 class Scene {
 public:
     Scene();
@@ -149,8 +151,6 @@ public:
     AudioSettings audioSettings;
     LightingSettings lightingSettings;
 
-    // Window-thread only. Copies preserve identity for snapshots; newly created
-    // entities always get fresh IDs. IDs are not serialized. Load replaces them.
     [[nodiscard]] const std::vector<Entity>& entities() const;
     [[nodiscard]] std::size_t entityCount() const { return m_entities.size(); }
     // Structural mutators advance this automatically. After editing fields through

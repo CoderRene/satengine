@@ -29,19 +29,25 @@ void EditorSession::drawInterface(bool canSaveScene) {
     ImGui::Begin("DockSpace", nullptr, hostFlags);
     ImGui::PopStyleVar(3);
 
-    drawMenuBar(canSaveScene);
-    const std::size_t physicsWorlds = state.showPhysicsSettings && state.play.active()
-        ? state.play.physicsWorldCount() : 0;
-    drawSceneSettingsWindows(state.showLightingSettings, state.showAudioSettings, state.showPhysicsSettings,
-        state.scene, state.project, state.play.decisionPending(), state.play.active(), physicsWorlds);
-    drawBuildStatusWindow(state.showBuildStatus, state.builder);
-    if (drawEditorDiagnostics(state.renderer->assetErrors(), state.play.active(), state.sceneError)) {
-        reloadAssets();
+    if (!projectOpening()) {
+        drawMenuBar(canSaveScene);
+    }
+    const bool openingProject = projectOpening();
+    if (!openingProject) {
+        const std::size_t physicsWorlds = state.showPhysicsSettings && state.play.active()
+            ? state.play.physicsWorldCount() : 0;
+        drawSceneSettingsWindows(state.showLightingSettings, state.showAudioSettings, state.showPhysicsSettings,
+            state.scene, state.project, state.play.decisionPending(), state.play.active(), physicsWorlds);
+        drawBuildStatusWindow(state.showBuildStatus, state.builder);
+        if (drawEditorDiagnostics(state.renderer->assetErrors(), state.play.active(), state.sceneError)) {
+            reloadAssets();
+        }
     }
     drawEditorDockSpace();
 
     ImGui::End();
 
+    if (openingProject) { return; }
     drawPanels();
     drawNewProjectModal(state.openNewProjectModal, state.newProjectParent, state.newProjectName,
         sizeof(state.newProjectName), &EditorSession::createProjectThunk, this);

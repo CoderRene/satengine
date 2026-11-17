@@ -321,6 +321,7 @@ add_library(SatEditor STATIC
     UI/src/module/HierarchyDragDrop.hpp
     UI/src/module/PhysicsInspector.cpp
     UI/src/module/PlaySession.cpp
+    UI/src/module/ProjectOpen.cpp
     UI/src/module/SceneSettingsWindows.cpp
     UI/src/module/SceneViewGather.cpp
     UI/src/HierarchyPanel.cpp
@@ -367,4 +368,10 @@ if(BUILD_TESTING)
     )
     target_link_libraries(HierarchyDropTests PRIVATE SatEditor)
     add_test(NAME HierarchyDrop COMMAND HierarchyDropTests)
+
+    add_executable(ProjectOpenTests UI/tests/ProjectOpenTests.cpp)
+    target_include_directories(ProjectOpenTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/UI/src/module")
+    target_link_libraries(ProjectOpenTests PRIVATE SatEditor)
+    add_test(NAME ProjectOpen COMMAND ProjectOpenTests)
+    set_tests_properties(ProjectOpen PROPERTIES TIMEOUT 15)
 endif()
