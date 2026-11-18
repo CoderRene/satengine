@@ -29,6 +29,7 @@ public:
 
     [[nodiscard]] bool ensure(ID3D11Device* device);
     void release();
+    [[nodiscard]] bool bindSkin(ID3D11DeviceContext* context, const MeshInstance& instance, const GpuMesh& mesh) const;
     void draw(
         ID3D11DeviceContext* context, ShaderProgram program,
         const Mat4& view, const Mat4& projection, Vec3 eye,

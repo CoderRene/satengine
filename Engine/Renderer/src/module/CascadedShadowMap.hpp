@@ -50,7 +50,9 @@ public:
     [[nodiscard]] ID3D11DepthStencilView* depthView(unsigned index) const { return m_depthViews[index].Get(); }
     [[nodiscard]] ID3D11ShaderResourceView* shaderView() const { return m_shaderView.Get(); }
     [[nodiscard]] ID3D11SamplerState* sampler() const { return m_sampler.Get(); }
-    [[nodiscard]] ID3D11RasterizerState* rasterizer() const { return m_rasterizer.Get(); }
+    [[nodiscard]] ID3D11RasterizerState* rasterizer(bool doubleSided = false) const {
+        return doubleSided ? m_doubleSidedRasterizer.Get() : m_rasterizer.Get();
+    }
 
 private:
     [[nodiscard]] bool ensureResources(ID3D11DeviceContext* context, unsigned resolution, unsigned count);
@@ -64,6 +66,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_shaderView;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
     Microsoft::WRL::ComPtr<ID3D11RasterizerState> m_rasterizer;
+    Microsoft::WRL::ComPtr<ID3D11RasterizerState> m_doubleSidedRasterizer;
     unsigned m_resolutionAttempted = 0;
     unsigned m_countAttempted = 0;
 };

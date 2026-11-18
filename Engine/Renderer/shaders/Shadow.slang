@@ -1,4 +1,5 @@
 import Material;
+import MeshFragment;
 
 // The shadow pass pairs this pixel shader with the mesh vertex shader.
 [shader("vertex")]
@@ -8,8 +9,7 @@ float4 vsMain(uint index : SV_VertexID) : SV_Position
 }
 
 [shader("fragment")]
-void psMain(float2 uv : TEXCOORD2)
+void psMain(MeshFragment input)
 {
-    float opacity = materialOpacity(sampleBaseColor(uv).a);
-    clip(opacity - 0.001);
+    materialOpacity(sampleBaseColor(input.uv, input.uv1).a * input.color.a);
 }

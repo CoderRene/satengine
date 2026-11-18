@@ -1,6 +1,8 @@
 #include "PakArchive.hpp"
 #include "AssetImportSettings.hpp"
 #include "AssetLibrary.hpp"
+#include "AnimationAsset.hpp"
+#include "AnimationGraph.hpp"
 #include "Scene.hpp"
 #include "SceneFile.hpp"
 #include "module/Pak/PakCrypto.hpp"
@@ -90,7 +92,40 @@ int main(int argc, char** argv) {
             }
             return result;
         });
+        const auto animationReader = [&](std::string_view path, std::string& bytes, std::string& error) {
+            if (!std::binary_search(files.begin(), files.end(), path, std::less<>{})) {
+                error = "Animation reference is absent from package: " + std::string(path); return sat::AssetReadResult::Missing;
+            }
+            return sat::fileAssetReader(root)(path, bytes, error);
+        };
         for (const auto& entity : scene.entities()) {
+            if (entity.hasAnimator) {
+                std::string bytes, error;
+                sat::AnimationData rig;
+                if (!entity.hasMesh || entity.mesh.meshNode ||
+                    animationReader(entity.mesh.meshPath, bytes, error) != sat::AssetReadResult::Found ||
+                    !sat::decodeGltfAnimation(bytes, entity.mesh.meshPath, animationReader, rig, error)) {
+                    throw std::runtime_error("Animator on " + entity.name + ": " + error);
+                }
+                const auto validateClip = [&](const std::string& reference) {
+                    if (sat::isAnimationClipAssetPath(reference)) {
+                        sat::AnimationClipAsset clip;
+                        if (animationReader(reference, bytes, error) != sat::AssetReadResult::Found || !sat::decodeAnimationClip(bytes, clip, error)) {
+                            throw std::runtime_error("Animator on " + entity.name + ": " + error);
+                        }
+                    } else if (std::none_of(rig.clips.begin(), rig.clips.end(), [&](const auto& clip) { return reference.empty() || clip.name == reference; })) {
+                        throw std::runtime_error("Animator on " + entity.name + " references missing embedded clip " + reference);
+                    }
+                };
+                if (entity.animator.controllerPath.empty()) { validateClip(entity.animator.clip); }
+                else {
+                    sat::AnimationGraph graph;
+                    if (animationReader(entity.animator.controllerPath, bytes, error) != sat::AssetReadResult::Found || !sat::decodeAnimationGraph(bytes, graph, error)) {
+                        throw std::runtime_error("Animator on " + entity.name + ": " + error);
+                    }
+                    for (const auto& state : graph.states) { validateClip(state.clip); }
+                }
+            }
             if (!entity.hasMesh) { continue; }
             if ((!entity.mesh.meshPath.empty() && assets.mesh(entity.mesh.meshPath) == nullptr) ||
                 (!entity.mesh.materialPath.empty() && assets.material(entity.mesh.materialPath) == nullptr)) {
@@ -113,6 +148,21 @@ int main(int argc, char** argv) {
             }
             if (sat::isShaderAssetPath(name)) { continue; }
             std::string bytes = read(path);
+            if (sat::isAnimationClipAssetPath(name)) {
+                sat::AnimationClipAsset clip; std::string error;
+                if (!sat::decodeAnimationClip(bytes, clip, error)) { throw std::runtime_error(name + ": " + error); }
+            }
+            if (sat::isAnimationGraphAssetPath(name)) {
+                sat::AnimationGraph graph; std::string error;
+                if (!sat::decodeAnimationGraph(bytes, graph, error)) { throw std::runtime_error(name + ": " + error); }
+                for (const auto& state : graph.states) {
+                    if (!sat::isAnimationClipAssetPath(state.clip)) { continue; }
+                    std::string clipBytes; sat::AnimationClipAsset clip;
+                    if (animationReader(state.clip, clipBytes, error) != sat::AssetReadResult::Found || !sat::decodeAnimationClip(clipBytes, clip, error)) {
+                        throw std::runtime_error(name + ": " + error);
+                    }
+                }
+            }
             if (name.ends_with(".satimport")) {
                 sat::AssetImportSettings settings;
                 std::string error;
@@ -189,7 +239,9 @@ int main(int argc, char** argv) {
                     throw std::runtime_error(entry.name + ": missing compiled shader " + material->shaderPath);
                 }
                 for (const auto* path : {&material->baseColorTexture, &material->metallicRoughnessTexture,
-                                        &material->normalTexture, &material->emissiveTexture, &material->occlusionTexture}) {
+                                        &material->normalTexture, &material->emissiveTexture, &material->occlusionTexture,
+                                        &material->transmissionTexture, &material->thicknessTexture, &material->clearcoatTexture,
+                                        &material->clearcoatRoughnessTexture, &material->clearcoatNormalTexture}) {
                     if (!path->empty() && std::none_of(entries.begin(), entries.end(),
                         [&](const sat::PakEntry& candidate) { return candidate.name == *path; })) {
                         throw std::runtime_error(entry.name + ": missing texture " + *path);

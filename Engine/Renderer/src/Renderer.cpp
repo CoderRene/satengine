@@ -112,8 +112,8 @@ std::uint64_t Renderer::contentRevision() const {
     return m_impl->contentRevision();
 }
 
-AssetThumbnail Renderer::assetThumbnail(std::string_view path) {
-    return m_impl->assetThumbnail(path);
+AssetThumbnail Renderer::assetThumbnail(std::string_view path, std::span<const Mat4> palette) {
+    return m_impl->assetThumbnail(path, palette);
 }
 
 std::uintptr_t Renderer::createTexture(const unsigned char* rgba, int width, int height) {

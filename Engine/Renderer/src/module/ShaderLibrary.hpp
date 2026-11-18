@@ -17,8 +17,8 @@
 
 namespace sat {
 
-enum class ShaderId : std::uint8_t { Mesh, SelectionOutline, CameraFrustum, TransformGizmo, Grid, PostProcess, Shadow, Ui, UiEffects, UiGradient, Count };
-inline constexpr std::array kShaderNames{"Mesh", "SelectionOutline", "CameraFrustum", "TransformGizmo", "Grid", "PostProcess", "Shadow", "Ui", "UiEffects", "UiGradient"};
+enum class ShaderId : std::uint8_t { Mesh, SelectionOutline, CameraFrustum, TransformGizmo, Grid, PostProcess, Shadow, Ui, UiEffects, UiGradient, MeshSkinned, SelectionOutlineSkinned, Count };
+inline constexpr std::array kShaderNames{"Mesh", "SelectionOutline", "CameraFrustum", "TransformGizmo", "Grid", "PostProcess", "Shadow", "Ui", "UiEffects", "UiGradient", "MeshSkinned", "SelectionOutlineSkinned"};
 
 struct ShaderProgram {
     ID3D11VertexShader* vertex;

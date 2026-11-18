@@ -12,6 +12,8 @@
 #include "ScriptLog.hpp"
 #include "Scene.hpp"
 #include "AudioSystem.hpp"
+#include "AnimationSystem.hpp"
+#include "module/LuaRuntimeModules/LuaAnimationBindings.hpp"
 #include "PhysicsSystem.hpp"
 #include "module/LuaRuntimeModules/LuaAudioBindings.hpp"
 #include "module/LuaRuntimeModules/LuaPhysicsBindings.hpp"
@@ -47,11 +49,12 @@ void instructionLimit(lua_State* state, lua_Debug*) {
 } // namespace
 
 struct LuaRuntime::Impl {
-    explicit Impl(Scene& scene, const Input* input, ScriptLog* log, PhysicsSystem* physics, AudioSystem* audio)
-    : m_scene(scene), m_input(input), m_log(log), m_physics(physics), m_audio(audio) {}
+    explicit Impl(Scene& scene, const Input* input, ScriptLog* log, PhysicsSystem* physics, AudioSystem* audio, AnimationSystem* animation)
+    : m_scene(scene), m_input(input), m_log(log), m_physics(physics), m_audio(audio), m_animation(animation) {}
     ~Impl() {
         close();
         if (m_audio && m_sharedTime == &m_time) { m_audio->stop(); }
+        if (m_animation && m_sharedTime == &m_time) { m_animation->stop(); }
     }
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
@@ -63,6 +66,7 @@ struct LuaRuntime::Impl {
     ScriptLog* m_log = nullptr;
     PhysicsSystem* m_physics = nullptr;
     AudioSystem* m_audio = nullptr;
+    AnimationSystem* m_animation = nullptr;
     GameUi* m_gameUi = nullptr;
     std::unordered_map<UiOwner, Impl*> m_uiOwners;
     std::uint64_t m_uiRevision = 0;
@@ -229,8 +233,8 @@ struct LuaRuntime::Impl {
     }
 };
 
-LuaRuntime::LuaRuntime(Scene& scene, const Input* input, ScriptLog* log, PhysicsSystem* physics, AudioSystem* audio)
-    : m_impl(std::make_unique<Impl>(scene, input, log, physics, audio)) {}
+LuaRuntime::LuaRuntime(Scene& scene, const Input* input, ScriptLog* log, PhysicsSystem* physics, AudioSystem* audio, AnimationSystem* animation)
+    : m_impl(std::make_unique<Impl>(scene, input, log, physics, audio, animation)) {}
 LuaRuntime::~LuaRuntime() = default;
 
 void LuaRuntime::setGameUi(GameUi* ui) {
@@ -289,6 +293,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
         }
     }
     if (impl.m_physics && !impl.m_physics->start()) { return impl.fail(impl.m_physics->error()); }
+    if (impl.m_animation && !impl.m_animation->start()) { impl.fail(impl.m_animation->error()); return false; }
     if (impl.m_audio && !impl.m_audio->start()) {
         impl.fail(impl.m_audio->error());
         stop();
@@ -338,7 +343,7 @@ bool LuaRuntime::startScripts(const std::filesystem::path& root,
             }
             source = ownedSource;
         }
-        auto instance = std::make_unique<LuaRuntime>(impl.m_scene, impl.m_input, impl.m_log, impl.m_physics, impl.m_audio);
+        auto instance = std::make_unique<LuaRuntime>(impl.m_scene, impl.m_input, impl.m_log, impl.m_physics, impl.m_audio, impl.m_animation);
         instance->m_impl->m_gameUi = impl.m_gameUi;
         instance->m_impl->m_sharedTime = &impl.m_time;
         instance->m_impl->m_sharedMessages = &impl.m_messages;
@@ -400,6 +405,7 @@ bool LuaRuntime::startSource(std::string_view source, std::string_view chunkName
     lua::registerFieldBindings(state, impl.m_fields);
     lua::registerPhysicsBindings(state, impl.m_scene, impl.m_physics);
     lua::registerAudioBindings(state, impl.m_scene, impl.m_audio);
+    lua::registerAnimationBindings(state, impl.m_scene, impl.m_animation);
     lua::registerUiBindings(state, impl.m_gameUi, impl.uiOwner(), impl.m_scene);
     lua::registerMathBindings(state);
     lua::registerInputBindings(state, impl.m_input);
@@ -520,6 +526,7 @@ bool LuaRuntime::update(float deltaSeconds) {
             else { return impl.fail(error); }
         }
     }
+    if (impl.m_animation) { impl.m_animation->update(deltaSeconds, time.m_timeScale); }
     if (impl.m_audio) { impl.m_audio->update(deltaSeconds, impl.m_physics, time.m_timeScale); }
     return true;
 }
@@ -555,6 +562,7 @@ void LuaRuntime::stop() {
     if (impl.m_sharedTime == &impl.m_time) {
         if (impl.m_gameUi) { impl.m_gameUi->clearScene(); }
         if (impl.m_audio) { impl.m_audio->stop(); }
+        if (impl.m_animation) { impl.m_animation->stop(); }
         if (impl.m_physics) { impl.m_physics->stop(); }
     }
 }

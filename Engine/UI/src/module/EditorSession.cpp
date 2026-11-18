@@ -31,7 +31,7 @@
 namespace sat {
 
 EditorSession::State::State(Scene& sceneIn, Project& projectIn, const Input& input)
-    : project(projectIn), scene(sceneIn), input(input), play(input), savedSceneRevision(sceneIn.editRevision()) {}
+    : project(projectIn), scene(sceneIn), input(input), play(input), previewAnimation(sceneIn, AnimationSystem::Mode::Preview), savedSceneRevision(sceneIn.editRevision()) {}
 
 EditorSession::EditorSession(Scene& scene, Project& project, const Input& input)
     : m_state(std::make_unique<State>(scene, project, input)) {
@@ -274,6 +274,7 @@ void EditorSession::finishProjectOpen() {
     state.renderer->setProjectAssetRoot(state.project.root());
     state.renderer->setProjectShaderSource(fileAssetReader(state.project.root()));
     state.play.setAssetReader(fileAssetReader(state.project.root()));
+    state.previewAnimation.setAssetReader(fileAssetReader(state.project.root()));
     if (state.hierarchy) { state.hierarchy->setSelectedIndex(-1); }
     if (state.viewport) { state.viewport->resetInteraction(); }
     state.recent.add(state.project.root());
@@ -322,6 +323,7 @@ bool EditorSession::createProjectFromDialog() {
     state.content->setSelectedAsset({});
     state.project = std::move(created);
     state.play.setAssetReader(fileAssetReader(state.project.root()));
+    state.previewAnimation.setAssetReader(fileAssetReader(state.project.root()));
     state.scene = std::move(loaded);
     recordLoadedScene();
     reloadAssets();

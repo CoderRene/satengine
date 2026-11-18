@@ -42,6 +42,8 @@ struct MeshInstance {
     DVec3 worldPosition{};
     bool combineStatic = false;
     std::uint32_t meshNode = 0;
+    const Mat4* palette = nullptr; // Borrowed through submission.
+    std::uint32_t paletteCount = 0;
 };
 
 struct CameraFrustumInstance {

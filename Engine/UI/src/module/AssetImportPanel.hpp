@@ -1,6 +1,8 @@
 #pragma once
 
 #include "AssetLibrary.hpp"
+#include "AnimationAsset.hpp"
+#include "AnimationSystem.hpp"
 
 #include <cstddef>
 #include <functional>
@@ -9,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <utility>
 
 namespace sat {
 class Project;
@@ -21,7 +24,7 @@ public:
     void select(std::string path);
     void clear();
     [[nodiscard]] bool active() const { return !m_path.empty(); }
-    [[nodiscard]] bool dirty() const { return m_edited != m_saved || m_material != m_savedMaterial; }
+    [[nodiscard]] bool dirty() const { return m_edited != m_saved || m_material != m_savedMaterial || m_clipDirty; }
     [[nodiscard]] const std::string& path() const { return m_path; }
     void request(std::function<void()> action);
     void draw(bool readOnly);
@@ -31,8 +34,9 @@ private:
     struct ImportResult {
         PreparedAssetImport asset;
         std::optional<MaterialData> material;
-        std::vector<std::string> gltfMaterials;
-        std::string gltfStatus;
+        std::vector<std::string> materialNames;
+        std::vector<std::string> textureNames;
+        std::string materialStatus;
         std::string error;
     };
     struct MeshInfo {
@@ -40,6 +44,7 @@ private:
         std::string info;
         std::string error;
         std::vector<std::string> materials;
+        std::vector<std::string> textureNames;
         std::string materialError;
         bool validSettings = false;
     };
@@ -48,15 +53,29 @@ private:
     [[nodiscard]] bool finishImport();
     void revert();
     void drawMaterial(bool readOnly);
-    struct GltfExtraction {
+    struct MaterialExtraction {
         std::vector<MaterialData> materials;
         std::vector<std::string> paths;
         std::vector<GltfImage> images;
         std::vector<bool> overwrite;
     };
-    void drawGltfMaterials();
-    void requestGltfExtraction(bool all);
-    void saveGltfExtraction(GltfExtraction& extraction);
+    void drawMeshMaterials();
+    void drawAnimations();
+    void drawAnimationClip(bool readOnly);
+    bool saveAnimationClip();
+    void extractAnimations(bool all);
+    void saveAnimationExtraction();
+    Scene m_previewScene;
+    AnimationSystem m_previewAnimation{m_previewScene, AnimationSystem::Mode::Preview};
+    EntityId m_previewEntity = kInvalidEntityId;
+    AnimationData m_animations;
+    AnimationClipAsset m_animationClip;
+    bool m_animationsLoaded = false;
+    bool m_clipDirty = false;
+    int m_animationIndex = 0;
+    std::vector<std::pair<std::string, std::string>> m_animationExtraction;
+    void requestMaterialExtraction(bool all);
+    void saveMaterialExtraction(MaterialExtraction& extraction);
     Project& m_project;
     Renderer& m_renderer;
     std::string m_path;
@@ -66,10 +85,11 @@ private:
     MaterialData m_savedMaterial;
     std::vector<std::string> m_texturePaths;
     std::vector<std::string> m_shaderPaths;
-    std::vector<std::string> m_gltfMaterials;
-    std::string m_gltfStatus;
-    std::size_t m_gltfMaterialIndex = 0;
-    std::optional<GltfExtraction> m_gltfExtraction;
+    std::vector<std::string> m_materialNames;
+    std::vector<std::string> m_textureNames;
+    std::string m_materialStatus;
+    std::size_t m_materialIndex = 0;
+    std::optional<MaterialExtraction> m_materialExtraction;
     AssetImportSettings m_saved;
     AssetImportSettings m_edited;
     bool m_valid = true;

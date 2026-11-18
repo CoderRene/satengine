@@ -83,14 +83,47 @@ load as Lit (PBR), and versions 1 and 2 load as Opaque. All versions store base 
 metallic and roughness, emissive RGB and
 normal scale, then four quoted paths in this order: base color, metallic-roughness,
 normal, and emissive. Paths are relative to the project root under `Assets/`.
-Empty paths select defaults. Numeric values are finite and clamped to [0, 1].
-The default material is white with metallic 0 and roughness 0.5.
+Empty paths select defaults. Version 6 adds the occlusion strength and texture.
+Version 7 stores double-sided rendering and per-map UV and sampler settings.
+Version 8 adds transmission, index of refraction, thickness, attenuation, and
+the transmission and thickness texture slots. Version 9 adds clearcoat and its
+weight, roughness, and normal maps.
+Numeric factors are finite. Starting with version 7, normal scale is signed and alpha
+cutoff may exceed 1. The default material is white with metallic 0 and roughness 0.5.
 
-Base color and emissive maps are sampled as sRGB. Normal and metallic-roughness
-maps are linear, with roughness in green and metallic in blue. A material uses
-the sampler settings of its first available texture in the order above. The
-normal map uses tangent space, and OBJ tangents are generated during import.
-Emissive RGB is the emission factor, multiplied by the emissive map when present.
+Base color and emissive maps are sampled as sRGB. Normal, metallic-roughness and
+occlusion maps are linear, with roughness in green, metallic in blue, and
+occlusion in red. The normal map uses tangent space, and OBJ tangents are
+generated during import. Emissive RGB is multiplied by the emissive map when present.
+
+Choose **glTF Materials** in the Mesh inspector to use the model's authored
+materials. Each supported glTF texture slot can use `TEXCOORD_0` or
+`TEXCOORD_1`, a `KHR_texture_transform` transform, and its own wrap and filter
+settings. When no sampler is specified, the texture's import settings apply.
+
+glTF opacity combines the base color factor, texture alpha, and vertex alpha.
+`OPAQUE` ignores the result, `MASK` uses the authored cutoff, and `BLEND` draws
+sections back to front. Double-sided materials render from both sides.
+Imported glass uses `KHR_materials_transmission`, `KHR_materials_ior`, and
+`KHR_materials_volume`. Transmission uses the red texture channel and thickness
+uses green. Roughness and index of refraction drive automatic transmission blur
+up to mip 3. The manual offset can select coarser levels.
+**Transmission Mip** ranges from 0 to 14 and offsets the calculated mip level by
+the selected value minus 1. A value of 1 uses the authored roughness response,
+0 sharpens by one mip level, and higher values increase blur. Fractional values
+blend adjacent levels. The renderer clamps the result to the viewport’s mip
+chain. **Roughness Blur Strength** scales the roughness contribution. At 0,
+Transmission Mip alone sets the blur. At 1, the material uses its full
+roughness response. SatMaterial version 10 stores Transmission Mip, and version 11
+appends Roughness Blur Strength on the last line. Both settings default to 1. To tune an
+imported material, extract it to a `.satmat` and assign it in the Mesh inspector.
+Volume materials also bend and attenuate that sample based on thickness.
+`KHR_materials_clearcoat` adds a separate reflection layer with its own
+roughness and normal, so a polished surface can reflect sharply over a rough
+or translucent base.
+This screen-space pass captures opaque geometry and uses a depth test against it.
+`OPAQUE` coverage is appropriate for a continuous glass surface. Use `MASK`
+when the surface has cutouts. Extracted material assets preserve these settings.
 
 ## Import settings in Inspector
 

@@ -207,7 +207,10 @@ void RenderSession::renderOffscreenView(
         const MeshInstance& selected = drawList.meshes[drawList.selectedMesh];
         const GpuMesh* meshGeometry = m_state->meshPass.geometry(selected);
         if (meshGeometry != nullptr && m_state->outlinePass.ensure(m_state->device)) {
-            m_state->outlinePass.draw(m_state->context, m_state->shaders.program(ShaderId::SelectionOutline), viewProj, selected, *meshGeometry);
+            const bool skinned = meshGeometry->skinBuffer != nullptr;
+            if (!skinned || m_state->meshPass.bindSkin(m_state->context, selected, *meshGeometry)) {
+                m_state->outlinePass.draw(m_state->context, m_state->shaders.program(skinned ? ShaderId::SelectionOutlineSkinned : ShaderId::SelectionOutline), viewProj, selected, *meshGeometry);
+            }
         }
     }
 

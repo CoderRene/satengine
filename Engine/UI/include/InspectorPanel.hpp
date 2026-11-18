@@ -5,6 +5,8 @@
 namespace sat {
 
 class ContentPanel;
+class AnimationSystem;
+class AnimationGraphPanel;
 class Scene;
 class Project;
 struct Entity;
@@ -17,7 +19,7 @@ public:
     InspectorPanel(const InspectorPanel&) = delete;
     InspectorPanel& operator=(const InspectorPanel&) = delete;
 
-    void onImGuiRender(int selectedIndex, Entity* liveEntity, ContentPanel* content);
+    void onImGuiRender(int selectedIndex, Entity* liveEntity, ContentPanel* content, AnimationSystem* animation = nullptr, AnimationGraphPanel* graph = nullptr);
 
 private:
     struct Impl;

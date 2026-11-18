@@ -10,12 +10,13 @@ set(shader_source "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/shaders")
 set(shader_dir "${CMAKE_BINARY_DIR}/Shaders")
 set(shader_generated "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
 set(shader_layout "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/src/module/ShaderLayout.hpp")
-set(shader_shared Common Brdf Lighting Material MeshFragment)
+set(shader_shared Common Brdf Lighting Material MeshFragment Skinning Mesh SelectionOutline)
 list(TRANSFORM shader_shared PREPEND "${shader_source}/")
 list(TRANSFORM shader_shared APPEND ".slang")
 set(shader_flags -target dxbc -profile sm_5_0 -matrix-layout-column-major -O3)
 set(SAT_SHADER_FLAGS "${shader_flags}" CACHE INTERNAL "Slang compile flags")
-foreach(pass Mesh SelectionOutline CameraFrustum TransformGizmo Grid PostProcess Shadow Ui UiEffects UiGradient)
+# The manifest order must match kShaderNames in ShaderLibrary.hpp.
+foreach(pass Mesh SelectionOutline CameraFrustum TransformGizmo Grid PostProcess Shadow Ui UiEffects UiGradient MeshSkinned SelectionOutlineSkinned)
     foreach(stage vs ps)
         if(stage STREQUAL "vs")
             set(shader_stage vertex)
@@ -39,6 +40,7 @@ add_custom_command(OUTPUT "${shader_dir}/ShaderManifest" "${shader_generated}/Sh
         "-DGENERATED=${shader_generated}" "-DENTRIES=${shader_entries}"
         -P "${PROJECT_SOURCE_DIR}/scripts/ShaderManifest.cmake"
     DEPENDS "${shader_layout}" "${CMAKE_CURRENT_SOURCE_DIR}/Core/include/AssetData.hpp"
+        "${CMAKE_CURRENT_LIST_FILE}"
         "${PROJECT_SOURCE_DIR}/scripts/ShaderManifest.cmake"
     VERBATIM)
 list(APPEND shader_outputs "${shader_dir}/ShaderManifest")

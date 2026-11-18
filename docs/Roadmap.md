@@ -4,9 +4,9 @@ SatEngine already lets you open a project, place objects, script them in Lua, pl
 in the editor, and ship a standalone Windows build. This roadmap is the planned
 path from that foundation toward a comfortable tool for making space games.
 
-Priorities lean toward **getting art and motion into the engine**, then making  
-the editor nicer to live in, then deepening space-sim physics and polish.  
-Cross-platform support and “full engine” extras come later and only when they  
+Priorities lean toward **getting animation into the engine**, then making the
+editor nicer to live in, then deepening space-sim physics and polish.
+Cross-platform support and “full engine” extras come later and only when they
 matter for a real game.
 
 ---
@@ -16,8 +16,8 @@ matter for a real game.
 | Status                   | Focus                             | What it unlocks                                        |
 | ------------------------ | --------------------------------- | ------------------------------------------------------ |
 | Done                     | **Working baseline**              | Edit, play, script, physics, audio, UI, package a game |
-| **In progress**          | **Better art import**             | Drop in modern mesh files (glTF) instead of OBJ-only   |
-| Soon                     | **Animation**                     | Moving parts, crew, hatches, turrets, simple cutscenes |
+| Done                     | **Better art import**             | Drop in modern mesh files (glTF) instead of OBJ-only   |
+| **Next**                 | **Animation**                     | Moving parts, crew, hatches, turrets, simple cutscenes |
 | Soon                     | **Editor comfort**                | Undo, snapping, easier multi-object layout             |
 | Later                    | **Richer space physics**          | Docking joints, hinged parts, better station collision |
 | Later                    | **Bigger projects**               | Faster iteration as scenes and asset folders grow      |
@@ -44,7 +44,7 @@ You can use SatEngine today for a small space-game prototype on Windows:
 - An ImGui editor with hierarchy, inspector, content browser, and scene / game views
 - Lua scripts driving gameplay, with physics, audio, input, and on-screen UI
 - Forward PBR lighting, directional shadows, and materials
-- Static OBJ meshes and common image textures
+- Static OBJ and glTF meshes, plus common image textures
 - Rigid bodies with local gravity (no forced “down”)
 - Spatial audio and an RmlUi HUD
 - **Build → Build Standalone** to produce a player `.exe` and packed content
@@ -53,7 +53,7 @@ More detail: [README](../README.md) and the guides in this `docs/` folder.
 
 ---
 
-## In progress — better art import
+## Done — better art import
 
 **Goal:** bring ships and stations in from normal DCC tools without converting
 everything to OBJ first.
@@ -62,12 +62,11 @@ Static **glTF** meshes load from `.gltf` and `.glb` files. The editor can extrac
 a material and its embedded textures. `Examples/AssetLoading` includes a ship
 with an external buffer and texture for standalone packaging.
 
-Animation (skinned meshes) waits until this import path exists. FBX is only on
-the table if glTF turns out not to be enough.
+FBX is only on the table if glTF turns out not to be enough.
 
 ---
 
-## Soon — animation
+## Next — animation
 
 **Goal:** things in the scene can move with authored animation — not only rigid
 physics.

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,7 @@
 #include <numeric>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -37,6 +39,7 @@ struct MaterialResource {
 using Textures = std::unordered_map<std::string, TextureResource, StringHash, std::equal_to<>>;
 struct MeshResource {
     ComPtr<ID3D11Buffer> vertices;
+    ComPtr<ID3D11Buffer> skin;
     ComPtr<ID3D11Buffer> indices;
     GpuMesh view;
     Textures embeddedTextures;
@@ -67,6 +70,16 @@ bool createMesh(ID3D11Device* device, const MeshData& data, MeshResource& resour
         hr = device->CreateBuffer(&desc, &initial, resource.indices.GetAddressOf());
     }
     if (FAILED(hr)) { error = "Cannot create GPU mesh buffers (HRESULT " + std::to_string(hr) + ")"; return false; }
+    if (!data.skinVertices.empty()) {
+        if (data.skinVertices.size() != data.vertices.size()) { error = "Skin vertex count mismatch"; return false; }
+        desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        desc.ByteWidth = static_cast<UINT>(data.skinVertices.size() * sizeof(MeshSkinVertex));
+        initial.pSysMem = data.skinVertices.data();
+        if (FAILED(device->CreateBuffer(&desc, &initial, resource.skin.GetAddressOf()))) { error = "Cannot create skin vertex buffer"; return false; }
+        resource.view.skinBuffer = resource.skin.Get();
+        resource.view.jointBounds = data.jointBounds;
+        resource.view.restPalette = data.restPalette;
+    }
     resource.view.vertexBuffer = resource.vertices.Get();
     resource.view.indexBuffer = resource.indices.Get();
     resource.view.indexCount = static_cast<UINT>(data.indices.size());
@@ -171,6 +184,7 @@ struct GpuAssetCache::Impl {
     std::unordered_map<std::string, MeshResource, StringHash, std::equal_to<>> meshes;
     Textures textures;
     std::array<ComPtr<ID3D11SamplerState>, 6> samplers;
+    std::array<ComPtr<ID3D11SamplerState>, 3 * 3 * 16> materialSamplers;
     std::unordered_map<std::string, MaterialResource, StringHash, std::equal_to<>> materials;
     std::array<TextureResource, 3> defaults;
     bool defaultsReady = false;
@@ -201,17 +215,60 @@ struct GpuAssetCache::Impl {
         if (FAILED(hr)) { error = "Cannot create texture sampler (HRESULT " + std::to_string(hr) + ")"; return false; }
         return true;
     }
+    ID3D11SamplerState* materialSampler(ID3D11Device* device, const MaterialTextureSampling& sampling,
+        std::size_t textureSampler, std::string& error) {
+        if (sampling.useTextureSampler) {
+            return ensureSampler(device, textureSampler, error) ? samplers[textureSampler].Get() : nullptr;
+        }
+        const auto wrapU = static_cast<std::size_t>(sampling.wrapU);
+        const auto wrapV = static_cast<std::size_t>(sampling.wrapV);
+        const std::size_t filter = (sampling.linearMin ? 1 : 0) | (sampling.linearMag ? 2 : 0) |
+            (sampling.linearMip ? 4 : 0) | (sampling.mipmaps ? 8 : 0);
+        auto& sampler = materialSamplers[(wrapU * 3 + wrapV) * 16 + filter];
+        if (!sampler) {
+            constexpr D3D11_TEXTURE_ADDRESS_MODE kAddress[] = {
+                D3D11_TEXTURE_ADDRESS_WRAP, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE_ADDRESS_MIRROR
+            };
+            D3D11_SAMPLER_DESC desc{};
+            desc.Filter = D3D11_ENCODE_BASIC_FILTER(
+                sampling.linearMin ? D3D11_FILTER_TYPE_LINEAR : D3D11_FILTER_TYPE_POINT,
+                sampling.linearMag ? D3D11_FILTER_TYPE_LINEAR : D3D11_FILTER_TYPE_POINT,
+                sampling.linearMip ? D3D11_FILTER_TYPE_LINEAR : D3D11_FILTER_TYPE_POINT,
+                D3D11_FILTER_REDUCTION_TYPE_STANDARD);
+            desc.AddressU = kAddress[wrapU];
+            desc.AddressV = kAddress[wrapV];
+            desc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+            desc.MaxAnisotropy = 1;
+            desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+            desc.MaxLOD = sampling.mipmaps ? D3D11_FLOAT32_MAX : 0.0f;
+            const HRESULT hr = device->CreateSamplerState(&desc, sampler.GetAddressOf());
+            if (FAILED(hr)) { error = "Cannot create material sampler (HRESULT " + std::to_string(hr) + ")"; }
+        }
+        return sampler.Get();
+    }
     bool createMeshAsset(ID3D11Device* device, const MeshData& data, MeshResource& resource,
         std::string& error, std::vector<std::string>& diagnostics) {
         if (!createMesh(device, data, resource, error)) { return false; }
         resource.sourceMaterials = data.materials;
         resource.dependencies = data.dependencies;
         if (!data.materialWarning.empty()) { diagnostics.push_back(data.materialWarning); }
+        std::unordered_set<std::string_view> glassRoughnessMaps;
+        for (const auto& material : data.materials) {
+            if (material.transmission > 0.0f && !material.metallicRoughnessTexture.empty() &&
+                material.textureSampling[1].mipmaps) {
+                glassRoughnessMaps.insert(material.metallicRoughnessTexture);
+            }
+        }
         for (const auto& image : data.embeddedImages) {
             auto& texture = resource.embeddedTextures.try_emplace(image.path).first->second;
             TextureData decoded;
             std::string imageError;
-            if (!importTexture(image.bytes, {}, decoded, imageError) || !createTexture(device, decoded, texture, imageError)) {
+            AssetImportSettings settings;
+            if (glassRoughnessMaps.contains(image.path)) {
+                settings.mipmaps = true;
+                settings.filter = TextureFilter::Trilinear;
+            }
+            if (!importTexture(image.bytes, settings, decoded, imageError) || !createTexture(device, decoded, texture, imageError)) {
                 diagnostics.push_back(image.path + ": " + imageError);
             }
         }
@@ -280,15 +337,21 @@ struct GpuAssetCache::Impl {
     }
     void createMaterial(ID3D11Device* device, std::string_view path, const MaterialData& data,
         MaterialResource& material, Textures* embedded = nullptr) {
-        std::size_t samplerIndex = 4;
+        constexpr std::size_t kDefaultSampler = 4;
         ID3D11ShaderResourceView* views[] = {
-            defaults[0].view.Get(), defaults[0].view.Get(), defaults[1].view.Get(), defaults[2].view.Get(), defaults[0].view.Get()
+            defaults[0].view.Get(), defaults[0].view.Get(), defaults[1].view.Get(), defaults[2].view.Get(),
+            defaults[0].view.Get(), defaults[0].view.Get(), defaults[0].view.Get(),
+            defaults[0].view.Get(), defaults[0].view.Get(), defaults[1].view.Get()
         };
         const std::string* paths[] = {&data.baseColorTexture, &data.metallicRoughnessTexture,
-            &data.normalTexture, &data.emissiveTexture, &data.occlusionTexture};
+            &data.normalTexture, &data.emissiveTexture, &data.occlusionTexture, &data.transmissionTexture, &data.thicknessTexture,
+            &data.clearcoatTexture, &data.clearcoatRoughnessTexture, &data.clearcoatNormalTexture};
+        ID3D11SamplerState* boundSamplers[std::size(paths)]{};
+        std::array<std::size_t, std::size(paths)> samplerIndices;
+        samplerIndices.fill(kDefaultSampler);
         bool hasEmissiveTexture = false;
         bool hasOcclusionTexture = false;
-        bool samplerSelected = false;
+        bool hasClearcoatNormal = false;
         for (std::size_t i = 0; i < std::size(paths); ++i) {
             if (paths[i]->empty()) { continue; }
             TextureResource* texture = nullptr;
@@ -308,23 +371,41 @@ struct GpuAssetCache::Impl {
             views[i] = view;
             hasEmissiveTexture |= i == 3;
             hasOcclusionTexture |= i == 4;
-            if (!samplerSelected) {
-                samplerIndex = texture->sampler;
-                samplerSelected = true;
-            }
+            hasClearcoatNormal |= i == 9;
+            samplerIndices[i] = texture->sampler;
         }
         std::string error;
-        if (!ensureSampler(device, samplerIndex, error)) {
-            errors.push_back(std::string(path) + ": " + error);
-            return;
-        }
-        const MaterialCb parameters{
+        const bool transmissive = data.shader == MaterialShader::Lit && data.transmission > 0.0f &&
+            data.ior > 0.0f && (data.metallic < 1.0f || !data.metallicRoughnessTexture.empty());
+        const bool volume = transmissive && data.thickness > 0.0f;
+        MaterialCb parameters{
             {data.baseColor[0], data.baseColor[1], data.baseColor[2], data.baseColor[3]},
             {data.emissive[0], data.emissive[1], data.emissive[2]}, data.normalScale,
             data.metallic, data.roughness, hasEmissiveTexture ? 1.0f : 0.0f,
             data.shader == MaterialShader::Unlit ? 1.0f : 0.0f,
-            static_cast<float>(data.alphaMode), data.alphaCutoff, data.specularStrength, hasOcclusionTexture ? data.occlusionStrength : 0.0f
+            static_cast<float>(data.alphaMode), data.alphaCutoff, data.specularStrength,
+            hasOcclusionTexture ? data.occlusionStrength : 0.0f, {},
+            transmissive ? data.transmission : 0.0f, data.ior, data.thickness, data.attenuationDistance,
+            {data.attenuationColor[0], data.attenuationColor[1], data.attenuationColor[2]}, data.transmissionMip, {},
+            data.clearcoat, data.clearcoatRoughness, data.clearcoatNormalScale, hasClearcoatNormal ? 1.0f : 0.0f,
+            data.transmissionRoughnessStrength, {}
         };
+        for (std::size_t i = 0; i < std::size(paths); ++i) {
+            const auto& sampling = data.textureSampling[i];
+            boundSamplers[i] = materialSampler(device, sampling, samplerIndices[i], error);
+            if (!boundSamplers[i]) {
+                errors.push_back(std::string(path) + ": " + error);
+                return;
+            }
+            const float c = std::cos(sampling.rotation);
+            const float s = std::sin(sampling.rotation);
+            auto& uv = i < std::size(parameters.uv) ? parameters.uv[i] : parameters.coatUv[i - std::size(parameters.uv)];
+            uv = {
+                {c * sampling.scale[0], -s * sampling.scale[1], s * sampling.scale[0], c * sampling.scale[1]},
+                {sampling.offset[0], sampling.offset[1]}, sampling.texCoord,
+                sampling.texCoord != 0 || sampling.rotation != 0.0f || sampling.scale[0] <= 0.0f || sampling.scale[1] <= 0.0f
+            };
+        }
         D3D11_BUFFER_DESC desc{};
         desc.ByteWidth = sizeof(parameters);
         desc.Usage = D3D11_USAGE_IMMUTABLE;
@@ -335,8 +416,16 @@ struct GpuAssetCache::Impl {
             errors.push_back(std::string(path) + ": cannot create material constant buffer");
             return;
         }
-        material.view = {data.alphaMode, data.shaderPath, material.constants.Get(),
-            {views[0], views[1], views[2], views[3]}, samplers[samplerIndex].Get(), views[4]};
+        auto& gpu = material.view;
+        gpu.alphaMode = data.alphaMode;
+        gpu.shaderPath = data.shaderPath;
+        gpu.constants = material.constants.Get();
+        std::copy_n(views, std::size(gpu.views), gpu.views);
+        std::copy_n(views + std::size(gpu.views), std::size(gpu.extraViews), gpu.extraViews);
+        std::copy_n(boundSamplers, std::size(gpu.samplers), gpu.samplers);
+        gpu.doubleSided = data.doubleSided && !volume;
+        gpu.transmissive = transmissive;
+        gpu.volume = volume;
     }
     void loadMaterial(ID3D11Device* device, std::string_view path) {
         if (materials.contains(path) || (!path.empty() && !hasSpace()) || !ensureDefaults(device)) { return; }
@@ -376,6 +465,7 @@ void GpuAssetCache::setReader(AssetReader reader) {
     m_impl->materials.clear(); m_impl->defaults = {};
     m_impl->defaultsReady = m_impl->defaultsFailed = false;
     m_impl->meshes.clear(); m_impl->textures.clear(); m_impl->samplers = {};
+    m_impl->materialSamplers = {};
     m_impl->errors.clear(); m_impl->reportedCpuErrors = 0; m_impl->limitReported = false;
     m_impl->library.setReader(std::move(reader));
 }

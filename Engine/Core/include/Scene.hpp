@@ -94,6 +94,16 @@ struct ScriptComponent {
     bool operator==(const ScriptComponent&) const = default;
 };
 
+struct AnimatorComponent {
+    std::string clip;
+    std::string controllerPath;
+    bool playOnStart = true;
+    bool loop = true;
+    float speed = 1;
+    float crossfadeSeconds = 0.2f;
+    bool operator==(const AnimatorComponent&) const = default;
+};
+
 struct GameUiComponent {
     std::string documentPath;
     std::string fontPath;
@@ -119,6 +129,8 @@ struct Entity {
     CameraComponent camera;
     bool hasMesh = false;
     MeshComponent mesh;
+    bool hasAnimator = false;
+    AnimatorComponent animator;
     bool hasLight = false;
     LightComponent light;
     std::vector<ScriptComponent> scripts;

@@ -6,5 +6,8 @@ public struct MeshFragment
     public float2 uv : TEXCOORD2;
     public float4 tangent : TEXCOORD3;
     public float clipW : TEXCOORD4;
+    public float2 uv1 : TEXCOORD5;
+    public float4 color : COLOR0;
+    public nointerpolation float3 thicknessScale : TEXCOORD6;
 };
 

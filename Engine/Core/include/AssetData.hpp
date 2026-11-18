@@ -1,12 +1,15 @@
 #pragma once
 
 #include "AssetImportSettings.hpp"
+#include "Math.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <iosfwd>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -37,10 +40,34 @@ struct MeshVertex {
     float u = 0.0f;
     float v = 0.0f;
     float tx = 1.0f, ty = 0.0f, tz = 0.0f, tw = 1.0f;
+    float u1 = 0.0f, v1 = 0.0f;
+    float color[4] = {1, 1, 1, 1};
 };
 enum class MaterialShader { Lit, Unlit, Custom };
 
 enum class AlphaMode { Opaque, Mask, Blend };
+
+enum class MaterialWrap { Repeat, Clamp, Mirror };
+
+struct MaterialTextureSampling {
+    // glTF transform: offset + rotation * (scale * UV), with rotation in radians.
+    float offset[2] = {};
+    float scale[2] = {1, 1};
+    float rotation = 0.0f;
+    unsigned texCoord = 0;
+    MaterialWrap wrapU = MaterialWrap::Repeat;
+    MaterialWrap wrapV = MaterialWrap::Repeat;
+    bool useTextureSampler = true;
+    bool linearMin = true;
+    bool linearMag = true;
+    bool linearMip = true;
+    bool mipmaps = true;
+
+    bool operator==(const MaterialTextureSampling&) const = default;
+};
+
+// A 16384-pixel D3D11 texture reaches one texel on its longest axis at mip 14.
+inline constexpr float kMaxTransmissionMip = 14.0f;
 
 struct MaterialData {
     AlphaMode alphaMode = AlphaMode::Opaque;
@@ -59,6 +86,25 @@ struct MaterialData {
     std::string emissiveTexture;
     std::string occlusionTexture;
     float occlusionStrength = 1.0f;
+    bool doubleSided = false;
+    float transmission = 0.0f;
+    float transmissionMip = 1.0f; // Adds this value minus one to the roughness-driven mip level.
+    float transmissionRoughnessStrength = 1.0f;
+    float ior = 1.5f;
+    float thickness = 0.0f; // Mesh-space distance.
+    float attenuationDistance = 0.0f; // World-space distance. Zero means unlimited.
+    float attenuationColor[3] = {1, 1, 1};
+    std::string transmissionTexture;
+    std::string thicknessTexture;
+    float clearcoat = 0.0f;
+    float clearcoatRoughness = 0.0f;
+    float clearcoatNormalScale = 1.0f;
+    std::string clearcoatTexture;
+    std::string clearcoatRoughnessTexture;
+    std::string clearcoatNormalTexture;
+    // Base color, metallic-roughness, normal, emissive, occlusion, transmission, thickness,
+    // clearcoat, clearcoat roughness, clearcoat normal.
+    std::array<MaterialTextureSampling, 10> textureSampling{};
 
     bool operator==(const MaterialData&) const = default;
 };
@@ -72,6 +118,7 @@ struct MeshSection {
     std::uint32_t firstIndex = 0;
     std::uint32_t indexCount = 0;
     std::uint32_t materialIndex = kNoMeshMaterial; // Index into MeshData::materials.
+    Vec3 thicknessScale{1, 1, 1}; // Scale baked into the vertices during import.
 };
 struct MeshNode {
     std::string name;
@@ -83,8 +130,52 @@ struct MeshNode {
     float minimum[3]{};
     float maximum[3]{};
 };
+inline constexpr std::size_t kMaxAnimationJoints = 256;
+inline constexpr std::size_t kMaxAnimationKeys = 1000000;
+struct AnimationPose {
+    Vec3 translation{};
+    float rotation[4] = {0, 0, 0, 1}; // Quaternion XYZW, left-handed.
+    Vec3 scale{1, 1, 1};
+};
+struct AnimationJoint {
+    std::string name;
+    int parent = -1;
+    AnimationPose restTRS;
+    Mat4 restLocal; // Preserves unanimated matrix nodes, including shear.
+    Mat4 inverseBind;
+};
+enum class AnimationPath : std::uint8_t { Translation, Rotation, Scale };
+enum class AnimationInterpolation : std::uint8_t { Step, Linear, CubicSpline };
+struct AnimationChannel {
+    std::uint16_t joint = 0;
+    AnimationPath path = AnimationPath::Translation;
+    AnimationInterpolation interpolation = AnimationInterpolation::Linear;
+    std::vector<float> times;
+    std::vector<float> values;
+};
+struct AnimationClip {
+    std::string name;
+    float duration = 0;
+    std::vector<AnimationChannel> channels;
+};
+struct AnimationData {
+    std::vector<AnimationJoint> joints;
+    std::vector<AnimationClip> clips;
+};
+struct MeshSkinVertex {
+    std::uint8_t joints[4]{};
+    std::uint8_t weights[4]{};
+};
+static_assert(sizeof(MeshSkinVertex) == 8);
+struct AnimationBounds {
+    Vec3 minimum{}, maximum{};
+    bool valid = false;
+};
 struct MeshData {
     std::vector<MeshVertex> vertices;
+    std::vector<MeshSkinVertex> skinVertices;
+    std::vector<AnimationBounds> jointBounds;
+    std::vector<Mat4> restPalette;
     std::vector<std::uint32_t> indices;
     float minimum[3] = {};
     float maximum[3] = {};
@@ -131,12 +222,24 @@ struct TextureInfo {
 [[nodiscard]] bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error);
 // Importer overload applies source conventions directly, avoiding lossy UV undo.
 [[nodiscard]] bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool rightHanded, bool flipV);
+struct ObjMaterial {
+    std::string name;
+    MaterialData material;
+};
+// Reads definitions in OBJ library order. Repeated definitions replace earlier ones.
+[[nodiscard]] bool decodeObjMaterials(std::string_view bytes, std::string_view path, const AssetReader& reader,
+    std::vector<ObjMaterial>& materials, std::string& error);
+// Produces unique sibling SATMAT paths in source order.
+[[nodiscard]] std::vector<std::string> meshMaterialPaths(std::string_view path, std::span<const std::string> names);
 // Static glTF 2.0 scene flattened into a single left-handed mesh. The reader
 // resolves companion files. Decoder outputs are replaced only on success.
 [[nodiscard]] bool decodeGltf(std::string_view bytes, std::string_view path, const AssetReader& reader,
     MeshData& mesh, std::string& error);
-// Lists names in source index order without reading companion files.
-[[nodiscard]] bool gltfMaterialNames(std::string_view bytes, std::vector<std::string>& names, std::string& error);
+[[nodiscard]] bool decodeGltfAnimation(std::string_view bytes, std::string_view path,
+    const AssetReader& reader, AnimationData& animation, std::string& error);
+// Lists material names and optional texture labels in source index order without reading companion files.
+[[nodiscard]] bool gltfMaterialNames(std::string_view bytes, std::vector<std::string>& names, std::string& error,
+    std::vector<std::string>* textures = nullptr);
 [[nodiscard]] bool decodeGltfMaterial(std::string_view bytes, std::string_view path, const AssetReader& reader,
     std::size_t materialIndex, MaterialData& material, std::vector<GltfImage>& embedded, std::string& error);
 // Decodes all materials in source order and returns each shared embedded image once.

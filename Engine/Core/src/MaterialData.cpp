@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <locale>
 #include <sstream>
@@ -19,7 +21,7 @@ bool decodeMaterial(std::string_view bytes, MaterialData& material, std::string&
     MaterialData candidate;
     std::string magic;
     int version = 0;
-    if (!(in >> magic >> version) || magic != "SatMaterial" || (version < 1 || version > 6)) { return false; }
+    if (!(in >> magic >> version) || magic != "SatMaterial" || (version < 1 || version > 11)) { return false; }
 
     if (version >= 2) {
         std::string shader;
@@ -33,14 +35,16 @@ bool decodeMaterial(std::string_view bytes, MaterialData& material, std::string&
         } else if (shader != "lit") { return false; }
     }
 
+    const auto finite = [&](float& value) { return (in >> value) && std::isfinite(value); };
     const auto channel = [&](float& value) {
-        if (!(in >> value) || !std::isfinite(value)) { return false; }
+        if (!finite(value)) { return false; }
         value = std::clamp(value, 0.0f, 1.0f);
         return true;
     };
     if (version >= 3) {
         std::string mode;
-        if (!(in >> mode) || !channel(candidate.alphaCutoff)) { return false; }
+        if (!(in >> mode) || (version >= 7 ? !finite(candidate.alphaCutoff) || candidate.alphaCutoff < 0.0f :
+            !channel(candidate.alphaCutoff))) { return false; }
         if (mode == "mask") { candidate.alphaMode = AlphaMode::Mask; }
         else if (mode == "blend") { candidate.alphaMode = AlphaMode::Blend; }
         else if (mode != "opaque") { return false; }
@@ -49,7 +53,7 @@ bool decodeMaterial(std::string_view bytes, MaterialData& material, std::string&
     for (float& value : candidate.baseColor) { if (!channel(value)) { return false; } }
     if (!channel(candidate.metallic) || !channel(candidate.roughness)) { return false; }
     for (float& value : candidate.emissive) { if (!channel(value)) { return false; } }
-    if (!channel(candidate.normalScale)) { return false; }
+    if (version >= 7 ? !finite(candidate.normalScale) : !channel(candidate.normalScale)) { return false; }
 
     const auto texturePath = [&](std::string& path) {
         in >> std::ws;
@@ -61,6 +65,40 @@ bool decodeMaterial(std::string_view bytes, MaterialData& material, std::string&
     if (version >= 6 && (!channel(candidate.occlusionStrength) || !texturePath(candidate.occlusionTexture))) {
         return false;
     }
+    if (version >= 7) {
+        if (!(in >> candidate.doubleSided)) { return false; }
+        const std::size_t count = version >= 9 ? candidate.textureSampling.size() : version >= 8 ? 7 : 5;
+        for (std::size_t i = 0; i < count; ++i) {
+            auto& sampling = candidate.textureSampling[i];
+            unsigned wrapU = 0, wrapV = 0;
+            if (!(in >> sampling.texCoord) || sampling.texCoord > 1 ||
+                !finite(sampling.offset[0]) || !finite(sampling.offset[1]) ||
+                !finite(sampling.scale[0]) || !finite(sampling.scale[1]) || !finite(sampling.rotation) ||
+                !(in >> sampling.useTextureSampler >> wrapU >> wrapV >> sampling.linearMin >>
+                    sampling.linearMag >> sampling.linearMip >> sampling.mipmaps) ||
+                wrapU > static_cast<unsigned>(MaterialWrap::Mirror) || wrapV > static_cast<unsigned>(MaterialWrap::Mirror)) {
+                return false;
+            }
+            sampling.wrapU = static_cast<MaterialWrap>(wrapU);
+            sampling.wrapV = static_cast<MaterialWrap>(wrapV);
+        }
+    }
+    if (version >= 8) {
+        if (!channel(candidate.transmission) || !finite(candidate.ior) ||
+            (candidate.ior != 0.0f && candidate.ior < 1.0f) ||
+            !finite(candidate.thickness) || candidate.thickness < 0.0f ||
+            !finite(candidate.attenuationDistance) || candidate.attenuationDistance < 0.0f) { return false; }
+        for (float& value : candidate.attenuationColor) { if (!channel(value)) { return false; } }
+        if (!texturePath(candidate.transmissionTexture) || !texturePath(candidate.thicknessTexture)) { return false; }
+    }
+    if (version >= 9 && (!channel(candidate.clearcoat) || !channel(candidate.clearcoatRoughness) ||
+        !finite(candidate.clearcoatNormalScale) || !texturePath(candidate.clearcoatTexture) ||
+        !texturePath(candidate.clearcoatRoughnessTexture) || !texturePath(candidate.clearcoatNormalTexture))) { return false; }
+    if (version >= 10) {
+        if (!finite(candidate.transmissionMip)) { return false; }
+        candidate.transmissionMip = std::clamp(candidate.transmissionMip, 0.0f, kMaxTransmissionMip);
+    }
+    if (version >= 11 && !channel(candidate.transmissionRoughnessStrength)) { return false; }
     in >> std::ws;
     if (!in.eof()) { return false; }
     material = std::move(candidate);
@@ -72,7 +110,22 @@ std::string encodeMaterial(const MaterialData& material) {
     std::ostringstream out;
     out.imbue(std::locale::classic());
     const bool hasOcclusion = !material.occlusionTexture.empty() || material.occlusionStrength != 1.0f;
-    out << (hasOcclusion ? "SatMaterial 6\n" : "SatMaterial 5\n") << std::setprecision(std::numeric_limits<float>::max_digits10);
+    const bool hasSampling = material.doubleSided || material.textureSampling != decltype(material.textureSampling){} ||
+        material.alphaCutoff > 1.0f || material.normalScale < 0.0f || material.normalScale > 1.0f;
+    const bool hasGlass = material.transmission != 0.0f || material.ior != 1.5f || material.thickness != 0.0f ||
+        material.attenuationDistance != 0.0f || !material.transmissionTexture.empty() || !material.thicknessTexture.empty() ||
+        std::any_of(std::begin(material.attenuationColor), std::end(material.attenuationColor),
+            [](float value) { return value != 1.0f; }) ||
+        material.textureSampling[5] != MaterialTextureSampling{} || material.textureSampling[6] != MaterialTextureSampling{};
+    const bool hasCoat = material.clearcoat != 0.0f || material.clearcoatRoughness != 0.0f ||
+        material.clearcoatNormalScale != 1.0f || !material.clearcoatTexture.empty() ||
+        !material.clearcoatRoughnessTexture.empty() || !material.clearcoatNormalTexture.empty() ||
+        std::any_of(material.textureSampling.begin() + 7, material.textureSampling.end(),
+            [](const auto& sampling) { return sampling != MaterialTextureSampling{}; });
+    const int version = material.transmissionRoughnessStrength != 1.0f ? 11 :
+        material.transmissionMip != 1.0f ? 10 : hasCoat ? 9 : hasGlass ? 8 : hasSampling ? 7 : hasOcclusion ? 6 : 5;
+    out << "SatMaterial " << version << '\n'
+        << std::setprecision(std::numeric_limits<float>::max_digits10);
     if (material.shader == MaterialShader::Custom) {
         out << "custom " << std::quoted(material.shaderPath) << '\n';
     } else {
@@ -89,9 +142,34 @@ std::string encodeMaterial(const MaterialData& material) {
         << material.normalScale << '\n'
         << std::quoted(material.baseColorTexture) << '\n' << std::quoted(material.metallicRoughnessTexture) << '\n'
         << std::quoted(material.normalTexture) << '\n' << std::quoted(material.emissiveTexture) << '\n';
-    if (hasOcclusion) {
+    if (version >= 6) {
         out << material.occlusionStrength << '\n' << std::quoted(material.occlusionTexture) << '\n';
     }
+    if (version >= 7) {
+        out << material.doubleSided << '\n';
+        const std::size_t count = version >= 9 ? material.textureSampling.size() : version >= 8 ? 7 : 5;
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto& sampling = material.textureSampling[i];
+            out << sampling.texCoord << ' ' << sampling.offset[0] << ' ' << sampling.offset[1] << ' '
+                << sampling.scale[0] << ' ' << sampling.scale[1] << ' ' << sampling.rotation << ' '
+                << sampling.useTextureSampler << ' ' << static_cast<unsigned>(sampling.wrapU) << ' '
+                << static_cast<unsigned>(sampling.wrapV) << ' ' << sampling.linearMin << ' ' << sampling.linearMag << ' '
+                << sampling.linearMip << ' ' << sampling.mipmaps << '\n';
+        }
+    }
+    if (version >= 8) {
+        out << material.transmission << ' ' << material.ior << ' ' << material.thickness << ' '
+            << material.attenuationDistance << ' ' << material.attenuationColor[0] << ' '
+            << material.attenuationColor[1] << ' ' << material.attenuationColor[2] << '\n'
+            << std::quoted(material.transmissionTexture) << '\n' << std::quoted(material.thicknessTexture) << '\n';
+    }
+    if (version >= 9) {
+        out << material.clearcoat << ' ' << material.clearcoatRoughness << ' ' << material.clearcoatNormalScale << '\n'
+            << std::quoted(material.clearcoatTexture) << '\n' << std::quoted(material.clearcoatRoughnessTexture) << '\n'
+            << std::quoted(material.clearcoatNormalTexture) << '\n';
+    }
+    if (version >= 10) { out << material.transmissionMip << '\n'; }
+    if (version >= 11) { out << material.transmissionRoughnessStrength << '\n'; }
     return out.str();
 }
 

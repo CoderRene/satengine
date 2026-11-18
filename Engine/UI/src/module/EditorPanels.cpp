@@ -52,7 +52,7 @@ void EditorSession::drawPanels() {
         const int selected = state.hierarchy ? state.hierarchy->selectedIndex() : -1;
         const Entity* authored = selected >= 0 ? state.scene.entity(static_cast<std::size_t>(selected)) : nullptr;
         Entity* live = playing && authored ? state.play.game().entityById(authored->id()) : nullptr;
-        state.inspector->onImGuiRender(selected, live, state.content.get());
+        state.inspector->onImGuiRender(selected, live, state.content.get(), playing ? &state.play.animation() : &state.previewAnimation, state.animationGraph.get());
     }
     ImGui::EndDisabled();
 
@@ -61,6 +61,12 @@ void EditorSession::drawPanels() {
         state.content->onImGuiRender(playing, drops, !sceneReadOnly && !state.assetImports->dirty());
     }
 
+    const int animationIndex = state.hierarchy ? state.hierarchy->selectedIndex() : -1;
+    const auto* animationEntity = animationIndex >= 0 ? state.scene.entity(static_cast<std::size_t>(animationIndex)) : nullptr;
+    if (state.animationGraph) {
+        state.animationGraph->draw(playing ? &state.play.animation() : &state.previewAnimation,
+            animationEntity ? animationEntity->id() : kInvalidEntityId);
+    }
     if (state.luaLog) {
         const bool focusLog = state.play.takeFocusLog();
         state.luaLog->onImGuiRender(focusLog);

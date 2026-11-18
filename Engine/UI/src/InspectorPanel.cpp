@@ -1,4 +1,11 @@
 #include "InspectorPanel.hpp"
+#include "AnimationAsset.hpp"
+#include "AnimationGraph.hpp"
+#include "AnimationSystem.hpp"
+#include "AssetLibrary.hpp"
+#include "module/AnimationGraphPanel.hpp"
+#include "module/AssetWrite.hpp"
+#include "module/ContentDragDrop.hpp"
 
 #include "ContentPanel.hpp"
 #include "Scene.hpp"
@@ -109,6 +116,8 @@ struct InspectorPanel::Impl {
     std::unordered_map<std::string, FieldCache> m_scriptFields;
     std::vector<std::string> meshes;
     std::vector<std::string> materials;
+    std::vector<std::string> animationClips, controllers;
+    bool controllerMode = false;
     std::vector<std::string> clips;
     std::vector<std::string> uiDocuments;
     std::vector<std::string> uiFonts;
@@ -117,6 +126,7 @@ struct InspectorPanel::Impl {
     void refreshAssets() {
         meshes.clear();
         materials.clear();
+        animationClips.clear(); controllers.clear();
         clips.clear();
         uiDocuments.clear();
         uiFonts.clear();
@@ -130,6 +140,8 @@ struct InspectorPanel::Impl {
                 const auto encoded = current->path().lexically_relative(project->root()).generic_u8string();
                 const std::string path(encoded.begin(), encoded.end());
                 if (isMeshAssetPath(path)) { meshes.push_back(path); }
+                if (isAnimationClipAssetPath(path)) { animationClips.push_back(path); }
+                if (isAnimationGraphAssetPath(path)) { controllers.push_back(path); }
                 if (isMaterialAssetPath(path)) { materials.push_back(path); }
                 if (isAudioAssetPath(path)) { clips.push_back(path); }
                 if (isUiDocumentPath(path)) { uiDocuments.push_back(path); }
@@ -263,7 +275,7 @@ InspectorPanel::InspectorPanel(Scene& scene, Project& project)
 
 InspectorPanel::~InspectorPanel() = default;
 
-void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, ContentPanel* content) {
+void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, ContentPanel* content, AnimationSystem* animation, AnimationGraphPanel* graph) {
     if (!ImGui::Begin("Inspector")) {
         ImGui::End();
         return;
@@ -278,6 +290,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
     if (m_impl->m_fieldEntity != fieldEntity || m_impl->m_fieldProjectRoot != m_impl->project->root()) {
         m_impl->m_scriptFields.clear();
         m_impl->m_fieldEntity = fieldEntity;
+        m_impl->controllerMode = entity && !entity->animator.controllerPath.empty();
         m_impl->m_fieldProjectRoot = m_impl->project->root();
     }
     if (entity == nullptr) {
@@ -418,6 +431,79 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
     }
 
     changed |= drawPhysicsInspector(*entity);
+    if (entity->hasAnimator && ImGui::CollapsingHeader("Animator", ImGuiTreeNodeFlags_DefaultOpen)) {
+        auto& animator = entity->animator;
+        int mode = m_impl->controllerMode ? 1 : 0;
+        if (ImGui::Combo("Mode", &mode, "Clip\0Controller\0")) {
+            m_impl->controllerMode = mode == 1;
+            if (!m_impl->controllerMode) { animator.controllerPath.clear(); changed = true; }
+        }
+        if (m_impl->controllerMode) {
+            changed |= m_impl->assetPicker("Controller", "None", animator.controllerPath, m_impl->controllers);
+            if (ImGui::BeginDragDropTarget()) {
+                const auto path = draggedContentPath(ImGui::GetDragDropPayload());
+                if (isAnimationGraphAssetPath(path) && ImGui::AcceptDragDropPayload(kContentFilePayload)) { animator.controllerPath = path; changed = true; }
+                ImGui::EndDragDropTarget();
+            }
+            if (graph && !animator.controllerPath.empty() && ImGui::Button("Edit Controller")) { graph->open(animator.controllerPath); }
+            if (ImGui::Button("New Controller")) {
+                AnimationGraph controller;
+                std::string clip = animator.clip;
+                if (clip.empty() && animation) { const auto names = animation->clipNames(entity->mesh.meshPath); if (!names.empty()) { clip = names.front(); } }
+                controller.states.push_back({"Idle", clip});
+                std::string bytes;
+                std::string path = "Assets/Controller.satanimfsm";
+                std::error_code error;
+                unsigned suffix = 1;
+                while (std::filesystem::exists(m_impl->project->root() / path, error) && !error) { path = "Assets/Controller" + std::to_string(suffix++) + ".satanimfsm"; }
+                if (!error && encodeAnimationGraph(controller, bytes, m_impl->assetError) &&
+                    writeAsset(m_impl->project->root() / path, path, bytes, m_impl->assetError)) {
+                    animator.controllerPath = path; changed = true; if (graph) { graph->open(path); }
+                }
+            }
+        } else {
+            changed |= m_impl->assetPicker("Clip Asset", "Embedded clip", animator.clip, m_impl->animationClips);
+            if (ImGui::BeginDragDropTarget()) {
+                const auto path = draggedContentPath(ImGui::GetDragDropPayload());
+                if (isAnimationClipAssetPath(path) && ImGui::AcceptDragDropPayload(kContentFilePayload)) { animator.clip = path; changed = true; }
+                ImGui::EndDragDropTarget();
+            }
+            if (animation && ImGui::BeginCombo("Embedded Clip", animator.clip.c_str())) {
+                for (const auto& name : animation->clipNames(entity->mesh.meshPath)) {
+                    if (ImGui::Selectable(name.c_str(), name == animator.clip)) { animator.clip = name; changed = true; }
+                }
+                ImGui::EndCombo();
+            }
+        }
+        if (!m_impl->controllerMode) {
+            changed |= ImGui::Checkbox("Play On Start", &animator.playOnStart);
+            changed |= ImGui::Checkbox("Loop Animation", &animator.loop);
+        }
+        changed |= ImGui::InputFloat("Playback Speed", &animator.speed);
+        if (!m_impl->controllerMode) {
+            changed |= ImGui::DragFloat("Crossfade Seconds", &animator.crossfadeSeconds, 0.01f, 0, 60);
+        } else if (const float defaultCrossfade = AnimatorComponent{}.crossfadeSeconds;
+            animator.crossfadeSeconds != defaultCrossfade) {
+            animator.crossfadeSeconds = defaultCrossfade;
+            changed = true;
+        }
+        if (animation) {
+            if (ImGui::Button(animation->isPlaying(entity->id()) ? "Pause Preview" : "Play Preview")) {
+                if (animation->isPlaying(entity->id())) { animation->stop(entity->id()); }
+                else { (void)animation->resume(entity->id()); }
+            }
+            float time = animation->time(entity->id());
+            float duration = 1;
+            AnimationClipAsset clip;
+            if (isAnimationClipAssetPath(animator.clip)) {
+                std::string bytes, error;
+                if (fileAssetReader(m_impl->project->root())(animator.clip, bytes, error) == AssetReadResult::Found && decodeAnimationClip(bytes, clip, error)) { duration = clip.endSeconds - clip.startSeconds; }
+            } else { duration = std::max(1.0f, time + 1); }
+            if (ImGui::SliderFloat("Time", &time, 0, duration)) { (void)animation->setTime(entity->id(), time); }
+            if (!animation->error().empty()) { ImGui::TextWrapped("%s", animation->error().c_str()); }
+        }
+        if (ImGui::Button("Remove Animator")) { entity->hasAnimator = false; entity->animator = {}; changed = true; }
+    }
     if (entity->hasAudioSource && componentHeader("Audio Source", {entity->audioSource.clipPath})) {
         auto& source = entity->audioSource;
         changed |= m_impl->assetPicker("Clip", "None", source.clipPath, m_impl->clips);
@@ -489,6 +575,9 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             entity->hasLight = true;
             entity->light = {};
             changed = true;
+        }
+        if (ImGui::MenuItem("Animator", nullptr, false, !entity->hasAnimator && entity->hasMesh && !entity->mesh.meshNode && isGltfAssetPath(entity->mesh.meshPath))) {
+            entity->hasAnimator = true; entity->animator = {}; changed = true;
         }
         if (ImGui::MenuItem("Audio Source", nullptr, false, !entity->hasAudioSource)) {
             entity->hasAudioSource = true;

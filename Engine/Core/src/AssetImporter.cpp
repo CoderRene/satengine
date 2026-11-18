@@ -15,8 +15,8 @@ bool valid(const AssetImportSettings& settings, std::string& error) {
     AssetImportSettings checked;
     return parseImportSettings(serializeImportSettings(settings), checked, error);
 }
-// Group opaque and alpha-masked ranges in first-use order. Blended ranges
-// retain separate bounds and draw order for back-to-front sorting.
+// Group opaque and alpha-masked ranges in first-use order. Retain blended
+// ranges for sorting and volume ranges for their baked thickness scales.
 void mergeMeshSections(MeshData& mesh) {
     if (mesh.sections.size() < 2) { return; }
 
@@ -28,12 +28,13 @@ void mergeMeshSections(MeshData& mesh) {
     merged.reserve(mesh.sections.size());
     for (const auto& section : mesh.sections) {
         const bool hasMaterial = section.materialIndex < mesh.materials.size();
-        const bool blended = hasMaterial && mesh.materials[section.materialIndex].alphaMode == AlphaMode::Blend;
+        const bool separate = hasMaterial && (mesh.materials[section.materialIndex].alphaMode == AlphaMode::Blend ||
+            mesh.materials[section.materialIndex].thickness > 0.0f);
         auto& materialGroup = materialGroups[hasMaterial ? section.materialIndex : mesh.materials.size()];
-        if (blended || materialGroup == kUnassigned) {
-            if (!blended) { materialGroup = merged.size(); }
+        if (separate || materialGroup == kUnassigned) {
+            if (!separate) { materialGroup = merged.size(); }
             sectionGroups.push_back(merged.size());
-            merged.push_back({0, section.indexCount, section.materialIndex});
+            merged.push_back(section);
         } else {
             sectionGroups.push_back(materialGroup);
             merged[materialGroup].indexCount += section.indexCount;
@@ -118,7 +119,15 @@ bool importMesh(std::string_view path, std::string_view bytes, const AssetReader
             }
         }
     }
-    if (settings.mergeGeometry) {
+    for (auto& palette : candidate.restPalette) {
+        palette.m[12] *= settings.scale; palette.m[13] *= settings.scale; palette.m[14] *= settings.scale;
+    }
+    for (auto& bounds : candidate.jointBounds) {
+        bounds.minimum = bounds.minimum * settings.scale;
+        bounds.maximum = bounds.maximum * settings.scale;
+    }
+    for (auto& section : candidate.sections) { section.thicknessScale = section.thicknessScale * settings.scale; }
+    if (settings.mergeGeometry && candidate.skinVertices.empty()) {
         mergeMeshSections(candidate);
         candidate.mergeNodeDraws = !candidate.nodes.empty();
     }

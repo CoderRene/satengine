@@ -16,6 +16,7 @@ class ScriptLog;
 class PhysicsSystem;
 class GameUi;
 class AudioSystem;
+class AnimationSystem;
 
 // Script names are relative to Scripts/, using '/' separators (e.g. main.lua).
 struct LuaScriptSource {
@@ -32,7 +33,7 @@ struct LuaScriptSource {
 class LuaRuntime {
 public:
     explicit LuaRuntime(Scene& scene, const Input* input = nullptr, ScriptLog* log = nullptr,
-                        PhysicsSystem* physics = nullptr, AudioSystem* audio = nullptr);
+                        PhysicsSystem* physics = nullptr, AudioSystem* audio = nullptr, AnimationSystem* animation = nullptr);
     // Borrowed input, physics and audio must outlive the runtime. Null input is idle.
     // The session starts and stops the borrowed physics and audio systems.
     ~LuaRuntime();

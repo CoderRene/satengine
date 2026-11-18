@@ -47,7 +47,13 @@ void RenderSession::uploadReadyThumbnails() {
     }
 }
 
-AssetThumbnail RenderSession::assetThumbnail(std::string_view path) {
+AssetThumbnail RenderSession::assetThumbnail(std::string_view path, std::span<const Mat4> palette) {
+    if (!palette.empty() && isGltfAssetPath(path) && valid()) {
+        MeshInstance mesh; mesh.meshPath = path;
+        SceneDrawList draw; draw.meshes = &mesh; draw.meshCount = 1;
+        m_state->meshPass.prepareAssets(m_state->device, draw);
+        renderThumbnail(std::string(path), m_state->meshPass, palette);
+    }
     if (m_state->thumbnailsDirty || !valid()) { return {}; }
     if (!isTextureAssetPath(path) && !isMeshAssetPath(path) && !isMaterialAssetPath(path)) { return {}; }
     auto& cache = m_state->thumbnails;
@@ -59,7 +65,7 @@ AssetThumbnail RenderSession::assetThumbnail(std::string_view path) {
     return {};
 }
 
-void RenderSession::renderThumbnail(std::string path, MeshPass& pass) {
+void RenderSession::renderThumbnail(std::string path, MeshPass& pass, std::span<const Mat4> palette) {
     const bool isMesh = isMeshAssetPath(path);
     auto& entry = m_state->thumbnails.try_emplace(path).first->second;
     entry.lastUsed = m_state->thumbnailFrame;
@@ -78,6 +84,7 @@ void RenderSession::renderThumbnail(std::string path, MeshPass& pass) {
     std::memcpy(camera.view, view.m, sizeof(camera.view));
     std::memcpy(camera.projection, projection.m, sizeof(camera.projection));
     MeshInstance mesh;
+    mesh.palette = palette.data(); mesh.paletteCount = static_cast<std::uint32_t>(palette.size());
     if (isMesh) {
         mesh.meshPath = path;
     } else {
@@ -115,6 +122,13 @@ void RenderSession::renderThumbnail(std::string path, MeshPass& pass) {
     D3D11_TEXTURE2D_DESC desc{};
     preview.color->GetDesc(&desc);
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    if (entry.view) {
+        Microsoft::WRL::ComPtr<ID3D11Resource> image;
+        entry.view->GetResource(image.GetAddressOf());
+        m_state->context->OMSetRenderTargets(0, nullptr, nullptr);
+        m_state->context->CopyResource(image.Get(), preview.color);
+        return;
+    }
     Microsoft::WRL::ComPtr<ID3D11Texture2D> image;
     if (FAILED(m_state->device->CreateTexture2D(&desc, nullptr, image.GetAddressOf())) ||
         FAILED(m_state->device->CreateShaderResourceView(image.Get(), nullptr, entry.view.GetAddressOf()))) {

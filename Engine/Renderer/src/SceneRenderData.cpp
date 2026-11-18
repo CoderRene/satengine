@@ -1,4 +1,5 @@
 #include "SceneRenderData.hpp"
+#include "AnimationSystem.hpp"
 
 #include <cstring>
 
@@ -18,7 +19,7 @@ Vec3 ambientRadiance(const LightingSettings& settings) {
         settings.ambientIntensity;
 }
 
-void SceneRenderData::update(const Scene& scene, int width, int height) {
+void SceneRenderData::update(const Scene& scene, int width, int height, const AnimationSystem* animation) {
     m_camera = GameViewCamera{};
     m_meshes.clear();
     m_lights.clear();
@@ -62,6 +63,12 @@ void SceneRenderData::update(const Scene& scene, int width, int height) {
         instance.worldPosition = entity.transform.position;
         instance.combineStatic = entity.mesh.combineStatic;
         instance.meshNode = entity.mesh.meshNode;
+        if (animation && entity.hasAnimator) {
+            const auto palette = animation->palette(entity.id());
+            instance.palette = palette.data();
+            instance.paletteCount = static_cast<std::uint32_t>(palette.size());
+            instance.combineStatic = false;
+        }
         switch (entity.mesh.primitive) {
         case MeshComponent::Primitive::Cube:
             instance.primitive = MeshPrimitive::Cube;

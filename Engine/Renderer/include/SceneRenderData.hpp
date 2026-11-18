@@ -8,9 +8,10 @@
 namespace sat {
 
 // Converts scene state into runtime render data without editor dependencies.
+class AnimationSystem;
 class SceneRenderData {
 public:
-    void update(const Scene& scene, int width, int height);
+    void update(const Scene& scene, int width, int height, const AnimationSystem* animation = nullptr);
     [[nodiscard]] const GameViewCamera& camera() const { return m_camera; }
     [[nodiscard]] bool hasCamera() const { return m_hasCamera; }
     // Borrowed mesh and light storage remains valid until the next update or destruction.

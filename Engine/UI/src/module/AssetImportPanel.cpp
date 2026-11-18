@@ -1,4 +1,5 @@
 #include "AssetImportPanel.hpp"
+#include "AssetWrite.hpp"
 #include "ContentDragDrop.hpp"
 #include "CursorWrap.hpp"
 
@@ -37,28 +38,18 @@ bool assignDroppedAsset(std::string& path, bool (*matches)(std::string_view)) {
 std::filesystem::path assetFile(const Project& project, std::string_view path) {
     return project.root() / std::filesystem::path(std::u8string(path.begin(), path.end()));
 }
-bool writeAsset(const std::filesystem::path& destination, std::string_view path, std::string_view bytes, std::string& error) {
-    auto temp = destination;
-    temp += ".tmp";
-    std::error_code ec;
-    const auto status = std::filesystem::symlink_status(temp, ec);
-    if ((ec && ec != std::errc::no_such_file_or_directory) ||
-        (std::filesystem::exists(status) && !std::filesystem::is_regular_file(status))) {
-        error = "Cannot use temporary file for " + std::string(path);
-        return false;
+void collectObjMaterialNames(const std::vector<ObjMaterial>& materials, std::vector<std::string>& names) {
+    names.reserve(materials.size());
+    for (const auto& material : materials) { names.push_back(material.name); }
+}
+void readMeshMaterialNames(std::string_view bytes, std::string_view path, const AssetReader& reader,
+    std::vector<std::string>& names, std::vector<std::string>& textures, std::string& error) {
+    if (isGltfAssetPath(path)) {
+        (void)gltfMaterialNames(bytes, names, error, &textures);
+    } else {
+        std::vector<ObjMaterial> materials;
+        if (decodeObjMaterials(bytes, path, reader, materials, error)) { collectObjMaterialNames(materials, names); }
     }
-    ec.clear();
-    std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-    if (!out) { error = "Cannot open temporary file for " + std::string(path); return false; }
-    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    out.close();
-    if (out) { std::filesystem::rename(temp, destination, ec); }
-    if (!out || ec) {
-        error = "Cannot save " + std::string(path) + (ec ? ": " + ec.message() : "");
-        std::filesystem::remove(temp, ec);
-        return false;
-    }
-    return true;
 }
 bool fileEntryExists(const std::filesystem::path& file, std::error_code& error) {
     const auto status = std::filesystem::symlink_status(file, error);
@@ -89,7 +80,9 @@ std::string AssetImportPanel::updateMaterialReferences(std::string_view oldPath,
         }
         bool changed = false;
         for (auto* reference : {&material.baseColorTexture, &material.metallicRoughnessTexture,
-                &material.normalTexture, &material.emissiveTexture, &material.occlusionTexture, &material.shaderPath}) {
+                &material.normalTexture, &material.emissiveTexture, &material.occlusionTexture,
+                &material.transmissionTexture, &material.thicknessTexture, &material.clearcoatTexture,
+                &material.clearcoatRoughnessTexture, &material.clearcoatNormalTexture, &material.shaderPath}) {
             if (*reference == oldPath) {
                 *reference = newPath;
                 changed = true;
@@ -109,6 +102,8 @@ void AssetImportPanel::select(std::string path) {
     revert();
 }
 void AssetImportPanel::clear() {
+    m_previewAnimation.stop(); m_previewScene.clear(); m_previewEntity = kInvalidEntityId;
+    m_animations = {}; m_animationsLoaded = false; m_clipDirty = false; m_animationExtraction.clear();
     m_meshInfoPending = false;
     m_meshInfoObsolete = true;
     m_path.clear();
@@ -121,12 +116,19 @@ void AssetImportPanel::clear() {
     m_savedMaterial = {};
     m_texturePaths.clear();
     m_shaderPaths.clear();
-    m_gltfMaterials.clear();
-    m_gltfStatus.clear();
-    m_gltfMaterialIndex = 0;
-    m_gltfExtraction.reset();
+    m_materialNames.clear();
+    m_textureNames.clear();
+    m_materialStatus.clear();
+    m_materialIndex = 0;
+    m_materialExtraction.reset();
 }
 void AssetImportPanel::revert() {
+    if (isAnimationClipAssetPath(m_path)) {
+        std::string bytes;
+        m_valid = fileAssetReader(m_project.root())(m_path, bytes, m_error) == AssetReadResult::Found && decodeAnimationClip(bytes, m_animationClip, m_error);
+        m_clipDirty = false;
+        return;
+    }
     if (isMeshAssetPath(m_path)) {
         m_meshInfoPending = true;
         m_meshInfoObsolete = true;
@@ -189,9 +191,10 @@ void AssetImportPanel::pollMeshInfo() {
                 m_valid = result.validSettings;
                 m_info = std::move(result.info);
                 m_error = std::move(result.error);
-                m_gltfMaterials = std::move(result.materials);
-                m_gltfStatus = std::move(result.materialError);
-                if (m_gltfMaterialIndex >= m_gltfMaterials.size()) { m_gltfMaterialIndex = 0; }
+                m_materialNames = std::move(result.materials);
+                m_textureNames = std::move(result.textureNames);
+                m_materialStatus = std::move(result.materialError);
+                if (m_materialIndex >= m_materialNames.size()) { m_materialIndex = 0; }
             }
         } catch (const std::exception& error) {
             if (!m_meshInfoObsolete) { m_error = "Cannot read mesh: " + std::string(error.what()); }
@@ -209,8 +212,8 @@ void AssetImportPanel::pollMeshInfo() {
             if (!result.validSettings) { return result; }
             const AssetReader readMesh = [&](std::string_view file, std::string& output, std::string& error) {
                 const auto read = reader(file, output, error);
-                if (read == AssetReadResult::Found && file == path && isGltfAssetPath(path)) {
-                    (void)gltfMaterialNames(output, result.materials, result.materialError);
+                if (read == AssetReadResult::Found && file == path) {
+                    readMeshMaterialNames(output, path, reader, result.materials, result.textureNames, result.materialError);
                 }
                 return read;
             };
@@ -242,12 +245,12 @@ void AssetImportPanel::startImport(bool reimport) {
                         result.material = std::move(validated);
                     }
                 } else if (decodeAssetImport(reader, path, reimport ? nullptr : &settings, result.asset, result.error) &&
-                    reimport && isGltfAssetPath(path)) {
+                    reimport && isMeshAssetPath(path)) {
                     std::string bytes;
-                    if (reader(path, bytes, result.gltfStatus) == AssetReadResult::Found) {
-                        (void)gltfMaterialNames(bytes, result.gltfMaterials, result.gltfStatus);
-                    } else if (result.gltfStatus.empty()) {
-                        result.gltfStatus = "Cannot read glTF source";
+                    if (reader(path, bytes, result.materialStatus) == AssetReadResult::Found) {
+                        readMeshMaterialNames(bytes, path, reader, result.materialNames, result.textureNames, result.materialStatus);
+                    } else if (result.materialStatus.empty()) {
+                        result.materialStatus = "Cannot read model source";
                     }
                 }
                 return result;
@@ -291,10 +294,11 @@ bool AssetImportPanel::finishImport() {
     m_saved = m_edited = settings;
     m_valid = true;
     m_info = m_renderer.assetInfo(m_path);
-    if (m_reimport && isGltfAssetPath(m_path)) {
-        m_gltfMaterials = std::move(result.gltfMaterials);
-        m_gltfStatus = std::move(result.gltfStatus);
-        if (m_gltfMaterialIndex >= m_gltfMaterials.size()) { m_gltfMaterialIndex = 0; }
+    if (m_reimport && isMeshAssetPath(m_path)) {
+        m_materialNames = std::move(result.materialNames);
+        m_textureNames = std::move(result.textureNames);
+        m_materialStatus = std::move(result.materialStatus);
+        if (m_materialIndex >= m_materialNames.size()) { m_materialIndex = 0; }
     }
     return true;
 }
@@ -334,6 +338,7 @@ void AssetImportPanel::drawMaterial(bool readOnly) {
     if (m_material.alphaMode == AlphaMode::Mask) {
         ImGui::SliderFloat("Alpha Cutoff", &m_material.alphaCutoff, 0, 1, "%.2f", ImGuiSliderFlags_AlwaysClamp);
     }
+    ImGui::Checkbox("Double Sided", &m_material.doubleSided);
     ImGui::ColorEdit4("Base Color", m_material.baseColor);
     ImGui::BeginDisabled(m_material.shader == MaterialShader::Unlit);
     ImGui::SliderFloat("Metallic", &m_material.metallic, 0, 1, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -362,6 +367,33 @@ void AssetImportPanel::drawMaterial(bool readOnly) {
     picker("Normal Texture", m_material.normalTexture);
     picker("Occlusion Texture", m_material.occlusionTexture);
     picker("Emissive Texture", m_material.emissiveTexture);
+    ImGui::SliderFloat("Clearcoat", &m_material.clearcoat, 0, 1, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    if (m_material.clearcoat > 0.0f) {
+        picker("Clearcoat Texture", m_material.clearcoatTexture);
+        ImGui::SliderFloat("Clearcoat Roughness", &m_material.clearcoatRoughness, 0, 1, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        picker("Clearcoat Roughness Texture", m_material.clearcoatRoughnessTexture);
+        picker("Clearcoat Normal Texture", m_material.clearcoatNormalTexture);
+        if (!m_material.clearcoatNormalTexture.empty()) {
+            ImGui::DragFloat("Clearcoat Normal Scale", &m_material.clearcoatNormalScale, 0.01f);
+        }
+    }
+    ImGui::SliderFloat("Transmission", &m_material.transmission, 0, 1, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    if (m_material.transmission > 0.0f) {
+        picker("Transmission Texture", m_material.transmissionTexture);
+        ImGui::SliderFloat("Transmission Mip", &m_material.transmissionMip, 0, kMaxTransmissionMip, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SliderFloat("Roughness Blur Strength", &m_material.transmissionRoughnessStrength, 0, 1, "%.2f",
+            ImGuiSliderFlags_AlwaysClamp);
+        ImGui::DragFloat("Index of Refraction", &m_material.ior, 0.01f, 1.0f, 0.0f, "%.3f");
+        ImGui::DragFloat("Thickness", &m_material.thickness, 0.01f, 0.0f, 0.0f, "%.3f");
+        m_material.thickness = std::max(m_material.thickness, 0.0f);
+        if (m_material.thickness > 0.0f) {
+            picker("Thickness Texture", m_material.thicknessTexture);
+            ImGui::ColorEdit3("Attenuation Color", m_material.attenuationColor);
+            ImGui::DragFloat("Attenuation Distance", &m_material.attenuationDistance, 0.01f, 0.0f, 0.0f, "%.3f");
+            m_material.attenuationDistance = std::max(m_material.attenuationDistance, 0.0f);
+        }
+        if (m_material.ior != 0.0f) { m_material.ior = std::max(m_material.ior, 1.0f); }
+    }
     ImGui::EndDisabled();
     ImGui::BeginDisabled(!dirty() && m_valid);
     if (ImGui::Button("Save Material")) { startImport(); }
@@ -371,50 +403,82 @@ void AssetImportPanel::drawMaterial(bool readOnly) {
     ImGui::EndDisabled();
     if (!m_error.empty()) { ImGui::TextWrapped("%s", m_error.c_str()); }
 }
-void AssetImportPanel::requestGltfExtraction(bool all) {
-    m_gltfStatus.clear();
+void AssetImportPanel::requestMaterialExtraction(bool all) {
+    m_materialStatus.clear();
     const auto reader = fileAssetReader(m_project.root());
     std::string bytes;
-    if (reader(m_path, bytes, m_gltfStatus) != AssetReadResult::Found) {
-        if (m_gltfStatus.empty()) { m_gltfStatus = "Cannot read glTF source"; }
+    if (reader(m_path, bytes, m_materialStatus) != AssetReadResult::Found) {
+        if (m_materialStatus.empty()) { m_materialStatus = "Cannot read model source"; }
         return;
     }
 
-    GltfExtraction extraction;
-    if (all) {
-        if (!decodeGltfMaterials(bytes, m_path, reader, extraction.materials, extraction.images, m_gltfStatus)) { return; }
+    const bool gltf = isGltfAssetPath(m_path);
+    std::vector<std::string> names;
+    std::vector<ObjMaterial> objMaterials;
+    if (gltf) {
+        if (!gltfMaterialNames(bytes, names, m_materialStatus)) { return; }
     } else {
-        extraction.materials.resize(1);
-        if (!decodeGltfMaterial(bytes, m_path, reader, m_gltfMaterialIndex,
-            extraction.materials.front(), extraction.images, m_gltfStatus)) { return; }
+        if (!decodeObjMaterials(bytes, m_path, reader, objMaterials, m_materialStatus)) { return; }
+        collectObjMaterialNames(objMaterials, names);
     }
-    if (extraction.materials.empty()) { m_gltfStatus = "This glTF file has no materials."; return; }
+    if (names != m_materialNames) {
+        m_materialNames = names;
+        m_materialIndex = 0;
+        if (!all) { m_materialStatus = "Source materials changed. Select a material to extract."; return; }
+    }
+    if (names.empty()) { m_materialStatus = "This model has no materials."; return; }
 
-    const std::string stem(m_path.substr(0, m_path.find_last_of('.')));
+    MaterialExtraction extraction;
+    auto paths = meshMaterialPaths(m_path, names);
+    if (all) {
+        extraction.paths = std::move(paths);
+        if (gltf) {
+            if (!decodeGltfMaterials(bytes, m_path, reader, extraction.materials, extraction.images, m_materialStatus)) { return; }
+        } else {
+            extraction.materials.reserve(objMaterials.size());
+            for (auto& material : objMaterials) { extraction.materials.push_back(std::move(material.material)); }
+        }
+    } else {
+        extraction.paths.push_back(std::move(paths[m_materialIndex]));
+        if (gltf) {
+            extraction.materials.resize(1);
+            if (!decodeGltfMaterial(bytes, m_path, reader, m_materialIndex,
+                extraction.materials.front(), extraction.images, m_materialStatus)) { return; }
+        } else {
+            extraction.materials.push_back(std::move(objMaterials[m_materialIndex].material));
+        }
+    }
+
     std::error_code ec;
     bool needsConfirmation = false;
-    for (std::size_t i = 0; i < extraction.materials.size(); ++i) {
-        auto& path = extraction.paths.emplace_back(stem);
-        if (extraction.materials.size() > 1) { path += "_Material_" + std::to_string(i + 1); }
-        path += ".satmat";
-        if (!isMaterialAssetPath(path)) { m_gltfStatus = "Invalid material destination: " + path; return; }
+    for (const auto& path : extraction.paths) {
+        if (!isMaterialAssetPath(path)) { m_materialStatus = "Invalid material destination: " + path; return; }
         const bool exists = fileEntryExists(assetFile(m_project, path), ec);
-        if (ec) { m_gltfStatus = "Cannot inspect " + path + ": " + ec.message(); return; }
+        if (ec) { m_materialStatus = "Cannot inspect " + path + ": " + ec.message(); return; }
         extraction.overwrite.push_back(exists);
         needsConfirmation |= exists;
     }
     if (needsConfirmation) {
-        m_gltfExtraction = std::move(extraction);
+        m_materialExtraction = std::move(extraction);
         ImGui::OpenPopup("Overwrite Material");
         return;
     }
-    saveGltfExtraction(extraction);
+    saveMaterialExtraction(extraction);
 }
-void AssetImportPanel::saveGltfExtraction(GltfExtraction& extraction) {
+void AssetImportPanel::saveMaterialExtraction(MaterialExtraction& extraction) {
     const auto reader = fileAssetReader(m_project.root());
     std::string bytes;
     std::vector<const GltfImage*> pending;
     std::unordered_map<std::string, std::string_view> renamed;
+    const auto pathKey = [](std::string path) {
+        for (auto& ch : path) {
+            if (ch >= 'A' && ch <= 'Z') { ch = static_cast<char>(ch + ('a' - 'A')); }
+        }
+        return path;
+    };
+    std::unordered_set<std::string> reserved;
+    reserved.reserve(extraction.images.size());
+    for (const auto& image : extraction.images) { reserved.insert(pathKey(image.path)); }
     std::error_code ec;
     for (auto& image : extraction.images) {
         const auto originalPath = image.path;
@@ -427,10 +491,13 @@ void AssetImportPanel::saveGltfExtraction(GltfExtraction& extraction) {
                 reuse = true;
                 break;
             }
-            image.path = originalPath.substr(0, dot) + "_" + std::to_string(++suffix) + originalPath.substr(dot);
-            if (!isTextureAssetPath(image.path)) { m_gltfStatus = "Embedded image path is too long"; return; }
+            do {
+                image.path = originalPath.substr(0, dot) + "_" + std::to_string(++suffix) + originalPath.substr(dot);
+                if (!isTextureAssetPath(image.path)) { m_materialStatus = "Embedded image path is too long"; return; }
+            } while (reserved.contains(pathKey(image.path)));
         }
-        if (ec) { m_gltfStatus = "Cannot inspect " + image.path + ": " + ec.message(); return; }
+        if (ec) { m_materialStatus = "Cannot inspect " + image.path + ": " + ec.message(); return; }
+        reserved.insert(pathKey(image.path));
         // Reuse identical files and give different images their own paths.
         if (image.path != originalPath) { renamed.emplace(originalPath, image.path); }
         if (!reuse) { pending.push_back(&image); }
@@ -440,19 +507,21 @@ void AssetImportPanel::saveGltfExtraction(GltfExtraction& extraction) {
     for (auto& material : extraction.materials) {
         bool changed = false;
         for (auto* path : {&material.baseColorTexture, &material.metallicRoughnessTexture,
-                           &material.normalTexture, &material.emissiveTexture, &material.occlusionTexture}) {
+                           &material.normalTexture, &material.emissiveTexture, &material.occlusionTexture,
+                           &material.transmissionTexture, &material.thicknessTexture, &material.clearcoatTexture,
+                           &material.clearcoatRoughnessTexture, &material.clearcoatNormalTexture}) {
             if (const auto found = renamed.find(*path); found != renamed.end()) {
                 *path = found->second;
                 changed = true;
             }
         }
         const auto& encoded = materialBytes.emplace_back(encodeMaterial(material));
-        if (changed && !decodeMaterial(encoded, material, m_gltfStatus)) { return; }
+        if (changed && !decodeMaterial(encoded, material, m_materialStatus)) { return; }
     }
 
     std::size_t imagesWritten = 0;
     for (const auto* image : pending) {
-        if (!writeAsset(assetFile(m_project, image->path), image->path, image->bytes, m_gltfStatus)) { break; }
+        if (!writeAsset(assetFile(m_project, image->path), image->path, image->bytes, m_materialStatus)) { break; }
         ++imagesWritten;
     }
     std::size_t materialsWritten = 0;
@@ -460,17 +529,17 @@ void AssetImportPanel::saveGltfExtraction(GltfExtraction& extraction) {
         for (std::size_t i = 0; i < extraction.paths.size(); ++i) {
             const auto& path = extraction.paths[i];
             if (!extraction.overwrite[i] && fileEntryExists(assetFile(m_project, path), ec)) {
-                m_gltfStatus = "Material already exists: " + path;
+                m_materialStatus = "Material already exists: " + path;
                 break;
             }
-            if (ec) { m_gltfStatus = "Cannot inspect " + path + ": " + ec.message(); break; }
-            if (!writeAsset(assetFile(m_project, path), path, materialBytes[i], m_gltfStatus)) { break; }
+            if (ec) { m_materialStatus = "Cannot inspect " + path + ": " + ec.message(); break; }
+            if (!writeAsset(assetFile(m_project, path), path, materialBytes[i], m_materialStatus)) { break; }
             ++materialsWritten;
             m_renderer.invalidateMaterial(path);
         }
     }
     if (materialsWritten == extraction.paths.size()) {
-        m_gltfStatus = materialsWritten == 1 ? "Extracted " + extraction.paths.front() :
+        m_materialStatus = materialsWritten == 1 ? "Extracted " + extraction.paths.front() :
             "Extracted " + std::to_string(materialsWritten) + " materials beside the model.";
         return;
     }
@@ -480,37 +549,39 @@ void AssetImportPanel::saveGltfExtraction(GltfExtraction& extraction) {
     for (std::size_t i = 0; i < materialsWritten; ++i) {
         const auto& material = extraction.materials[i];
         savedTextures.insert({material.baseColorTexture, material.metallicRoughnessTexture,
-            material.normalTexture, material.emissiveTexture, material.occlusionTexture});
+            material.normalTexture, material.emissiveTexture, material.occlusionTexture,
+            material.transmissionTexture, material.thicknessTexture, material.clearcoatTexture,
+            material.clearcoatRoughnessTexture, material.clearcoatNormalTexture});
     }
     while (imagesWritten > 0) {
         const auto& path = pending[--imagesWritten]->path;
         if (savedTextures.contains(path)) { continue; }
         std::filesystem::remove(assetFile(m_project, path), ec);
-        if (ec) { m_gltfStatus += "\nCannot remove " + path + ": " + ec.message(); }
+        if (ec) { m_materialStatus += "\nCannot remove " + path + ": " + ec.message(); }
     }
     if (materialsWritten > 0) {
-        m_gltfStatus = "Extracted " + std::to_string(materialsWritten) + " of " +
-            std::to_string(extraction.paths.size()) + " materials.\n" + m_gltfStatus;
+        m_materialStatus = "Extracted " + std::to_string(materialsWritten) + " of " +
+            std::to_string(extraction.paths.size()) + " materials.\n" + m_materialStatus;
     }
 }
-void AssetImportPanel::drawGltfMaterials() {
+void AssetImportPanel::drawMeshMaterials() {
     ImGui::Separator();
-    if (!m_gltfMaterials.empty()) {
-        if (ImGui::BeginCombo("Material", m_gltfMaterials[m_gltfMaterialIndex].c_str())) {
-            for (std::size_t i = 0; i < m_gltfMaterials.size(); ++i) {
+    if (!m_materialNames.empty()) {
+        if (ImGui::BeginCombo("Material", m_materialNames[m_materialIndex].c_str())) {
+            for (std::size_t i = 0; i < m_materialNames.size(); ++i) {
                 ImGui::PushID(static_cast<int>(i));
-                if (ImGui::Selectable(m_gltfMaterials[i].c_str(), i == m_gltfMaterialIndex)) { m_gltfMaterialIndex = i; }
+                if (ImGui::Selectable(m_materialNames[i].c_str(), i == m_materialIndex)) { m_materialIndex = i; }
                 ImGui::PopID();
             }
             ImGui::EndCombo();
         }
-        if (ImGui::Button("Extract Material")) { requestGltfExtraction(false); }
-        if (ImGui::Button("Extract All Materials")) { requestGltfExtraction(true); }
+        if (ImGui::Button("Extract Material")) { requestMaterialExtraction(false); }
+        if (ImGui::Button("Extract All Materials")) { requestMaterialExtraction(true); }
         if (ImGui::BeginPopupModal("Overwrite Material", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            if (!m_gltfExtraction) {
+            if (!m_materialExtraction) {
                 ImGui::CloseCurrentPopup();
             } else {
-                auto& extraction = *m_gltfExtraction;
+                auto& extraction = *m_materialExtraction;
                 if (extraction.paths.size() == 1) {
                     ImGui::TextWrapped("Overwrite %s?", extraction.paths.front().c_str());
                 } else {
@@ -522,26 +593,27 @@ void AssetImportPanel::drawGltfMaterials() {
                     ImGui::EndChild();
                 }
                 if (ImGui::Button("Overwrite")) {
-                    saveGltfExtraction(extraction);
-                    m_gltfExtraction.reset();
+                    saveMaterialExtraction(extraction);
+                    m_materialExtraction.reset();
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("Cancel")) {
-                    m_gltfExtraction.reset();
+                    m_materialExtraction.reset();
                     ImGui::CloseCurrentPopup();
                 }
             }
             ImGui::EndPopup();
         }
-    } else if (m_gltfStatus.empty()) {
-        ImGui::TextDisabled("This glTF file has no materials.");
+    } else if (m_materialStatus.empty()) {
+        ImGui::TextDisabled("This model has no materials.");
     }
-    if (!m_gltfStatus.empty()) { ImGui::TextWrapped("%s", m_gltfStatus.c_str()); }
+    if (!m_materialStatus.empty()) { ImGui::TextWrapped("%s", m_materialStatus.c_str()); }
 }
 void AssetImportPanel::draw(bool readOnly) {
     ImGui::Begin("Inspector");
     ImGui::TextWrapped("%s", m_path.c_str());
+    if (isAnimationClipAssetPath(m_path)) { drawAnimationClip(readOnly); ImGui::End(); return; }
     if (isMaterialAssetPath(m_path)) {
         drawMaterial(readOnly);
         ImGui::End();
@@ -593,10 +665,26 @@ void AssetImportPanel::draw(bool readOnly) {
     if (loadingMesh) { ImGui::TextUnformatted("Reading mesh…"); }
     if (!m_info.empty()) { ImGui::TextUnformatted(m_info.c_str()); }
     if (!m_error.empty()) { ImGui::TextWrapped("%s", m_error.c_str()); }
-    if (gltf) {
+    if (mesh) {
         ImGui::BeginDisabled(readOnly || loadingMesh);
-        drawGltfMaterials();
+        drawMeshMaterials();
         ImGui::EndDisabled();
+        if (gltf) {
+            if (!loadingMesh && ImGui::TreeNodeEx("Textures", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (m_textureNames.empty()) {
+                    ImGui::TextDisabled("No textures.");
+                } else {
+                    for (const auto& name : m_textureNames) {
+                        ImGui::Bullet();
+                        ImGui::TextWrapped("%s", name.c_str());
+                    }
+                }
+                ImGui::TreePop();
+            }
+            ImGui::BeginDisabled(readOnly || loadingMesh);
+            drawAnimations();
+            ImGui::EndDisabled();
+        }
     }
     if (readOnly) { ImGui::TextDisabled("Import settings cannot change during Play."); }
     ImGui::End();
@@ -623,7 +711,11 @@ void AssetImportPanel::drawPrompt() {
         } else {
             ImGui::TextWrapped("Apply changes to %s before continuing?", m_path.c_str());
             if (!m_error.empty()) { ImGui::TextWrapped("%s", m_error.c_str()); }
-            if (ImGui::Button("Apply")) { startImport(); }
+            if (ImGui::Button("Apply")) {
+                if (isAnimationClipAssetPath(m_path)) {
+                    if (saveAnimationClip()) { action = std::exchange(m_pending, {}); ImGui::CloseCurrentPopup(); }
+                } else { startImport(); }
+            }
             ImGui::SameLine();
             if (ImGui::Button("Revert")) {
                 revert();

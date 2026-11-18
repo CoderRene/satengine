@@ -1,5 +1,7 @@
 #pragma once
 
+#include <span>
+
 #include "Renderer.hpp"
 
 #include "AssetLibrary.hpp"
@@ -55,7 +57,7 @@ public:
     [[nodiscard]] int gameViewWidth() const;
     [[nodiscard]] int gameViewHeight() const;
     [[nodiscard]] std::uint64_t contentRevision() const;
-    [[nodiscard]] AssetThumbnail assetThumbnail(std::string_view path);
+    [[nodiscard]] AssetThumbnail assetThumbnail(std::string_view path, std::span<const Mat4> palette = {});
     [[nodiscard]] std::uintptr_t createTexture(const unsigned char* rgba, int width, int height);
     void destroyTexture(std::uintptr_t texture);
     [[nodiscard]] bool renderWindow(const GameViewCamera& camera, const SceneDrawList& drawList);
@@ -71,7 +73,7 @@ private:
     [[nodiscard]] bool makeThumbnailSpace();
     void uploadTextureThumbnail(std::string path, const TextureData& image);
     void uploadReadyThumbnails();
-    void renderThumbnail(std::string path, MeshPass& pass);
+    void renderThumbnail(std::string path, MeshPass& pass, std::span<const Mat4> palette = {});
     std::unique_ptr<State> m_state;
 
     void releaseOffscreenView(OffscreenView& view);

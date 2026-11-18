@@ -6,6 +6,73 @@
 
 ---@alias EntityId integer Opaque positive entity id from the scene.
 
+---@class SatAnimation
+local SatAnimation = {}
+
+---@param entity EntityId
+---@param clip string
+---@param options? table
+---@return boolean
+function SatAnimation.play(entity, clip, options?) end
+
+---@param entity EntityId
+function SatAnimation.stop(entity) end
+
+---@param entity EntityId
+---@return number
+function SatAnimation.time(entity) end
+
+---@param entity EntityId
+---@return boolean
+function SatAnimation.isPlaying(entity) end
+
+---@param entity EntityId
+---@param speed number
+---@return boolean
+function SatAnimation.setSpeed(entity, speed) end
+
+---@param entity EntityId
+---@param seconds number
+---@return boolean
+function SatAnimation.setTime(entity, seconds) end
+
+---@param entity EntityId
+---@param name string
+---@param value boolean
+---@return boolean
+function SatAnimation.setBool(entity, name, value) end
+
+---@param entity EntityId
+---@param name string
+---@param value number
+---@return boolean
+function SatAnimation.setFloat(entity, name, value) end
+
+---@param entity EntityId
+---@param name string
+---@param value integer
+---@return boolean
+function SatAnimation.setInt(entity, name, value) end
+
+---@param entity EntityId
+---@param name string
+---@return boolean
+function SatAnimation.setTrigger(entity, name) end
+
+---@param entity EntityId
+---@return string
+function SatAnimation.currentState(entity) end
+
+---@param entity EntityId
+---@param state string
+---@param seconds? number
+---@return boolean
+function SatAnimation.crossfadeTo(entity, state, seconds?) end
+
+---@param entity EntityId
+---@return string[]
+function SatAnimation.clips(entity) end
+
 ---@class SatAudio
 local SatAudio = {}
 
@@ -537,6 +604,7 @@ function SatUi.wantsKeyboard() end
 ---@field Button8 integer
 
 ---@class sat
+---@field animation SatAnimation
 ---@field audio SatAudio
 ---@field input SatInput
 ---@field math SatMath
@@ -546,6 +614,9 @@ function SatUi.wantsKeyboard() end
 ---@field Key SatKey
 ---@field MouseButton SatMouseButton
 sat = {}
+
+---@type SatAnimation
+sat.animation = {}
 
 ---@type SatAudio
 sat.audio = {}
@@ -772,6 +843,14 @@ function sat.setAmbient(r, g, b, intensity) end
 ---@param entity EntityId
 ---@return boolean
 function sat.hasMesh(entity) end
+
+---@param entity EntityId
+---@return boolean
+function sat.hasAnimator(entity) end
+
+---@param entity EntityId
+---@return boolean
+function sat.addAnimator(entity) end
 
 ---@param entity EntityId
 ---@return boolean

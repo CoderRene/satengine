@@ -2,6 +2,7 @@
 
 #include "ColliderLines.hpp"
 #include "SceneDraw.hpp"
+#include <imgui.h>
 
 #include <cmath>
 #include <cstdint>
@@ -80,6 +81,7 @@ std::uint64_t viewRenderKey(const GameViewCamera& camera, const SceneDrawList& d
         mixViewText(hash, mesh.materialPath);
         mixViewPod(hash, mesh.combineStatic);
         mixViewPod(hash, mesh.meshNode);
+        if (mesh.palette) { mixViewBytes(hash, mesh.palette, mesh.paletteCount * sizeof(Mat4)); }
         if (mesh.combineStatic) { mixViewPod(hash, mesh.worldPosition); }
     }
     mixViewPod(hash, draw.selectedMesh);
@@ -120,7 +122,10 @@ void EditorSession::renderViews() {
     const int sceneViewHeight = state.viewport ? state.viewport->sceneViewHeight() : 0;
 
     state.play.applyEdits(state.scene, state.sceneError);
-    state.gameRenderData.update(state.play.viewScene(state.scene), gameViewWidth, gameViewHeight);
+    state.play.animation().setAssetRevision(state.renderer->contentRevision());
+    state.previewAnimation.setAssetRevision(state.renderer->contentRevision());
+    if (!state.play.active()) { state.previewAnimation.update(ImGui::GetIO().DeltaTime); }
+    state.gameRenderData.update(state.play.viewScene(state.scene), gameViewWidth, gameViewHeight, state.play.active() ? &state.play.animation() : &state.previewAnimation);
     const auto& gameCamera = state.gameRenderData.camera();
 
     auto& meshInstances = state.sceneMeshes;
@@ -167,6 +172,12 @@ void EditorSession::renderViews() {
             instance.worldPosition = entity.transform.position;
             instance.combineStatic = entity.mesh.combineStatic;
             instance.meshNode = entity.mesh.meshNode;
+            if (entity.hasAnimator) {
+                const auto palette = (showLiveScene ? state.play.animation() : state.previewAnimation).palette(entity.id());
+                instance.palette = palette.data();
+                instance.paletteCount = static_cast<std::uint32_t>(palette.size());
+                instance.combineStatic = false;
+            }
             switch (entity.mesh.primitive) {
             case MeshComponent::Primitive::Cube:
                 instance.primitive = MeshPrimitive::Cube;

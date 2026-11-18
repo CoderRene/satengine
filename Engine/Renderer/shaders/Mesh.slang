@@ -1,3 +1,6 @@
+#ifdef SAT_SKINNED
+#include "Skinning.slang"
+#endif
 import Common;
 import Brdf;
 import Lighting;
@@ -21,6 +24,8 @@ cbuffer Frame : register(b0)
     float cascadeBlend;
     float cascadeNear;
     float orthoDepthScale;
+    float3 orthoViewToEye;
+    uint orthographic;
 };
 cbuffer Lights : register(b3)
 {
@@ -36,6 +41,8 @@ Texture2D<float4> environmentMap : register(t4);
 SamplerState environmentSampler : register(s1);
 Texture2DArray<float> shadowMap : register(t5);
 SamplerComparisonState shadowSampler : register(s2);
+Texture2D<float4> opaqueScene : register(t12);
+SamplerState opaqueSceneSampler : register(s12);
 
 float2 environmentUv(float3 direction)
 {
@@ -97,8 +104,14 @@ float shadowVisibility(float3 position, float3 normal, float3 l, float viewDepth
 struct VertexInput
 {
     float3 position : POSITION;
+#ifdef SAT_SKINNED
+    uint4 joints : BLENDINDICES;
+    float4 weights : BLENDWEIGHT;
+#endif
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
+    float2 uv1 : TEXCOORD1;
+    float4 color : COLOR0;
     float4 tangent : TANGENT;
     float4 worldX : INSTANCE0;
     float4 worldY : INSTANCE1;
@@ -107,11 +120,23 @@ struct VertexInput
     float4 normalX : INSTANCE4;
     float3 normalY : INSTANCE5;
     float3 normalZ : INSTANCE6;
+    float3 thicknessScale : INSTANCE7;
 };
 
 [shader("vertex")]
 MeshFragment vsMain(VertexInput input)
 {
+#ifdef SAT_SKINNED
+    float4x4 skin = skinColumns(input.joints, input.weights);
+    input.position = mul(float4(input.position, 1), skin).xyz;
+    float3 sx = skin[0].xyz;
+    float3 sy = skin[1].xyz;
+    float3 sz = skin[2].xyz;
+    float determinant = dot(sx, cross(sy, sz));
+    input.normal = (cross(sy, sz) * input.normal.x + cross(sz, sx) * input.normal.y + cross(sx, sy) * input.normal.z) * (determinant < 0 ? -1.0 : 1.0);
+    input.tangent.xyz = mul(float4(input.tangent.xyz, 0), skin).xyz;
+    input.tangent.w *= determinant < 0 ? -1.0 : 1.0;
+#endif
     MeshFragment output;
     float4 position = input.worldX * input.position.x + input.worldY * input.position.y +
         input.worldZ * input.position.z + input.worldTranslation;
@@ -124,20 +149,83 @@ MeshFragment vsMain(VertexInput input)
         input.worldZ.xyz * input.tangent.z;
     output.tangent = float4(tangent, input.tangent.w * input.normalX.w);
     output.uv = input.uv;
+    output.uv1 = input.uv1;
+    output.color = input.color;
+    output.thicknessScale = input.thicknessScale;
     return output;
 }
 
-[shader("fragment")]
-float4 psMain(MeshFragment input) : SV_Target
+float3 transmittedScene(MeshFragment input, Surface surface, float3 v, float ior, uint3 dimensions)
 {
-    float4 base = sampleBaseColor(input.uv);
+    float2 sceneUv = input.position.xy;
+    float maxLod = float(dimensions.z - 1);
+    // Bound the automatic blur in pixels so roughness-map detail cannot select
+    // increasingly coarse scene mips as viewport resolution grows.
+    const float maxRoughnessLod = 8.0;
+    float roughnessLod = surface.perceptualRoughness * saturate(1.5 * (ior - 1.0)) * min(maxLod, maxRoughnessLod);
+    float lod = clamp(materialTransmissionMip(roughnessLod), 0.0, maxLod);
+    float travel = 0.0;
+    float thickness = sampleThickness(input.uv, input.uv1);
+    if (thickness > 0.0)
+    {
+        float3 ray = refract(-v, surface.normal, 1.0 / ior) * input.thicknessScale * thickness;
+        travel = length(ray);
+        float4 exitClip = mul(viewProj, float4(input.worldPosition + ray, 1.0));
+        if (exitClip.w > 0.0)
+        {
+            float2 exitUv = (exitClip.xy / exitClip.w) * float2(0.5, -0.5) + 0.5;
+            float2 viewportSize = 8.0 / viewport.zw;
+            float2 exitPixel = exitUv * viewportSize;
+            float2 edgeDistance = min(exitPixel, viewportSize - exitPixel);
+            // Fade toward the unrefracted pixel before the blur footprint crosses the viewport edge.
+            float edgeFade = smoothstep(0.0, max(2.0, exp2(lod)), min(edgeDistance.x, edgeDistance.y));
+            sceneUv = lerp(sceneUv, viewport.xy + exitPixel, edgeFade);
+        }
+    }
+    float3 background = opaqueScene.SampleLevel(opaqueSceneSampler, sceneUv / float2(dimensions.xy), lod).rgb;
+    if (ambient.w == 0.0)
+    {
+        background = lerp(background / 12.92, pow((background + 0.055) / 1.055, 2.4), step(0.04045, background));
+    }
+    return background * volumeAttenuation(travel);
+}
+
+[shader("fragment")]
+float4 psMain(MeshFragment input, bool frontFace : SV_IsFrontFace) : SV_Target
+{
+    float4 base = sampleBaseColor(input.uv, input.uv1) * input.color;
     float opacity = materialOpacity(base.a);
     if (isUnlit()) { return float4(ambient.w != 0 ? base.rgb : encodeSrgb(saturate(base.rgb)), opacity); }
-    Surface surface = sampleMaterial(input.uv, base.rgb, normalize(input.normal), input.tangent);
+    float3 geometricNormal = normalize(input.normal);
+    Surface surface = sampleMaterial(input.uv, input.uv1, base.rgb, geometricNormal, input.tangent,
+        input.worldPosition, frontFace);
+    Clearcoat coat = sampleClearcoat(input.uv, input.uv1, geometricNormal, input.tangent, input.worldPosition, frontFace);
     float3 toEye = eye - input.worldPosition;
-    float3 v = toEye * rsqrt(max(dot(toEye, toEye), 1e-8));
-    float3 color = ambient.rgb * surface.albedo * (1.0 - surface.metal) * surface.occlusion + surface.emission;
+    float3 v = orthographic != 0 ? orthoViewToEye : toEye * rsqrt(max(dot(toEye, toEye), 1e-8));
+    float ior = materialIor();
+    float reflectance = ior == 0.0 ? 1.0 : (ior - 1.0) / (ior + 1.0);
+    float dielectricF0 = reflectance * reflectance;
+    float3 f0 = lerp(float3(dielectricF0, dielectricF0, dielectricF0), surface.albedo, surface.metal);
     float specularStrength = materialSpecularStrength();
+    float nv = saturate(dot(surface.normal, v));
+    float3 viewFresnel = specularStrength * (f0 + (1.0 - f0) * pow(1.0 - nv, 5.0));
+    float coatWeight = coat.factor * (0.04 + 0.96 * pow(1.0 - saturate(abs(dot(coat.normal, v))), 5.0));
+    float3 coatLight = float3(0.0, 0.0, 0.0);
+    float transmission = sampleTransmission(input.uv, input.uv1);
+    float3 transmitted = float3(0.0, 0.0, 0.0);
+    if (transmission > 0.0 && surface.metal < 1.0)
+    {
+        uint3 dimensions;
+        opaqueScene.GetDimensions(0, dimensions.x, dimensions.y, dimensions.z);
+        if (all(dimensions > 0))
+        {
+            transmitted = transmittedScene(input, surface, v, ior, dimensions) *
+                (1.0 - viewFresnel) * (1.0 - surface.metal) * transmission * surface.albedo;
+        }
+        else { transmission = 0.0; }
+    }
+    float3 diffuseColor = surface.albedo * (1.0 - surface.metal) * (1.0 - transmission);
+    float3 color = ambient.rgb * diffuseColor * surface.occlusion + surface.emission;
     if (environmentIntensity > 0.0)
     {
         uint width, height, levels;
@@ -146,10 +234,14 @@ float4 psMain(MeshFragment input) : SV_Target
         float3 diffuse = environmentMap.SampleLevel(environmentSampler, environmentUv(surface.normal), maxLod).rgb;
         float3 reflection = reflect(-v, surface.normal);
         float3 specular = environmentMap.SampleLevel(environmentSampler, environmentUv(reflection), surface.rough * maxLod).rgb;
-        float3 f0 = lerp(float3(0.04, 0.04, 0.04), surface.albedo, surface.metal);
-        float3 fresnel = specularStrength * (f0 + (1.0 - f0) * pow(1.0 - saturate(dot(surface.normal, v)), 5.0));
-        color += environmentIntensity * surface.occlusion * (diffuse * surface.albedo * (1.0 - surface.metal) * (1.0 - fresnel) +
-            specular * fresnel);
+        color += environmentIntensity * surface.occlusion *
+            (diffuse * diffuseColor * (1.0 - viewFresnel) + specular * viewFresnel);
+        if (coatWeight > 0.0)
+        {
+            float3 coatReflection = reflect(-v, coat.normal);
+            coatLight = environmentIntensity * surface.occlusion * environmentMap.SampleLevel(
+                environmentSampler, environmentUv(coatReflection), coat.roughness * maxLod).rgb;
+        }
     }
     PunctualLight evaluator;
     uint2 tile = uint2(clamp((input.position.xy - viewport.xy) * viewport.zw, 0.0, 7.0));
@@ -169,8 +261,16 @@ float4 psMain(MeshFragment input) : SV_Target
                 float viewDepth = orthoDepthScale != 0.0 ? cascadeNear + input.position.z * orthoDepthScale : input.clipW;
                 radiance *= shadowVisibility(input.worldPosition, surface.normal, l, viewDepth);
             }
-            color += radiance * evaluateBrdf(surface.normal, v, l, surface.albedo, surface.metal, surface.rough, specularStrength);
+            color += radiance * evaluateSurfaceBrdf(surface.normal, v, l, diffuseColor, surface.rough, specularStrength, f0);
+            if (coatWeight > 0.0)
+            {
+                coatLight += radiance * evaluateClearcoat(coat.normal, v, l, coat.roughness);
+            }
         }
     }
-    return float4(ambient.w != 0 ? color : displayColor(color), opacity);
+    color = lerp(color, coatLight, coatWeight);
+    transmitted *= 1.0 - coatWeight;
+    if (ambient.w != 0.0) { return float4(color + transmitted, opacity); }
+    float3 displayLinear = saturate(1.0 - 1.0 / (1.0 + color));
+    return float4(encodeSrgb(saturate(displayLinear + transmitted)), opacity);
 }

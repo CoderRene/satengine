@@ -1,5 +1,7 @@
 add_library(SatAssets STATIC
     Core/src/AssetData.cpp
+    Core/src/AnimationAsset.cpp
+    Core/src/AnimationGraph.cpp
     Core/src/MaterialData.cpp
     Core/src/AssetImportSettings.cpp
     Core/src/AssetImporter.cpp
@@ -16,9 +18,13 @@ target_compile_features(SatAssets PUBLIC cxx_std_20)
 # Scene extraction is portable and can be tested without a window or graphics device.
 add_library(SatScene STATIC
     Core/src/Scene.cpp
+    Core/src/AnimationSystem.cpp
+    Core/src/module/AnimationSampler.cpp
+    Core/src/module/AnimationStateMachine.cpp
     Core/src/SceneFile.cpp
     Core/src/module/ScenePhysicsFile.cpp
     Core/src/module/SceneAudioFile.cpp
+    Core/src/module/SceneAnimationFile.cpp
     Renderer/src/SceneRenderData.cpp
     Renderer/src/SceneDraw.cpp
     Renderer/src/ColliderLines.cpp
@@ -121,6 +127,7 @@ add_library(SatScripting STATIC
     Core/src/module/LuaRuntimeModules/LuaMathBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaPhysicsBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaAudioBindings.cpp
+    Core/src/module/LuaRuntimeModules/LuaAnimationBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaUiBindings.cpp
     Core/src/module/LuaRuntimeModules/LuaPackageConfig.cpp
     Core/src/ScriptLog.cpp
@@ -196,6 +203,7 @@ if(Python3_Interpreter_FOUND)
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaMathBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaPhysicsBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaAudioBindings.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaAnimationBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaLogBindings.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Core/src/module/LuaRuntimeModules/LuaUiBindings.cpp"
     )
@@ -304,6 +312,10 @@ add_library(SatEditor STATIC
     Platform/src/GameBuilder.cpp
     UI/src/UiLayer.cpp
     UI/src/module/AssetImportPanel.cpp
+    UI/src/module/AssetWrite.cpp
+    UI/src/module/AnimationClipPanel.cpp
+    UI/src/module/AnimationGraphPanel.cpp
+    ThirdParty/imnodes/imnodes.cpp
     UI/src/module/ContentDragDrop.hpp
     UI/src/module/BuildStatusWindow.cpp
     UI/src/module/CursorWrap.cpp
@@ -343,6 +355,7 @@ target_include_directories(SatEditor PUBLIC
 )
 target_include_directories(SatEditor PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/UI/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/imnodes"
     "${CMAKE_CURRENT_SOURCE_DIR}/Platform/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb"
     "${imgui_SOURCE_DIR}"

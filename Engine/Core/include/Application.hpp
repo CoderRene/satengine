@@ -9,6 +9,7 @@
 namespace sat {
 
 class GameUi;
+class AnimationSystem;
 
 // Runtime host. Subclass to initialize a scene and update game state.
 // Hooks run on the window/render thread. deltaSeconds uses a steady clock.
@@ -25,6 +26,7 @@ protected:
     // Configure during onStart(). Captured sources must live through run().
     void setAssetReader(AssetReader reader) { m_assetReader = std::move(reader); }
     void setShaderReader(AssetReader reader) { m_shaderReader = std::move(reader); }
+    void setAnimationSystem(const AnimationSystem* animation) { m_animation = animation; }
     void requestStop() { m_stopRequested = true; }
     virtual void onStart() {}
     virtual void onUpdate(float deltaSeconds) { (void)deltaSeconds; }
@@ -32,6 +34,7 @@ protected:
 
 private:
     Scene m_scene;
+    const AnimationSystem* m_animation = nullptr;
     AssetReader m_assetReader;
     AssetReader m_shaderReader;
     Input m_input;

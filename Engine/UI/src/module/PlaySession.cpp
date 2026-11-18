@@ -90,6 +90,8 @@ void applyEntityEdits(const Entity& before, const Entity& after, Entity& live, L
         live.gravitySource = after.gravitySource;
     }
     applyEdit(before.gameUi, after.gameUi, live.gameUi);
+    applyEdit(before.hasAnimator, after.hasAnimator, live.hasAnimator);
+    if (before.animator != after.animator) { live.animator = after.animator; }
     applyEdit(before.hasAudioSource, after.hasAudioSource, live.hasAudioSource);
     if (before.hasAudioSource != after.hasAudioSource || before.audioSource != after.audioSource) {
         live.audioSource = after.audioSource;
@@ -100,8 +102,8 @@ void applyEntityEdits(const Entity& before, const Entity& after, Entity& live, L
 } // namespace
 
 PlaySession::PlaySession(const Input& input)
-    : m_physics(m_game), m_audio(m_game),
-      m_scripts(m_game, &input, &m_log, &m_physics, &m_audio) {}
+    : m_physics(m_game), m_audio(m_game), m_animation(m_game),
+      m_scripts(m_game, &input, &m_log, &m_physics, &m_audio, &m_animation) {}
 
 bool PlaySession::takeFocusGame() {
     const bool focus = m_focusGame;
@@ -124,6 +126,7 @@ std::size_t PlaySession::physicsWorldCount() const {
 }
 
 void PlaySession::setAssetReader(AssetReader reader) {
+    m_animation.setAssetReader(reader);
     m_audio.setAssetReader(std::move(reader));
 }
 

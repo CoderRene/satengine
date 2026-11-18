@@ -1,4 +1,5 @@
 #include "EditorState.hpp"
+#include "AnimationAsset.hpp"
 
 #include "EditorTheme.hpp"
 
@@ -25,6 +26,7 @@ void EditorSession::initialize() {
     renderer.setProjectAssetRoot(state.project.root());
     renderer.setProjectShaderSource(fileAssetReader(state.project.root()));
     state.play.setAssetReader(fileAssetReader(state.project.root()));
+    state.previewAnimation.setAssetReader(fileAssetReader(state.project.root()));
     state.hierarchy = std::make_unique<HierarchyPanel>(state.scene, &state.project);
     state.inspector = std::make_unique<InspectorPanel>(state.scene, state.project);
     state.assetImports = std::make_unique<AssetImportPanel>(state.project, renderer);
@@ -69,10 +71,14 @@ void EditorSession::initialize() {
         m_state->assetImports->request([this, path = std::move(path)] {
             m_state->viewport->resetInteraction();
             m_state->hierarchy->setSelectedIndex(-1);
-            if (isAudioAssetPath(path)) {
+            if (isAnimationGraphAssetPath(path)) {
+                m_state->animationGraph->open(path);
                 m_state->assetImports->clear();
                 m_state->content->setSelectedAsset(path);
-            } else if (isMeshAssetPath(path) || isTextureAssetPath(path) || isMaterialAssetPath(path)) {
+            } else if (isAudioAssetPath(path)) {
+                m_state->assetImports->clear();
+                m_state->content->setSelectedAsset(path);
+            } else if (isMeshAssetPath(path) || isTextureAssetPath(path) || isMaterialAssetPath(path) || isAnimationClipAssetPath(path)) {
                 m_state->assetImports->select(path);
                 m_state->content->setSelectedAsset(path);
             } else {
@@ -81,6 +87,7 @@ void EditorSession::initialize() {
             }
         });
     });
+    state.animationGraph = std::make_unique<AnimationGraphPanel>(state.project, renderer);
     state.viewport = std::make_unique<ViewportPanel>(state.scene, renderer, *state.window);
     state.luaLog = std::make_unique<LuaLogPanel>(state.play.log());
 
@@ -122,6 +129,7 @@ void EditorSession::shutdown() {
         ImGui_ImplGlfw_Shutdown();
     }
     if (ImGui::GetCurrentContext() != nullptr) {
+        m_state->animationGraph.reset();
         ImGui::DestroyContext();
     }
 }

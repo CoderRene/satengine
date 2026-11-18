@@ -1,0 +1,3 @@
+std = "satengine"
+# EmmyLua stubs are for LuaLS only; empty bodies trip unused_variable.
+exclude = ["LuaDefs/**"]

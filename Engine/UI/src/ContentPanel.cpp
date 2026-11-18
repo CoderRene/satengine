@@ -1,4 +1,6 @@
 #include "ContentPanel.hpp"
+#include "AnimationAsset.hpp"
+#include "AnimationGraph.hpp"
 
 #include "AssetData.hpp"
 #include "module/ContentDragDrop.hpp"
@@ -871,6 +873,9 @@ void ContentPanel::drawFolderList(bool canMoveFiles, bool canReferenceAssets) {
             }
 
             const auto assetPath = assetPathFor(entry);
+            if (isAnimationClipAssetPath(assetPath) || isAnimationGraphAssetPath(assetPath)) {
+                ImGui::TextUnformatted(isAnimationClipAssetPath(assetPath) ? "[>]" : "[FSM]"); ImGui::SameLine();
+            }
             if (ImGui::Selectable(name.c_str(), isHighlighted(assetPath, entry.isDirectory))) {
                 if (!entry.isDirectory) { selectFile(entry, assetPath); }
                 if (isParent) {
@@ -943,6 +948,9 @@ void ContentPanel::drawFolderList(bool canMoveFiles, bool canReferenceAssets) {
                                  iconMin.y + (iconSize - height) * 0.5f);
             draw->AddImage(ImTextureRef(static_cast<ImTextureID>(thumbnail.texture)),
                 imageMin, ImVec2(imageMin.x + width, imageMin.y + height));
+        } else if (isAnimationClipAssetPath(assetPath) || isAnimationGraphAssetPath(assetPath)) {
+            draw->AddRectFilled(iconMin, iconMax, IM_COL32(45, 72, 110, 255), style.FrameRounding);
+            draw->AddText(ImVec2(iconMin.x + 8, iconMin.y + iconSize * 0.4f), IM_COL32(230, 235, 245, 255), isAnimationClipAssetPath(assetPath) ? ">" : "FSM");
         } else if (isParent && m_returnIcon != 0) {
             draw->AddImage(returnIcon, iconMin, iconMax);
         } else if (entry.isDirectory && m_folderIcon != 0) {

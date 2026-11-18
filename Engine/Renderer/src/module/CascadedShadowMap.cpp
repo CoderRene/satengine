@@ -73,6 +73,11 @@ bool CascadedShadowMap::ensureResources(ID3D11DeviceContext* context, unsigned r
         hr = device->CreateRasterizerState(&rasterizer, m_rasterizer.GetAddressOf());
         if (FAILED(hr)) { return fail(hr); }
     }
+    if (!m_doubleSidedRasterizer) {
+        rasterizer.CullMode = D3D11_CULL_NONE;
+        hr = device->CreateRasterizerState(&rasterizer, m_doubleSidedRasterizer.GetAddressOf());
+        if (FAILED(hr)) { return fail(hr); }
+    }
     ComPtr<ID3D11Texture2D> depth;
     hr = device->CreateTexture2D(&texture, nullptr, depth.GetAddressOf());
     if (FAILED(hr)) { return fail(hr); }

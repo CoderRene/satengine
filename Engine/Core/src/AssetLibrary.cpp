@@ -18,10 +18,13 @@ std::size_t cost(const MeshData& mesh) {
         mesh.sections.size() * sizeof(MeshSection) + mesh.materials.size() * sizeof(MaterialData) + mesh.materialWarning.size();
     bytes += mesh.nodes.size() * sizeof(MeshNode) + mesh.nodeSections.size() * sizeof(MeshSection) +
         mesh.nodeIndices.size() * sizeof(std::uint32_t);
+    bytes += mesh.skinVertices.size() * sizeof(MeshSkinVertex) + mesh.jointBounds.size() * sizeof(AnimationBounds) + mesh.restPalette.size() * sizeof(Mat4);
     for (const auto& node : mesh.nodes) { bytes += node.name.size(); }
     for (const auto& material : mesh.materials) {
         bytes += material.baseColorTexture.size() + material.metallicRoughnessTexture.size() +
-            material.normalTexture.size() + material.emissiveTexture.size() + material.occlusionTexture.size() + material.shaderPath.size();
+            material.normalTexture.size() + material.emissiveTexture.size() + material.occlusionTexture.size() +
+            material.transmissionTexture.size() + material.thicknessTexture.size() + material.clearcoatTexture.size() +
+            material.clearcoatRoughnessTexture.size() + material.clearcoatNormalTexture.size() + material.shaderPath.size();
     }
     for (const auto& image : mesh.embeddedImages) { bytes += sizeof(GltfImage) + image.path.size() + image.bytes.size(); }
     for (const auto& path : mesh.dependencies) { bytes += sizeof(std::string) + path.size(); }

@@ -18,8 +18,11 @@ struct GpuMaterial {
     std::string shaderPath;
     ID3D11Buffer* constants = nullptr;
     ID3D11ShaderResourceView* views[4]{};
-    ID3D11SamplerState* sampler = nullptr;
-    ID3D11ShaderResourceView* occlusion = nullptr;
+    ID3D11SamplerState* samplers[10]{};
+    ID3D11ShaderResourceView* extraViews[6]{}; // Occlusion, transmission, thickness, and three clearcoat maps.
+    bool doubleSided = false;
+    bool transmissive = false;
+    bool volume = false;
 };
 
 class GpuAssetCache {

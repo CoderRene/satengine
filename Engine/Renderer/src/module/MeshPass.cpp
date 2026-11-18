@@ -29,14 +29,15 @@
 #include <vector>
 #include <utility>
 #include <iostream>
+#include <iterator>
 
 namespace sat {
 
 namespace {
 
-static_assert(sizeof(MeshVertex) == 12 * sizeof(float));
 constexpr std::size_t kInitialInstanceCapacity = 128;
 constexpr std::size_t kMaxInstanceCapacity = 16384;
+constexpr UINT kOpaqueSceneSlot = 12;
 
 
 template <typename T>
@@ -92,14 +93,15 @@ struct MeshPass::Impl {
         UINT indexCount;
         UINT vertexCount;
         const GpuMeshNode* node = nullptr;
+        Vec3 thicknessScale{1, 1, 1};
 
         [[nodiscard]] bool canCombine() const {
-            return indexCount != 0 && !instance->meshPath.empty() &&
+            return !mesh->skinBuffer && !instance->paletteCount && indexCount != 0 && !instance->meshPath.empty() &&
                 (node ? mesh->mergeNodeDraws : instance->combineStatic);
         }
 
         [[nodiscard]] bool sameBatch(const DrawRange& other) const {
-            return mesh == other.mesh && material == other.material &&
+            return !mesh->skinBuffer && !other.mesh->skinBuffer && !instance->paletteCount && !other.instance->paletteCount && mesh == other.mesh && material == other.material &&
                 firstIndex == other.firstIndex && indexCount == other.indexCount;
         }
         [[nodiscard]] static bool batchLess(const DrawRange& a, const DrawRange& b) {
@@ -125,6 +127,12 @@ struct MeshPass::Impl {
         float depth;
     };
 
+    Microsoft::WRL::ComPtr<ID3D11Buffer> skinPalettes;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> skinView;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> skinCb;
+    std::vector<Mat4> paletteUpload;
+    std::vector<std::pair<const Mat4*, UINT>> paletteOffsets;
+    std::size_t paletteCapacity = 0;
     ID3D11Buffer* vb = nullptr;
     ID3D11Buffer* ib = nullptr;
     ID3D11Buffer* frameCb = nullptr;
@@ -133,10 +141,75 @@ struct MeshPass::Impl {
     bool instanceUploadFailed = false;
     ID3D11RasterizerState* rasterizer = nullptr;
     ID3D11DepthStencilState* depthState = nullptr;
+    Microsoft::WRL::ComPtr<ID3D11RasterizerState> doubleSidedRasterizer;
     Microsoft::WRL::ComPtr<ID3D11BlendState> blend;
     Microsoft::WRL::ComPtr<ID3D11DepthStencilState> transparentDepth;
     std::vector<TransparentDraw> transparent;
     std::vector<DrawRange> opaque;
+    std::vector<DrawRange> transmissive;
+    struct OpaqueSnapshot {
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+        Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
+        UINT width = 0, height = 0, mipLevels = 0;
+        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+
+        ID3D11ShaderResourceView* capture(ID3D11Device& device, ID3D11DeviceContext& context) {
+            Microsoft::WRL::ComPtr<ID3D11RenderTargetView> target;
+            Microsoft::WRL::ComPtr<ID3D11DepthStencilView> depth;
+            context.OMGetRenderTargets(1, target.GetAddressOf(), depth.GetAddressOf());
+            if (!target) { return nullptr; }
+
+            D3D11_RENDER_TARGET_VIEW_DESC targetDesc{};
+            target->GetDesc(&targetDesc);
+            if (targetDesc.ViewDimension != D3D11_RTV_DIMENSION_TEXTURE2D) { return nullptr; }
+            Microsoft::WRL::ComPtr<ID3D11Resource> source;
+            target->GetResource(source.GetAddressOf());
+            Microsoft::WRL::ComPtr<ID3D11Texture2D> sourceTexture;
+            if (FAILED(source.As(&sourceTexture))) { return nullptr; }
+            D3D11_TEXTURE2D_DESC desc{};
+            sourceTexture->GetDesc(&desc);
+            const UINT sourceMip = targetDesc.Texture2D.MipSlice;
+            desc.Width = std::max(1u, desc.Width >> sourceMip);
+            desc.Height = std::max(1u, desc.Height >> sourceMip);
+            desc.Format = targetDesc.Format;
+
+            desc.MipLevels = static_cast<UINT>(std::bit_width(std::max(desc.Width, desc.Height)));
+            if (desc.Width != width || desc.Height != height || desc.Format != format || desc.MipLevels != mipLevels) {
+                width = desc.Width;
+                height = desc.Height;
+                format = desc.Format;
+                texture.Reset();
+                view.Reset();
+                mipLevels = desc.MipLevels;
+                desc.ArraySize = 1;
+                desc.Usage = D3D11_USAGE_DEFAULT;
+                desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+                desc.MiscFlags = 0;
+                if (mipLevels > 1) {
+                    desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
+                    desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+                }
+                desc.CPUAccessFlags = 0;
+                if (FAILED(device.CreateTexture2D(&desc, nullptr, texture.GetAddressOf())) ||
+                    FAILED(device.CreateShaderResourceView(texture.Get(), nullptr, view.GetAddressOf()))) {
+                    texture.Reset();
+                    view.Reset();
+                    std::cerr << "Cannot allocate opaque scene texture for glass\n";
+                    return nullptr;
+                }
+            }
+            if (!view) { return nullptr; }
+
+            // Keep the sample source separate from the active render target.
+            context.OMSetRenderTargets(0, nullptr, nullptr);
+            context.CopySubresourceRegion(texture.Get(), 0, 0, 0, 0, sourceTexture.Get(), sourceMip, nullptr);
+            if (mipLevels > 1) { context.GenerateMips(view.Get()); }
+            auto* color = target.Get();
+            context.OMSetRenderTargets(1, &color, depth.Get());
+            return view.Get();
+        }
+    };
+    OpaqueSnapshot opaqueSnapshots[2];
     std::vector<DrawRange> visibleCasters;
     StaticMeshBatches sceneBatches;
     StaticMeshBatches gameBatches;
@@ -145,6 +218,7 @@ struct MeshPass::Impl {
     CascadedShadowMap shadowMap;
     std::vector<ShadowCaster> shadowCasters;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> environmentSampler;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> transmissionSampler;
     GpuMesh cubeMesh{};
     ID3D11Buffer* lightsCb = nullptr;
     ID3D11Buffer* clusterCb = nullptr;
@@ -165,6 +239,20 @@ struct MeshPass::Impl {
         return true;
     }
 };
+
+bool MeshPass::bindSkin(ID3D11DeviceContext* context, const MeshInstance& instance, const GpuMesh& mesh) const {
+    if (!m_impl || !mesh.skinBuffer || !m_impl->skinView) { return false; }
+    const auto found = std::find_if(m_impl->paletteOffsets.begin(), m_impl->paletteOffsets.end(),
+        [&](const auto& entry) { return entry.first == (instance.paletteCount ? instance.palette : mesh.restPalette.data()); });
+    if (found == m_impl->paletteOffsets.end()) { return false; }
+    const SkinCb constants{found->second};
+    context->UpdateSubresource(m_impl->skinCb.Get(), 0, nullptr, &constants, 0, 0);
+    context->VSSetConstantBuffers(5, 1, m_impl->skinCb.GetAddressOf());
+    context->VSSetShaderResources(8, 1, m_impl->skinView.GetAddressOf());
+    const UINT stride = sizeof(MeshSkinVertex), offset = 0;
+    context->IASetVertexBuffers(2, 1, &mesh.skinBuffer, &stride, &offset);
+    return true;
+}
 
 MeshPass::~MeshPass() {
     release();
@@ -297,7 +385,8 @@ bool MeshPass::ensure(ID3D11Device* device) {
     raster.FrontCounterClockwise = FALSE;
     raster.DepthClipEnable = TRUE;
     hr = device->CreateRasterizerState(&raster, &m_impl->rasterizer);
-    if (FAILED(hr)) {
+    raster.CullMode = D3D11_CULL_NONE;
+    if (FAILED(hr) || FAILED(device->CreateRasterizerState(&raster, m_impl->doubleSidedRasterizer.GetAddressOf()))) {
         release();
         m_impl = new Impl();
         m_impl->failed = true;
@@ -344,6 +433,10 @@ bool MeshPass::ensure(ID3D11Device* device) {
     environmentSampler.MaxLOD = D3D11_FLOAT32_MAX;
     if (FAILED(device->CreateSamplerState(&environmentSampler, m_impl->environmentSampler.GetAddressOf()))) {
         std::cerr << "Cannot create environment sampler\n";
+    }
+    environmentSampler.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+    if (FAILED(device->CreateSamplerState(&environmentSampler, m_impl->transmissionSampler.GetAddressOf()))) {
+        std::cerr << "Cannot create scene color sampler for glass\n";
     }
 
     m_impl->ready = true;
@@ -412,6 +505,10 @@ void MeshPass::draw(
         }
     }
     std::memcpy(frame.viewProj, viewProj.m, sizeof(frame.viewProj));
+    frame.orthographic = projection.m[15] == 1.0f;
+    frame.orthoViewToEye[0] = -view.m[2];
+    frame.orthoViewToEye[1] = -view.m[6];
+    frame.orthoViewToEye[2] = -view.m[10];
     frame.eye[0] = eye.x; frame.eye[1] = eye.y; frame.eye[2] = eye.z;
     frame.viewport[0] = viewport.TopLeftX;
     frame.viewport[1] = viewport.TopLeftY;
@@ -484,7 +581,8 @@ void MeshPass::draw(
     context->PSSetConstantBuffers(3, 1, &m_impl->lightsCb);
     context->PSSetConstantBuffers(4, 1, &m_impl->clusterCb);
     context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
-    context->RSSetState(m_impl->rasterizer);
+    auto* boundRasterizer = m_impl->rasterizer;
+    context->RSSetState(boundRasterizer);
     context->OMSetDepthStencilState(m_impl->depthState, 0);
 
     const GpuMesh* boundMesh = nullptr;
@@ -498,9 +596,63 @@ void MeshPass::draw(
         if (!device) { context->GetDevice(device.GetAddressOf()); }
         return device.Get();
     };
+    m_impl->paletteUpload.clear();
+    m_impl->paletteOffsets.clear();
+    for (int index = 0; index < drawList.meshCount; ++index) {
+        const auto& instance = drawList.meshes[index];
+        const auto* mesh = geometry(instance);
+        if (!mesh || !mesh->skinBuffer) { continue; }
+        const auto* palette = instance.paletteCount ? instance.palette : mesh->restPalette.data();
+        const auto count = instance.paletteCount ? instance.paletteCount : mesh->restPalette.size();
+        if (!palette || !count) { continue; }
+        m_impl->paletteOffsets.emplace_back(palette, static_cast<UINT>(m_impl->paletteUpload.size()));
+        m_impl->paletteUpload.insert(m_impl->paletteUpload.end(), palette, palette + count);
+    }
+    if (!m_impl->paletteUpload.empty()) {
+        const auto required = m_impl->paletteUpload.size();
+        if (required > UINT_MAX / sizeof(Mat4)) { return; }
+        if (required > m_impl->paletteCapacity) {
+            const auto capacity = std::bit_ceil(required);
+            if (capacity > UINT_MAX / sizeof(Mat4)) { return; }
+            D3D11_BUFFER_DESC desc{};
+            // D3D11 structured buffers cannot combine CPU access with misc flags.
+            // Upload once per view, shared by every shadow and color draw.
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+            desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+            desc.StructureByteStride = sizeof(Mat4);
+            desc.ByteWidth = static_cast<UINT>(capacity * sizeof(Mat4));
+            Microsoft::WRL::ComPtr<ID3D11Buffer> buffer;
+            Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
+            if (FAILED(getDevice()->CreateBuffer(&desc, nullptr, buffer.GetAddressOf())) ||
+                FAILED(getDevice()->CreateShaderResourceView(buffer.Get(), nullptr, view.GetAddressOf()))) { return; }
+            m_impl->skinPalettes = std::move(buffer); m_impl->skinView = std::move(view); m_impl->paletteCapacity = capacity;
+        }
+        if (!m_impl->skinCb) {
+            D3D11_BUFFER_DESC desc{};
+            desc.Usage = D3D11_USAGE_DEFAULT; desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER; desc.ByteWidth = sizeof(SkinCb);
+            if (FAILED(getDevice()->CreateBuffer(&desc, nullptr, m_impl->skinCb.GetAddressOf()))) { return; }
+        }
+        D3D11_BOX box{0, 0, 0, static_cast<UINT>(required * sizeof(Mat4)), 1, 1};
+        context->UpdateSubresource(m_impl->skinPalettes.Get(), 0, &box, m_impl->paletteUpload.data(), 0, 0);
+    }
     const auto drawMesh = [&](const Impl::DrawRange& draw, UINT count, UINT firstInstance) {
+        if (draw.mesh->skinBuffer) {
+            if (!shaders || !bindSkin(context, *draw.instance, *draw.mesh)) { return; }
+            const auto skinned = shaders->program(ShaderId::MeshSkinned);
+            context->VSSetShader(skinned.vertex, nullptr, 0); context->IASetInputLayout(skinned.layout);
+        } else {
+            context->VSSetShader(program.vertex, nullptr, 0); context->IASetInputLayout(program.layout);
+        }
         const auto* mesh = draw.mesh;
         const auto* material = draw.material;
+        auto* rasterizer = shadowPass ? shadowMap.rasterizer(material->doubleSided) :
+            (material->doubleSided ? m_impl->doubleSidedRasterizer.Get() : m_impl->rasterizer);
+        if (rasterizer != boundRasterizer) {
+            context->RSSetState(rasterizer);
+            boundRasterizer = rasterizer;
+            passChanged = true;
+        }
         if (mesh != boundMesh) {
             const UINT offset = 0;
             context->IASetVertexBuffers(0, 1, &mesh->vertexBuffer, &mesh->vertexStride, &offset);
@@ -525,14 +677,21 @@ void MeshPass::draw(
         }
         if (material != boundMaterial && (!shadowPass || material->alphaMode == AlphaMode::Mask)) {
             context->PSSetConstantBuffers(2, 1, &material->constants);
-            if (!boundMaterial || material->sampler != boundMaterial->sampler) {
-                context->PSSetSamplers(0, 1, &material->sampler);
+            if (!boundMaterial || material->samplers[0] != boundMaterial->samplers[0]) {
+                context->PSSetSamplers(0, 1, material->samplers);
+            }
+            const auto extraSamplerCount = static_cast<UINT>(std::size(material->samplers) - 1);
+            if (!shadowPass && (!boundMaterial ||
+                !std::equal(material->samplers + 1, material->samplers + 1 + extraSamplerCount, boundMaterial->samplers + 1))) {
+                context->PSSetSamplers(3, extraSamplerCount, material->samplers + 1);
             }
             if (!boundMaterial || !std::equal(material->views, material->views + 4, boundMaterial->views)) {
                 context->PSSetShaderResources(0, 4, material->views);
             }
-            if (!shadowPass && (!boundMaterial || material->occlusion != boundMaterial->occlusion)) {
-                context->PSSetShaderResources(6, 1, &material->occlusion);
+            const auto extraViewCount = static_cast<UINT>(std::size(material->extraViews));
+            if (!shadowPass && (!boundMaterial ||
+                !std::equal(material->extraViews, material->extraViews + extraViewCount, boundMaterial->extraViews))) {
+                context->PSSetShaderResources(6, extraViewCount, material->extraViews);
             }
             boundMaterial = material;
             passChanged = true;
@@ -566,7 +725,18 @@ void MeshPass::draw(
             auto* instances = static_cast<MeshInstanceData*>(mapped.pData);
             for (std::size_t i = 0; i < size; ++i) {
                 const auto& draw = std::invoke(drawRange, queue[first + i]);
-                writeMeshInstance(instances[i], meshWorld(draw.instance->world, draw.node));
+                auto& instance = instances[i];
+                const Mat4 world = meshWorld(draw.instance->world, draw.node);
+                writeMeshInstance(instance, world);
+                const auto& scale = draw.thicknessScale;
+                if (draw.material->volume) {
+                    instance.thicknessScale[0] = scale.x * length(Vec3{world.m[0], world.m[1], world.m[2]});
+                    instance.thicknessScale[1] = scale.y * length(Vec3{world.m[4], world.m[5], world.m[6]});
+                    instance.thicknessScale[2] = scale.z * length(Vec3{world.m[8], world.m[9], world.m[10]});
+                } else {
+                    instance.thicknessScale[0] = instance.thicknessScale[1] = instance.thicknessScale[2] = 1.0f;
+                }
+                instance.padding = 0.0f;
             }
             context->Unmap(m_impl->instanceStream.Get(), 0);
             m_impl->instanceUploadFailed = false;
@@ -589,9 +759,11 @@ void MeshPass::draw(
         const auto* material = m_assets.material(instance.materialPath);
         const auto* node = mesh->node(instance.meshNode);
         if (instance.meshNode != 0 && !node) { return; }
-        if (mesh->mainSectionCount == 0 || !instance.materialPath.empty()) {
+        const bool overrideMaterial = !instance.materialPath.empty();
+        if (mesh->mainSectionCount == 0 || (overrideMaterial && (!material || !material->volume))) {
             if (material) {
-                const Vec3 center = node ? (node->minimum + node->maximum) * 0.5f : Vec3{};
+                const auto& bounds = mesh->boundsCenter;
+                const Vec3 center = node ? (node->minimum + node->maximum) * 0.5f : Vec3{bounds[0], bounds[1], bounds[2]};
                 visit(Impl::DrawRange{&instance, mesh, material, node ? node->firstIndex : 0,
                     node ? node->indexCount : mesh->indexCount, node ? node->vertexCount : mesh->vertexCount, node}, center);
             }
@@ -600,11 +772,12 @@ void MeshPass::draw(
         const auto sections = std::span(mesh->sections).subspan(node ? node->firstSection : 0,
             node ? node->sectionCount : mesh->mainSectionCount);
         for (const auto& section : sections) {
-            const auto* sectionMaterial = section.material ? section.material : material;
+            const auto* sectionMaterial = !overrideMaterial && section.material ? section.material : material;
             if (!sectionMaterial) { continue; }
             const auto& range = section.range;
             const auto& center = section.center;
-            visit(Impl::DrawRange{&instance, mesh, sectionMaterial, range.firstIndex, range.indexCount, section.vertexCount, node},
+            visit(Impl::DrawRange{&instance, mesh, sectionMaterial, range.firstIndex, range.indexCount,
+                section.vertexCount, node, range.thicknessScale},
                 Vec3{center[0], center[1], center[2]});
         }
     };
@@ -628,20 +801,39 @@ void MeshPass::draw(
             const float xy = std::abs(dot(x, y)), xz = std::abs(dot(x, z)), yz = std::abs(dot(y, z));
             const float scale = std::sqrt(std::max({dot(x, x) + xy + xz, dot(y, y) + xy + yz, dot(z, z) + xz + yz}));
             const auto& center = mesh->boundsCenter;
-            const Vec3 localCenter = node ? (node->minimum + node->maximum) * 0.5f : Vec3{center[0], center[1], center[2]};
+            Vec3 localCenter = node ? (node->minimum + node->maximum) * 0.5f : Vec3{center[0], center[1], center[2]};
+            float localRadius = node ? length(node->maximum - localCenter) : mesh->boundsRadius;
+            if (instance.palette && mesh->skinBuffer) {
+                Vec3 minimum{}, maximum{};
+                bool valid = false;
+                for (std::size_t joint = 0; joint < mesh->jointBounds.size() && joint < instance.paletteCount; ++joint) {
+                    const auto& bounds = mesh->jointBounds[joint];
+                    if (!bounds.valid) { continue; }
+                    for (unsigned corner = 0; corner < 8; ++corner) {
+                        const auto point = transformPoint(instance.palette[joint], {corner & 1 ? bounds.maximum.x : bounds.minimum.x,
+                            corner & 2 ? bounds.maximum.y : bounds.minimum.y, corner & 4 ? bounds.maximum.z : bounds.minimum.z});
+                        if (!valid) { minimum = maximum = point; valid = true; }
+                        minimum = {std::min(minimum.x, point.x), std::min(minimum.y, point.y), std::min(minimum.z, point.z)};
+                        maximum = {std::max(maximum.x, point.x), std::max(maximum.y, point.y), std::max(maximum.z, point.z)};
+                    }
+                }
+                if (valid) { localCenter = (minimum + maximum) * 0.5f; localRadius = length(maximum - localCenter); }
+            }
             const Vec3 worldCenter = transformPoint(world, localCenter);
             const auto lightCenter = shadowMap.lightSpaceCenter(worldCenter);
-            const float radius = (node ? length(node->maximum - localCenter) : mesh->boundsRadius) * scale;
+            const float radius = localRadius * scale;
             const auto firstCaster = casters.size();
             visitSections(instance, mesh, [&](const Impl::DrawRange& draw, Vec3) {
                 const auto mode = draw.material->alphaMode;
-                if (mode == AlphaMode::Blend || (mode == AlphaMode::Mask && !shadowPixel)) { return; }
+                if (draw.material->transmissive || mode == AlphaMode::Blend ||
+                    (mode == AlphaMode::Mask && !shadowPixel)) { return; }
 
                 // Sections arrive in index order and share this instance's transform and bounds.
                 // Opaque shadow draws use no pixel shader, so adjacent ranges can share a draw.
                 if (mode == AlphaMode::Opaque && casters.size() > firstCaster) {
                     auto& previous = casters.back().draw;
                     if (previous.material->alphaMode == AlphaMode::Opaque &&
+                        previous.material->doubleSided == draw.material->doubleSided &&
                         previous.firstIndex + previous.indexCount == draw.firstIndex) {
                         previous.indexCount += draw.indexCount;
                         previous.vertexCount += draw.vertexCount;
@@ -669,7 +861,6 @@ void MeshPass::draw(
         const float size = static_cast<float>(shadowMap.resolution());
         const D3D11_VIEWPORT shadowViewport{0, 0, size, size, 0, 1};
         context->RSSetViewports(1, &shadowViewport);
-        context->RSSetState(shadowMap.rasterizer());
         for (unsigned cascade = 0; cascade < frame.cascadeCount; ++cascade) {
             if (FAILED(context->Map(m_impl->frameCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
                 frame.shadowLight = -1;
@@ -697,7 +888,8 @@ void MeshPass::draw(
         auto* target = previousTarget.Get();
         context->OMSetRenderTargets(1, &target, previousDepth.Get());
         context->RSSetViewports(1, &viewport);
-        context->RSSetState(m_impl->rasterizer);
+        boundRasterizer = m_impl->rasterizer;
+        context->RSSetState(boundRasterizer);
         context->PSSetShader(program.pixel, nullptr, 0);
         boundPixel = program.pixel;
         shadowPass = false;
@@ -716,17 +908,22 @@ void MeshPass::draw(
     transparent.clear();
     auto& opaque = m_impl->opaque;
     opaque.clear();
+    auto& transmissive = m_impl->transmissive;
+    transmissive.clear();
+    bool needsSnapshot = false;
     bool hasStaticSources = false;
     for (int i = 0; i < drawList.meshCount; ++i) {
         const auto& instance = drawList.meshes[i];
         const auto* mesh = geometry(instance);
         if (!mesh || !mesh->valid()) { continue; }
         visitSections(instance, mesh, [&](const Impl::DrawRange& draw, Vec3 localCenter) {
+            needsSnapshot |= draw.material->transmissive;
             if (draw.material->alphaMode == AlphaMode::Blend) {
                 const auto center = transformPoint(meshWorld(instance.world, draw.node), localCenter);
-                const float depth = viewProj.m[3] * center.x + viewProj.m[7] * center.y +
-                    viewProj.m[11] * center.z + viewProj.m[15];
+                const float depth = view.m[2] * center.x + view.m[6] * center.y + view.m[10] * center.z + view.m[14];
                 transparent.push_back({draw, std::isfinite(depth) ? depth : 0.0f});
+            } else if (draw.material->transmissive) {
+                transmissive.push_back(draw);
             } else {
                 opaque.push_back(draw);
                 hasStaticSources |= draw.canCombine();
@@ -769,6 +966,14 @@ void MeshPass::draw(
         std::sort(opaque.begin(), opaque.end(), Impl::DrawRange::opaqueLess);
     }
     (void)submit(opaque, std::identity{}, true);
+    if (needsSnapshot) {
+        auto& snapshot = m_impl->opaqueSnapshots[drawList.drawEditorOverlay ? 0 : 1];
+        auto* background = m_impl->transmissionSampler ? snapshot.capture(*getDevice(), *context) : nullptr;
+        context->PSSetShaderResources(kOpaqueSceneSlot, 1, &background);
+        context->PSSetSamplers(kOpaqueSceneSlot, 1, m_impl->transmissionSampler.GetAddressOf());
+        std::sort(transmissive.begin(), transmissive.end(), Impl::DrawRange::opaqueLess);
+        (void)submit(transmissive, std::identity{}, true);
+    }
     if (!transparent.empty()) {
         std::sort(transparent.begin(), transparent.end(), [](const auto& a, const auto& b) {
             if (a.depth != b.depth) { return a.depth > b.depth; }
@@ -781,8 +986,9 @@ void MeshPass::draw(
         (void)submit(transparent, &Impl::TransparentDraw::draw, false);
         context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
     }
-    ID3D11ShaderResourceView* unbound[7]{};
-    context->PSSetShaderResources(0, 7, unbound);
+    if (boundRasterizer != m_impl->rasterizer) { context->RSSetState(m_impl->rasterizer); }
+    ID3D11ShaderResourceView* unbound[kOpaqueSceneSlot + 1]{};
+    context->PSSetShaderResources(0, static_cast<UINT>(std::size(unbound)), unbound);
 }
 
 } // namespace sat

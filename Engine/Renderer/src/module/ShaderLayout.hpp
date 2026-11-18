@@ -8,6 +8,8 @@
 #include <RmlUi/Core/Vertex.h>
 
 #include <algorithm>
+#include <array>
+#include <iterator>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -32,11 +34,15 @@ struct alignas(16) MeshFrameCb {
     float cascadeBlend;
     float cascadeNear;
     float orthoDepthScale;
+    float orthoViewToEye[3];
+    unsigned orthographic;
 };
 
 struct alignas(16) MeshInstanceData {
     float world[16];
     float normal[12]; // Three columns. The first column's W stores tangent handedness.
+    float thicknessScale[3];
+    float padding;
 };
 
 inline void writeMeshInstance(MeshInstanceData& object, const Mat4& matrix) {
@@ -61,6 +67,16 @@ inline void writeMeshInstance(MeshInstanceData& object, const Mat4& matrix) {
     object.normal[3] = sign;
 }
 
+struct alignas(16) SkinCb { unsigned paletteOffset = 0; unsigned padding[3]{}; };
+
+struct MaterialUvCb {
+    float matrix[4]; // UV transform rows.
+    float offset[2];
+    unsigned texCoord;
+    unsigned useDerivativeFrame;
+};
+static_assert(sizeof(MaterialUvCb) == 32);
+
 struct alignas(16) MaterialCb {
     float baseColor[4];
     float emissive[3];
@@ -70,6 +86,14 @@ struct alignas(16) MaterialCb {
     float hasEmissiveTexture;
     float unlit;
     float alphaMode, alphaCutoff, specularStrength, occlusionStrength;
+    MaterialUvCb uv[7];
+    float transmission, ior, thickness, attenuationDistance;
+    float attenuationColor[3];
+    float transmissionMip;
+    MaterialUvCb coatUv[3];
+    float clearcoat, clearcoatRoughness, clearcoatNormalScale, hasClearcoatNormal;
+    float transmissionRoughnessStrength;
+    float transmissionPadding[3];
 };
 
 inline constexpr int kMaxLights = 128;
@@ -130,13 +154,18 @@ struct alignas(16) GizmoFrameCb {
     float selection[4] = {-1, 0, 0, 0};
 };
 
-static_assert(sizeof(MeshVertex) == 48 && offsetof(MeshVertex, nx) == 12 &&
-    offsetof(MeshVertex, u) == 24 && offsetof(MeshVertex, tx) == 32);
-static_assert(sizeof(MeshFrameCb) == 432 && alignof(MeshFrameCb) == 16 &&
+static_assert(sizeof(MeshVertex) == 72 && offsetof(MeshVertex, nx) == 12 &&
+    offsetof(MeshVertex, u) == 24 && offsetof(MeshVertex, tx) == 32 &&
+    offsetof(MeshVertex, u1) == 48 && offsetof(MeshVertex, color) == 56);
+static_assert(sizeof(MeshFrameCb) == 448 && alignof(MeshFrameCb) == 16 &&
     offsetof(MeshFrameCb, cascadeViewProj) == 128 && offsetof(MeshFrameCb, cascadeSplits) == 384 &&
     offsetof(MeshFrameCb, cascadeTexel) == 400 && offsetof(MeshFrameCb, cascadeCount) == 416);
-static_assert(sizeof(MeshInstanceData) == 112 && offsetof(MeshInstanceData, normal) == 64);
-static_assert(sizeof(MaterialCb) == 64 && alignof(MaterialCb) == 16);
+static_assert(sizeof(MeshInstanceData) == 128 && offsetof(MeshInstanceData, normal) == 64 &&
+    offsetof(MeshInstanceData, thicknessScale) == 112);
+static_assert(sizeof(MaterialCb) == 448 && offsetof(MaterialCb, uv) == 64 &&
+    offsetof(MaterialCb, transmission) == 288 && offsetof(MaterialCb, coatUv) == 320 &&
+    offsetof(MaterialCb, clearcoat) == 416 && offsetof(MaterialCb, transmissionRoughnessStrength) == 432 &&
+    alignof(MaterialCb) == 16);
 static_assert(sizeof(PackedLight) == 64 && alignof(PackedLight) == 16);
 static_assert(sizeof(LightsCb) == 8192 && alignof(LightsCb) == 16);
 static_assert(sizeof(OutlineFrameCb) == 64 && alignof(OutlineFrameCb) == 16);
@@ -150,6 +179,8 @@ inline constexpr D3D11_INPUT_ELEMENT_DESC kMeshLayout[] = {
         {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(MeshVertex, u1), D3D11_INPUT_PER_VERTEX_DATA, 0},
+        {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(MeshVertex, color), D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"INSTANCE", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1},
         {"INSTANCE", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 16, D3D11_INPUT_PER_INSTANCE_DATA, 1},
         {"INSTANCE", 2, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 32, D3D11_INPUT_PER_INSTANCE_DATA, 1},
@@ -157,8 +188,21 @@ inline constexpr D3D11_INPUT_ELEMENT_DESC kMeshLayout[] = {
         {"INSTANCE", 4, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 64, D3D11_INPUT_PER_INSTANCE_DATA, 1},
         {"INSTANCE", 5, DXGI_FORMAT_R32G32B32_FLOAT, 1, 80, D3D11_INPUT_PER_INSTANCE_DATA, 1},
         {"INSTANCE", 6, DXGI_FORMAT_R32G32B32_FLOAT, 1, 96, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+        {"INSTANCE", 7, DXGI_FORMAT_R32G32B32_FLOAT, 1, offsetof(MeshInstanceData, thicknessScale), D3D11_INPUT_PER_INSTANCE_DATA, 1},
     };
 
+inline constexpr auto kMeshSkinnedLayout = [] {
+    std::array<D3D11_INPUT_ELEMENT_DESC, std::size(kMeshLayout) + 2> result{};
+    std::copy(std::begin(kMeshLayout), std::end(kMeshLayout), result.begin());
+    result[std::size(kMeshLayout)] = {"BLENDINDICES", 0, DXGI_FORMAT_R8G8B8A8_UINT, 2, 0, D3D11_INPUT_PER_VERTEX_DATA, 0};
+    result[std::size(kMeshLayout) + 1] = {"BLENDWEIGHT", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 2, 4, D3D11_INPUT_PER_VERTEX_DATA, 0};
+    return result;
+}();
+inline constexpr D3D11_INPUT_ELEMENT_DESC kSelectionOutlineSkinnedLayout[] = {
+    {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    {"BLENDINDICES", 0, DXGI_FORMAT_R8G8B8A8_UINT, 2, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+    {"BLENDWEIGHT", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 2, 4, D3D11_INPUT_PER_VERTEX_DATA, 0},
+};
 inline constexpr D3D11_INPUT_ELEMENT_DESC kSelectionOutlineLayout[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
     };

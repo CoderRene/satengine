@@ -537,6 +537,10 @@ void registerSceneBindings(lua_State* state, Scene& scene, PhysicsSystem* physic
         {"setAmbient", guarded<setAmbient>},
         // @lua fun sat.hasMesh(entity: EntityId): boolean
         {"hasMesh", guarded<hasComponent<&Entity::hasMesh>>},
+        // @lua fun sat.hasAnimator(entity: EntityId): boolean
+        {"hasAnimator", guarded<hasComponent<&Entity::hasAnimator>>},
+        // @lua fun sat.addAnimator(entity: EntityId): boolean
+        {"addAnimator", guarded<addComponent<&Entity::hasAnimator, &Entity::animator>>},
         // @lua fun sat.hasCamera(entity: EntityId): boolean
         {"hasCamera", guarded<hasComponent<&Entity::hasCamera>>},
         // @lua fun sat.addMesh(entity: EntityId): boolean

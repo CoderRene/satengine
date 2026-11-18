@@ -4,6 +4,7 @@
 
 #include "module/AssetImportPanel.hpp"
 #include "module/PlaySession.hpp"
+#include "module/AnimationGraphPanel.hpp"
 #include "module/ProjectOpen.hpp"
 
 #include "ContentPanel.hpp"
@@ -52,6 +53,8 @@ struct EditorSession::State {
     std::unique_ptr<GameUi> gameUi;
     // Declared before the panels so their destructors still see the play log.
     PlaySession play;
+    AnimationSystem previewAnimation;
+    std::unique_ptr<AnimationGraphPanel> animationGraph;
     std::unique_ptr<HierarchyPanel> hierarchy;
     std::unique_ptr<InspectorPanel> inspector;
     std::unique_ptr<ContentPanel> content;

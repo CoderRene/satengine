@@ -1,5 +1,7 @@
 #pragma once
 
+#include <span>
+
 #include "SceneDraw.hpp"
 #include "AssetLibrary.hpp"
 
@@ -92,7 +94,7 @@ public:
     [[nodiscard]] std::uint64_t contentRevision() const;
 
     // Render-thread preview for mesh, material and texture assets. Borrowed SRV valid through this frame.
-    [[nodiscard]] AssetThumbnail assetThumbnail(std::string_view path);
+    [[nodiscard]] AssetThumbnail assetThumbnail(std::string_view path, std::span<const Mat4> palette = {});
 
     [[nodiscard]] std::uintptr_t createTexture(const unsigned char* rgba, int width, int height);
     void destroyTexture(std::uintptr_t texture);

@@ -30,6 +30,7 @@ Open any folder under `Examples/` as a project in the editor, then press **Play*
 | --- | --- |
 | [LuaCube](Examples/LuaCube) | A minimal Lua-driven scene |
 | [AssetLoading](Examples/AssetLoading) | Imported meshes and textured materials |
+| [GltfAnimation](Examples/GltfAnimation) | A rigged signal beacon driven by an embedded glTF clip |
 | [LightingDemo](Examples/LightingDemo) | Directional, point, and spot lights with metallic-roughness materials |
 | [SpacePhysics](Examples/SpacePhysics) | Rigid bodies, gravity, triggers |
 | [AudioDemo](Examples/AudioDemo) | Spatial audio, buses, time scale |

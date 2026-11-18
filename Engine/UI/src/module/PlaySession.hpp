@@ -2,6 +2,7 @@
 
 #include "AssetLibrary.hpp"
 #include "AudioSystem.hpp"
+#include "AnimationSystem.hpp"
 #include "LuaRuntime.hpp"
 #include "PhysicsSystem.hpp"
 #include "Scene.hpp"
@@ -37,6 +38,7 @@ public:
     [[nodiscard]] ScriptLog& log() { return m_log; }
     [[nodiscard]] std::size_t physicsWorldCount() const;
 
+    [[nodiscard]] AnimationSystem& animation() { return m_animation; }
     void setAssetReader(AssetReader reader);
     [[nodiscard]] bool update(float deltaSeconds);
     void stop(const Scene& authored);
@@ -53,6 +55,7 @@ private:
     ScriptLog m_log;
     PhysicsSystem m_physics;
     AudioSystem m_audio;
+    AnimationSystem m_animation;
     GameUi* m_gameUi = nullptr;
     LuaRuntime m_scripts;
     std::optional<Scene> m_prePlay;

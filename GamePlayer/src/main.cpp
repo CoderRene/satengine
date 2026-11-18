@@ -2,6 +2,7 @@
 #include "PakArchive.hpp"
 #include "GamePakKeys.hpp"
 #include "AudioSystem.hpp"
+#include "AnimationSystem.hpp"
 #include "LuaRuntime.hpp"
 #include "PhysicsSystem.hpp"
 #include "SceneFile.hpp"
@@ -106,7 +107,7 @@ private:
 
 class LuaGame final : public sat::Application {
 public:
-    LuaGame() : m_physics(scene()), m_audio(scene()), m_scripts(scene(), &input(), nullptr, &m_physics, &m_audio) {}
+    LuaGame() : m_physics(scene()), m_audio(scene()), m_animation(scene()), m_scripts(scene(), &input(), nullptr, &m_physics, &m_audio, &m_animation) {}
     [[nodiscard]] bool failed() const { return m_failed; }
 protected:
     void onStart() override {
@@ -167,6 +168,8 @@ protected:
             return sat::AssetReadResult::Found;
         });
         m_audio.setAssetReader(readAsset);
+        m_animation.setAssetReader(readAsset);
+        setAnimationSystem(&m_animation);
         std::vector<sat::LuaScriptSource> scripts;
         for (const auto& entry : m_archive.entries()) {
             if (entry.name.starts_with("Scripts/") && entry.name.ends_with(".lua")) {
@@ -200,6 +203,7 @@ private:
     std::array<sat::PakArchive, 3> m_assets;
     sat::PhysicsSystem m_physics;
     sat::AudioSystem m_audio;
+    sat::AnimationSystem m_animation;
     sat::LuaRuntime m_scripts;
     bool m_failed = false;
 };

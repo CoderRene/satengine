@@ -1,0 +1,4 @@
+SatAnimationGraph 1
+default 0
+state "Idle" "Signal" 1 1 364 209
+transition -1 0 0.20000000298023224 0 1 0

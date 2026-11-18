@@ -78,7 +78,7 @@ int Application::run() {
             continue;
         }
         renderer.newFrame();
-        renderData.update(m_scene, width, height);
+        renderData.update(m_scene, width, height, m_animation);
         if (!renderer.renderWindow(renderData.camera(), renderData.drawList())) {
             onStop();
             return 1;
