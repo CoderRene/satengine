@@ -25,6 +25,7 @@
 #include <functional>
 #include <span>
 #include <string_view>
+#include <unordered_map>
 #include <limits>
 #include <vector>
 #include <utility>
@@ -131,7 +132,7 @@ struct MeshPass::Impl {
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> skinView;
     Microsoft::WRL::ComPtr<ID3D11Buffer> skinCb;
     std::vector<Mat4> paletteUpload;
-    std::vector<std::pair<const Mat4*, UINT>> paletteOffsets;
+    std::unordered_map<const Mat4*, UINT> paletteOffsets;
     std::size_t paletteCapacity = 0;
     ID3D11Buffer* vb = nullptr;
     ID3D11Buffer* ib = nullptr;
@@ -242,8 +243,8 @@ struct MeshPass::Impl {
 
 bool MeshPass::bindSkin(ID3D11DeviceContext* context, const MeshInstance& instance, const GpuMesh& mesh) const {
     if (!m_impl || !mesh.skinBuffer || !m_impl->skinView) { return false; }
-    const auto found = std::find_if(m_impl->paletteOffsets.begin(), m_impl->paletteOffsets.end(),
-        [&](const auto& entry) { return entry.first == (instance.paletteCount ? instance.palette : mesh.restPalette.data()); });
+    const auto* palette = instance.paletteCount ? instance.palette : mesh.restPalette.data();
+    const auto found = m_impl->paletteOffsets.find(palette);
     if (found == m_impl->paletteOffsets.end()) { return false; }
     const SkinCb constants{found->second};
     context->UpdateSubresource(m_impl->skinCb.Get(), 0, nullptr, &constants, 0, 0);
@@ -605,8 +606,9 @@ void MeshPass::draw(
         const auto* palette = instance.paletteCount ? instance.palette : mesh->restPalette.data();
         const auto count = instance.paletteCount ? instance.paletteCount : mesh->restPalette.size();
         if (!palette || !count) { continue; }
-        m_impl->paletteOffsets.emplace_back(palette, static_cast<UINT>(m_impl->paletteUpload.size()));
-        m_impl->paletteUpload.insert(m_impl->paletteUpload.end(), palette, palette + count);
+        if (m_impl->paletteOffsets.try_emplace(palette, static_cast<UINT>(m_impl->paletteUpload.size())).second) {
+            m_impl->paletteUpload.insert(m_impl->paletteUpload.end(), palette, palette + count);
+        }
     }
     if (!m_impl->paletteUpload.empty()) {
         const auto required = m_impl->paletteUpload.size();

@@ -11,7 +11,6 @@ Engine/Core/include/EnginePaths.hpp
 
 Tests/
 /Examples/*
-!/Examples/GltfAnimation/
 /**/tests/
 # Generated standalone archive encryption keys (never deploy or commit).
 GamePakKey.bin

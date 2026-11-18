@@ -179,6 +179,9 @@ public:
     // Use kInvalidEntityId as the parent to move an entity to the root.
     [[nodiscard]] bool canSetParent(EntityId childId, EntityId parentId) const;
     [[nodiscard]] bool setParent(EntityId childId, EntityId parentId);
+    // Move an entity and its descendants by the same world-space offset.
+    // Returns false for a missing entity or an unchanged position.
+    bool moveEntity(EntityId id, DVec3 position);
     // Direct children of a removed entity become roots.
     [[nodiscard]] bool destroyEntity(EntityId id);
     [[nodiscard]] bool setMainCameraById(EntityId id);

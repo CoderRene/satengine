@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <iostream>
 #include <unordered_set>
@@ -15,6 +16,30 @@
 #include <utility>
 
 namespace sat {
+namespace {
+bool isPartOfRig(const Entity& entity, std::string_view path) {
+    return !entity.hasMesh || (entity.mesh.meshNode != 0 && entity.mesh.meshPath == path);
+}
+}
+
+std::string_view animatorMeshPath(const Scene& scene, const Entity& entity) {
+    if (entity.hasMesh) {
+        return isGltfAssetPath(entity.mesh.meshPath) ? std::string_view(entity.mesh.meshPath) : std::string_view{};
+    }
+    std::string_view path;
+    for (const auto& mesh : scene.entities()) {
+        if (!mesh.hasMesh || mesh.mesh.meshNode == 0) { continue; }
+        for (const auto* parent = scene.entityById(mesh.parentId()); parent && isPartOfRig(*parent, mesh.mesh.meshPath);
+            parent = scene.entityById(parent->parentId())) {
+            if (parent->id() != entity.id()) { continue; }
+            if (!path.empty() && path != mesh.mesh.meshPath) { return {}; }
+            path = mesh.mesh.meshPath;
+            break;
+        }
+    }
+    return isGltfAssetPath(path) ? path : std::string_view{};
+}
+
 struct AnimationSystem::Impl {
     struct Rig { AnimationData data; float scale = 1; std::vector<std::size_t> order; };
     struct BoundClip {
@@ -28,6 +53,7 @@ struct AnimationSystem::Impl {
     };
     struct Instance {
         std::string meshPath;
+        std::uint64_t sceneRevision = 0;
         AnimatorComponent settings;
         Rig* rig = nullptr;
         const AnimationGraph* graph = nullptr;
@@ -46,7 +72,7 @@ struct AnimationSystem::Impl {
         bool sourceLoop = true, frozenSource = false;
         std::vector<std::size_t> sourceCursors;
         std::uint32_t state = 0;
-        std::size_t offset = 0;
+        std::size_t offset = std::numeric_limits<std::size_t>::max();
         double time = 0;
         float speed = 1, fade = 0, fadeTime = 0;
         bool playing = false, loop = true;
@@ -147,20 +173,32 @@ struct AnimationSystem::Impl {
         const auto failed = failedInstances.find(id);
         if (failed != failedInstances.end() && failed->second == scene.editRevision()) { return nullptr; }
         auto* result = createInstance(id);
-        if (!result) { failedInstances[id] = scene.editRevision(); }
-        else { failedInstances.erase(id); }
+        if (!result) {
+            instances.erase(id);
+            failedInstances[id] = scene.editRevision();
+        } else {
+            failedInstances.erase(id);
+        }
         return result;
     }
     Instance* createInstance(EntityId id) {
         const auto* entity = scene.entityById(id);
-        if (!entity || !entity->hasAnimator || !entity->hasMesh || entity->mesh.meshNode || !isGltfAssetPath(entity->mesh.meshPath)) {
-            error = "Animator requires a complete glTF mesh"; return nullptr;
-        }
+        if (!entity || !entity->hasAnimator) { return nullptr; }
         auto found = instances.find(id);
-        if (found != instances.end() && found->second.meshPath == entity->mesh.meshPath && found->second.settings == entity->animator) { return &found->second; }
-        if (found != instances.end()) { instances.erase(found); }
+        const auto sceneRevision = scene.editRevision();
+        const auto path = !entity->hasMesh && found != instances.end() && found->second.sceneRevision == sceneRevision ?
+            std::string_view(found->second.meshPath) : animatorMeshPath(scene, *entity);
+        if (path.empty()) {
+            error = "Animator requires a glTF mesh or a hierarchy from a single glTF asset"; return nullptr;
+        }
+        if (found != instances.end() && found->second.meshPath == path && found->second.settings == entity->animator) {
+            found->second.sceneRevision = sceneRevision;
+            return &found->second;
+        }
         Instance instance;
-        instance.meshPath = entity->mesh.meshPath;
+        instance.meshPath = path;
+        instance.sceneRevision = sceneRevision;
+        if (found != instances.end()) { instances.erase(found); }
         instance.settings = entity->animator;
         instance.speed = entity->animator.speed;
         instance.rig = rig(instance.meshPath);
@@ -279,7 +317,7 @@ void AnimationSystem::update(float deltaSeconds, float timeScale) {
     if (!impl.running || !std::isfinite(deltaSeconds) || deltaSeconds < 0 || !std::isfinite(timeScale) || timeScale < 0) { return; }
     std::erase_if(impl.instances, [&](const auto& entry) {
         const auto* entity = impl.scene.entityById(entry.first);
-        return !entity || !entity->hasAnimator || !entity->hasMesh || entity->mesh.meshNode || !isGltfAssetPath(entity->mesh.meshPath);
+        return !entity || !entity->hasAnimator;
     });
     std::size_t count = 0;
     for (const auto& entity : impl.scene.entities()) {
@@ -347,13 +385,30 @@ float AnimationSystem::time(EntityId id) const { const auto found = m_impl->inst
 bool AnimationSystem::isPlaying(EntityId id) const { const auto found = m_impl->instances.find(id); return found != m_impl->instances.end() && found->second.playing; }
 std::vector<std::string> AnimationSystem::clipNames(std::string_view path) {
     std::vector<std::string> names;
+    if (path.empty()) { return names; }
     if (const auto* rig = m_impl->rig(path)) { for (const auto& clip : rig->data.clips) { names.push_back(clip.name); } }
     return names;
 }
 std::span<const Mat4> AnimationSystem::palette(EntityId id) const {
     const auto found = m_impl->instances.find(id);
-    if (found == m_impl->instances.end() || found->second.offset + found->second.pose.size() > m_impl->palettes.size()) { return {}; }
-    return {m_impl->palettes.data() + found->second.offset, found->second.pose.size()};
+    if (found == m_impl->instances.end()) { return {}; }
+    const auto& instance = found->second;
+    const auto size = m_impl->palettes.size();
+    if (instance.offset > size || instance.pose.size() > size - instance.offset) { return {}; }
+    return {m_impl->palettes.data() + instance.offset, instance.pose.size()};
+}
+std::span<const Mat4> AnimationSystem::meshPalette(const Entity& meshEntity) const {
+    if (meshEntity.hasAnimator) { return palette(meshEntity.id()); }
+    if (meshEntity.mesh.meshNode == 0 || m_impl->instances.empty()) { return {}; }
+    const auto& path = meshEntity.mesh.meshPath;
+    const auto& scene = m_impl->scene;
+    for (const auto* parent = scene.entityById(meshEntity.parentId()); parent && isPartOfRig(*parent, path);
+        parent = scene.entityById(parent->parentId())) {
+        if (!parent->hasAnimator) { continue; }
+        const auto found = m_impl->instances.find(parent->id());
+        if (found != m_impl->instances.end() && found->second.meshPath == path) { return palette(parent->id()); }
+    }
+    return {};
 }
 bool AnimationSystem::setBool(EntityId id, std::string_view name, bool value) { return m_impl->parameter(id, name, AnimationParameterType::Bool, value); }
 bool AnimationSystem::setFloat(EntityId id, std::string_view name, float value) { return m_impl->parameter(id, name, AnimationParameterType::Float, value); }

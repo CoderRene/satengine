@@ -172,8 +172,8 @@ void EditorSession::renderViews() {
             instance.worldPosition = entity.transform.position;
             instance.combineStatic = entity.mesh.combineStatic;
             instance.meshNode = entity.mesh.meshNode;
-            if (entity.hasAnimator) {
-                const auto palette = (showLiveScene ? state.play.animation() : state.previewAnimation).palette(entity.id());
+            const auto palette = (showLiveScene ? state.play.animation() : state.previewAnimation).meshPalette(entity);
+            if (!palette.empty()) {
                 instance.palette = palette.data();
                 instance.paletteCount = static_cast<std::uint32_t>(palette.size());
                 instance.combineStatic = false;

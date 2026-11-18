@@ -364,9 +364,8 @@ struct ViewportPanel::Impl {
         if (!entity) { return; }
         switch (tool) {
         case TransformTool::Move:
-            if (entity->transform.position == transform.position) { return; }
-            entity->transform.position = transform.position;
-            break;
+            scene->moveEntity(entity->id(), transform.position);
+            return;
         case TransformTool::Rotate:
             if (entity->transform.rotation == transform.rotation) { return; }
             entity->transform.rotation = transform.rotation;

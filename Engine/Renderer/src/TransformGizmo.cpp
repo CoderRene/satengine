@@ -239,8 +239,11 @@ bool TransformGizmoDrag::update(Scene& scene, float mouseX, float mouseY) {
     if (!m_active) { return false; }
     Entity* entity = scene.entityById(m_owner);
     if (!entity) { m_active = false; return false; }
-    if (!update(entity->transform, mouseX, mouseY)) { return false; }
-    scene.markEdited();
+    Transform next = entity->transform;
+    if (!update(next, mouseX, mouseY)) { return false; }
+    const bool moved = scene.moveEntity(m_owner, next.position);
+    entity->transform = next;
+    if (!moved) { scene.markEdited(); }
     return true;
 }
 bool TransformGizmoDrag::update(Transform& transform, float mouseX, float mouseY) {
@@ -300,8 +303,9 @@ bool TransformGizmoDrag::cancel(Scene& scene) {
     m_active = false;
     auto* entity = scene.entityById(m_owner);
     if (!entity || sameTransform(entity->transform, m_start)) { return false; }
+    const bool moved = scene.moveEntity(m_owner, m_start.position);
     entity->transform = m_start;
-    scene.markEdited();
+    if (!moved) { scene.markEdited(); }
     return true;
 }
 }

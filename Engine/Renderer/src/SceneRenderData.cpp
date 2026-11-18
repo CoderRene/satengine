@@ -63,8 +63,8 @@ void SceneRenderData::update(const Scene& scene, int width, int height, const An
         instance.worldPosition = entity.transform.position;
         instance.combineStatic = entity.mesh.combineStatic;
         instance.meshNode = entity.mesh.meshNode;
-        if (animation && entity.hasAnimator) {
-            const auto palette = animation->palette(entity.id());
+        const auto palette = animation ? animation->meshPalette(entity) : std::span<const Mat4>{};
+        if (!palette.empty()) {
             instance.palette = palette.data();
             instance.paletteCount = static_cast<std::uint32_t>(palette.size());
             instance.combineStatic = false;

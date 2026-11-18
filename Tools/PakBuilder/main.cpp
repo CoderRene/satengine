@@ -3,6 +3,7 @@
 #include "AssetLibrary.hpp"
 #include "AnimationAsset.hpp"
 #include "AnimationGraph.hpp"
+#include "AnimationSystem.hpp"
 #include "Scene.hpp"
 #include "SceneFile.hpp"
 #include "module/Pak/PakCrypto.hpp"
@@ -102,9 +103,12 @@ int main(int argc, char** argv) {
             if (entity.hasAnimator) {
                 std::string bytes, error;
                 sat::AnimationData rig;
-                if (!entity.hasMesh || entity.mesh.meshNode ||
-                    animationReader(entity.mesh.meshPath, bytes, error) != sat::AssetReadResult::Found ||
-                    !sat::decodeGltfAnimation(bytes, entity.mesh.meshPath, animationReader, rig, error)) {
+                const auto meshPath = sat::animatorMeshPath(scene, entity);
+                if (meshPath.empty()) {
+                    throw std::runtime_error("Animator on " + entity.name + " requires a glTF mesh or a hierarchy from a single glTF asset");
+                }
+                if (animationReader(meshPath, bytes, error) != sat::AssetReadResult::Found ||
+                    !sat::decodeGltfAnimation(bytes, meshPath, animationReader, rig, error)) {
                     throw std::runtime_error("Animator on " + entity.name + ": " + error);
                 }
                 const auto validateClip = [&](const std::string& reference) {

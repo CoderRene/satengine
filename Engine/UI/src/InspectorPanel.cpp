@@ -328,7 +328,13 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             ImGui::TextUnformatted(label);
             ImGui::EndGroup();
         };
-        editVector("Position", ImGuiDataType_Double, entity->transform.position, visible.position, 0.05f);
+        DVec3 position = entity->transform.position;
+        DVec3 visiblePosition = visible.position;
+        editVector("Position", ImGuiDataType_Double, position, visiblePosition, 0.05f);
+        if (changed) {
+            m_impl->scene->moveEntity(entity->id(), position);
+            if (liveEntity) { visible.position = visiblePosition; }
+        }
         editVector("Rotation", ImGuiDataType_Float, entity->transform.rotation, visible.rotation, 0.5f);
         editVector("Scale", ImGuiDataType_Float, entity->transform.scale, visible.scale, 0.05f);
     }
@@ -449,7 +455,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             if (ImGui::Button("New Controller")) {
                 AnimationGraph controller;
                 std::string clip = animator.clip;
-                if (clip.empty() && animation) { const auto names = animation->clipNames(entity->mesh.meshPath); if (!names.empty()) { clip = names.front(); } }
+                if (clip.empty() && animation) { const auto names = animation->clipNames(animatorMeshPath(*m_impl->scene, *entity)); if (!names.empty()) { clip = names.front(); } }
                 controller.states.push_back({"Idle", clip});
                 std::string bytes;
                 std::string path = "Assets/Controller.satanimfsm";
@@ -469,7 +475,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
                 ImGui::EndDragDropTarget();
             }
             if (animation && ImGui::BeginCombo("Embedded Clip", animator.clip.c_str())) {
-                for (const auto& name : animation->clipNames(entity->mesh.meshPath)) {
+                for (const auto& name : animation->clipNames(animatorMeshPath(*m_impl->scene, *entity))) {
                     if (ImGui::Selectable(name.c_str(), name == animator.clip)) { animator.clip = name; changed = true; }
                 }
                 ImGui::EndCombo();
@@ -576,7 +582,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             entity->light = {};
             changed = true;
         }
-        if (ImGui::MenuItem("Animator", nullptr, false, !entity->hasAnimator && entity->hasMesh && !entity->mesh.meshNode && isGltfAssetPath(entity->mesh.meshPath))) {
+        if (ImGui::MenuItem("Animator", nullptr, false, !entity->hasAnimator && !animatorMeshPath(*m_impl->scene, *entity).empty())) {
             entity->hasAnimator = true; entity->animator = {}; changed = true;
         }
         if (ImGui::MenuItem("Audio Source", nullptr, false, !entity->hasAudioSource)) {

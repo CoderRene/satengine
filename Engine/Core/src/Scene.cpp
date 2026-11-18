@@ -133,6 +133,29 @@ bool Scene::setParent(EntityId childId, EntityId parentId) {
     return true;
 }
 
+bool Scene::moveEntity(EntityId id, DVec3 position) {
+    Entity* root = entityById(id);
+    if (!root || root->transform.position == position) {
+        return false;
+    }
+    const DVec3 offset = position - root->transform.position;
+    root->transform.position = position;
+    if (root->m_childCount != 0) {
+        for (Entity& entity : m_entities) {
+            EntityId parentId = entity.parentId();
+            while (parentId != kInvalidEntityId) {
+                if (parentId == id) {
+                    entity.transform.position = entity.transform.position + offset;
+                    break;
+                }
+                parentId = entityById(parentId)->parentId();
+            }
+        }
+    }
+    markEdited();
+    return true;
+}
+
 bool Scene::destroyEntity(EntityId id) {
     const auto found = m_entityIndices.find(id);
     return found != m_entityIndices.end() && remove(found->second);

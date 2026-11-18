@@ -26,14 +26,8 @@ void releaseCom(T*& object) {
     }
 }
 
-
-
-
-
-constexpr float kOutlineScale = 1.06f;
+constexpr float kOutlineScale = 1.01f;
 constexpr float kOutlineColor[4] = {1.0f, 0.55f, 0.12f, 1.0f};
-
-
 
 Mat4 scaleUniform(float s) {
     Mat4 out{};

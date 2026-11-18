@@ -279,6 +279,7 @@ void PlaySession::applyEdits(Scene& authored, std::string& error) {
     applyEdit(ambientBefore.shadowCascadeCount, ambientAfter.shadowCascadeCount, ambientLive.shadowCascadeCount);
     applyEdit(ambientBefore.shadowSplitLambda, ambientAfter.shadowSplitLambda, ambientLive.shadowSplitLambda);
     applyEdit(ambientBefore.bloom, ambientAfter.bloom, ambientLive.bloom);
+    m_game.markEdited();
     *m_applied = authored;
 }
 

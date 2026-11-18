@@ -8,6 +8,9 @@
 #include <vector>
 
 namespace sat {
+// Resolves a mesh directly or a single glTF asset represented by descendant mesh nodes.
+[[nodiscard]] std::string_view animatorMeshPath(const Scene& scene, const Entity& entity);
+
 struct AnimationDebugView {
     std::string_view activeState;
     float transitionProgress = 1;
@@ -38,6 +41,7 @@ public:
     [[nodiscard]] bool isPlaying(EntityId entity) const;
     [[nodiscard]] std::vector<std::string> clipNames(std::string_view meshPath);
     [[nodiscard]] std::span<const Mat4> palette(EntityId entity) const;
+    [[nodiscard]] std::span<const Mat4> meshPalette(const Entity& meshEntity) const;
     [[nodiscard]] bool setBool(EntityId entity, std::string_view name, bool value);
     [[nodiscard]] bool setFloat(EntityId entity, std::string_view name, float value);
     [[nodiscard]] bool setInt(EntityId entity, std::string_view name, std::int32_t value);
