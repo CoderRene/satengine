@@ -91,6 +91,7 @@ void ShaderLibrary::pollProjectShaders(ID3D11Device* device, bool sharedChanged)
 void ShaderLibrary::release() {
     ++m_revision;
     m_programs = {};
+    m_compute = {};
     m_projectShaders.clear();
     m_ready = m_failed = false;
 }
@@ -119,6 +120,20 @@ bool ShaderLibrary::replace(ID3D11Device* device, ShaderId id, std::string_view 
     return true;
 }
 
+ID3D11ComputeShader* ShaderLibrary::compute(ComputeShaderId id) const {
+    return m_compute[static_cast<std::size_t>(id)].Get();
+}
+
+bool ShaderLibrary::replace(ID3D11Device* device, ComputeShaderId id, std::string_view cs) {
+    Microsoft::WRL::ComPtr<ID3D11ComputeShader> candidate;
+    if (FAILED(device->CreateComputeShader(cs.data(), cs.size(), nullptr, candidate.GetAddressOf()))) {
+        return false;
+    }
+    m_compute[static_cast<std::size_t>(id)] = std::move(candidate);
+    ++m_revision;
+    return true;
+}
+
 bool ShaderLibrary::ensure(ID3D11Device* device) {
     if (m_ready || m_failed || !device) { return m_ready; }
     std::string error;
@@ -143,6 +158,7 @@ bool ShaderLibrary::ensure(ID3D11Device* device) {
     for (const auto* name : kShaderNames) {
         expected += std::string(name) + ".vs.dxbc\n" + name + ".ps.dxbc\n";
     }
+    for (const auto* name : kComputeShaderNames) { expected += std::string(name) + ".cs.dxbc\n"; }
     // CMake can write CRLF on Windows. Keep the manifest comparison strict
     // after normalizing line endings.
     std::size_t length = 0;
@@ -157,6 +173,12 @@ bool ShaderLibrary::ensure(ID3D11Device* device) {
         std::string vs, ps;
         if (!read(prefix + ".vs.dxbc", vs) || !read(prefix + ".ps.dxbc", ps)) { return fail(error); }
         if (!replace(device, static_cast<ShaderId>(i), vs, ps)) { return fail("Cannot create shader program " + prefix); }
+    }
+    for (std::size_t i = 0; i < kComputeShaderNames.size(); ++i) {
+        const auto path = std::string("Shaders/") + kComputeShaderNames[i] + ".cs.dxbc";
+        std::string cs;
+        if (!read(path, cs)) { return fail(error); }
+        if (!replace(device, static_cast<ComputeShaderId>(i), cs)) { return fail("Cannot create compute shader " + path); }
     }
     m_ready = true;
     return true;

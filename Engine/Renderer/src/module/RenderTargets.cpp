@@ -9,6 +9,7 @@ void RenderSession::releaseOffscreenView(OffscreenView& view) {
     view.bloomAllocationFailed = false;
     view.hdrTarget.Reset();
     view.hdrView.Reset();
+    view.depthView.Reset();
     releaseCom(view.dsv);
     releaseCom(view.depth);
     releaseCom(view.srv);
@@ -70,8 +71,8 @@ void RenderSession::resizeOffscreenView(
         return;
     }
     D3D11_TEXTURE2D_DESC depthDesc = colorDesc;
-    depthDesc.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
-    depthDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    depthDesc.Format = DXGI_FORMAT_R24G8_TYPELESS;
+    depthDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
     hr = m_state->device->CreateTexture2D(&depthDesc, nullptr, &view.depth);
     if (FAILED(hr)) {
         std::cerr << "Failed to create " << label << " depth target\n";
@@ -79,11 +80,21 @@ void RenderSession::resizeOffscreenView(
         return;
     }
 
-    hr = m_state->device->CreateDepthStencilView(view.depth, nullptr, &view.dsv);
+    D3D11_DEPTH_STENCIL_VIEW_DESC dsv{};
+    dsv.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    dsv.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+    D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+    srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srv.Texture2D.MipLevels = 1;
+    hr = m_state->device->CreateDepthStencilView(view.depth, &dsv, &view.dsv);
     if (FAILED(hr)) {
-        std::cerr << "Failed to create " << label << " depth view\n";
+        std::cerr << "Failed to create " << label << " depth stencil view\n";
         releaseOffscreenView(view);
         return;
+    }
+    if (FAILED(m_state->device->CreateShaderResourceView(view.depth, &srv, view.depthView.GetAddressOf()))) {
+        std::cerr << "Failed to create " << label << " depth shader view for occlusion culling\n";
     }
 
     view.width = width;

@@ -29,8 +29,13 @@ bool velocity(const char *label, DVec3 &v) {
 } // namespace
 bool drawPhysicsInspector(Entity &e) {
   bool changed = false;
-  if (e.hasRigidBody &&
-      ImGui::CollapsingHeader("Rigid Body", ImGuiTreeNodeFlags_DefaultOpen)) {
+  const auto componentHeader = [&changed](const char *label, bool &present) {
+    const bool expanded =
+        ImGui::CollapsingHeader(label, &present, ImGuiTreeNodeFlags_DefaultOpen);
+    changed |= !present;
+    return expanded && present;
+  };
+  if (e.hasRigidBody && componentHeader("Rigid Body", e.hasRigidBody)) {
     auto &b = e.rigidBody;
     int motion = static_cast<int>(b.motion);
     if (ImGui::Combo("Motion", &motion, "Static\0Dynamic\0Kinematic\0")) {
@@ -65,14 +70,8 @@ bool drawPhysicsInspector(Entity &e) {
     if (!e.hasCollider) {
       ImGui::TextWrapped("Inactive: add a collider to create a physics body.");
     }
-    if (ImGui::Button("Remove Rigid Body")) {
-      e.hasRigidBody = false;
-      changed = true;
-    }
   }
-  if (e.hasCollider &&
-      ImGui::CollapsingHeader("Compound Collider",
-                              ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (e.hasCollider && componentHeader("Compound Collider", e.hasCollider)) {
     auto &c = e.collider;
     changed |= ImGui::Checkbox("Trigger (all shapes)", &c.trigger);
     changed |= dragFloat("Friction", &c.friction, 0.01f, 0, 10, "%.3f",
@@ -140,14 +139,8 @@ bool drawPhysicsInspector(Entity &e) {
       changed = true;
     }
     ImGui::EndDisabled();
-    if (ImGui::Button("Remove Collider")) {
-      e.hasCollider = false;
-      changed = true;
-    }
   }
-  if (e.hasGravitySource &&
-      ImGui::CollapsingHeader("Gravity Source",
-                              ImGuiTreeNodeFlags_DefaultOpen)) {
+  if (e.hasGravitySource && componentHeader("Gravity Source", e.hasGravitySource)) {
     auto &g = e.gravitySource;
     int mode = static_cast<int>(g.mode);
     if (ImGui::Combo("Field", &mode, "Spherical\0Uniform\0")) {
@@ -161,10 +154,6 @@ bool drawPhysicsInspector(Entity &e) {
       changed |=
           ImGui::InputFloat3("Local acceleration (m/s^2)", &g.acceleration.x);
       changed |= number("Influence radius (0 = global)", g.influenceRadius);
-    }
-    if (ImGui::Button("Remove Gravity Source")) {
-      e.hasGravitySource = false;
-      changed = true;
     }
   }
   return changed;

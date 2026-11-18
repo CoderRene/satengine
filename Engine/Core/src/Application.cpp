@@ -9,10 +9,25 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <memory>
 #include <iostream>
 #include <thread>
 
 namespace sat {
+namespace {
+
+std::filesystem::path benchmarkPath() {
+    wchar_t* value = nullptr;
+    std::size_t count = 0;
+    if (_wdupenv_s(&value, &count, L"SAT_RENDER_BENCHMARK") != 0) { return {}; }
+    const std::unique_ptr<wchar_t, decltype(&std::free)> environment(value, &std::free);
+    return environment ? std::filesystem::path(environment.get()) : std::filesystem::path{};
+}
+
+} // namespace
 
 int Application::run() {
     Window window(1280, 720, "SatGame");
@@ -42,6 +57,20 @@ int Application::run() {
     if (!m_stopRequested && !renderer.initializeShaders()) {
         onStop();
         return 1;
+    }
+    constexpr unsigned kWarmupFrames = 120;
+    constexpr unsigned kSampleFrames = 600;
+    const auto capturePath = benchmarkPath();
+    std::ofstream capture;
+    unsigned captured = 0;
+    if (!capturePath.empty()) {
+        capture.open(capturePath);
+        if (!capture) {
+            std::cerr << "Cannot open render benchmark capture " << capturePath << '\n';
+            onStop();
+            return 1;
+        }
+        capture << "frame_ms,gpu_frame_ms,draw_calls,set_pass_calls\n";
     }
     SceneRenderData renderData;
     std::size_t reportedAssetErrors = 0;
@@ -89,6 +118,13 @@ int Application::run() {
         }
         renderer.renderUi(ui, UiTarget::Window);
         renderer.present();
+        if (capture.is_open() && ++captured > kWarmupFrames) {
+            const auto stats = renderer.gameViewStats();
+            capture << static_cast<double>(deltaSeconds) * 1000.0 << ',';
+            if (stats.gpuFrameTimeMs) { capture << *stats.gpuFrameTimeMs; }
+            capture << ',' << stats.drawCalls << ',' << stats.setPassCalls << '\n';
+            if (captured == kWarmupFrames + kSampleFrames) { break; }
+        }
     }
     onStop();
     return 0;

@@ -30,8 +30,10 @@ void mixViewText(std::uint64_t& hash, std::string_view text) {
 }
 
 // Pointer identity is ignored. Equal cameras and draw lists produce the same key.
-std::uint64_t viewRenderKey(const GameViewCamera& camera, const SceneDrawList& draw, int width, int height) {
+std::uint64_t viewRenderKey(const GameViewCamera& camera, const SceneDrawList& draw, int width, int height,
+    std::uint64_t drawRevision) {
     std::uint64_t hash = 14695981039346656037ull;
+    mixViewPod(hash, drawRevision);
     mixViewPod(hash, width);
     mixViewPod(hash, height);
     mixViewPod(hash, camera.renderOrigin);
@@ -72,19 +74,12 @@ std::uint64_t viewRenderKey(const GameViewCamera& camera, const SceneDrawList& d
         mixViewPod(hash, draw.debugLines[index].color);
     }
     mixViewPod(hash, draw.gridOffset);
-    mixViewPod(hash, draw.meshCount);
-    for (int index = 0; index < draw.meshCount && draw.meshes != nullptr; ++index) {
-        const MeshInstance& mesh = draw.meshes[index];
-        mixViewPod(hash, mesh.world);
-        mixViewPod(hash, static_cast<unsigned char>(mesh.primitive));
-        mixViewText(hash, mesh.meshPath);
-        mixViewText(hash, mesh.materialPath);
-        mixViewPod(hash, mesh.combineStatic);
-        mixViewPod(hash, mesh.meshNode);
-        if (mesh.palette) { mixViewBytes(hash, mesh.palette, mesh.paletteCount * sizeof(Mat4)); }
-        if (mesh.combineStatic) { mixViewPod(hash, mesh.worldPosition); }
+    if (draw.scene) {
+        mixViewPod(hash, draw.scene->editRevision());
+        mixViewPod(hash, draw.scene->destructionRevision());
     }
-    mixViewPod(hash, draw.selectedMesh);
+    if (draw.animation) { mixViewPod(hash, draw.animation->poseRevision()); }
+    mixViewPod(hash, draw.selected);
     mixViewPod(hash, draw.frustumCount);
     for (int index = 0; index < draw.frustumCount && draw.frustums != nullptr; ++index) {
         const CameraFrustumInstance& frustum = draw.frustums[index];
@@ -127,14 +122,14 @@ void EditorSession::renderViews() {
     if (!state.play.active()) { state.previewAnimation.update(ImGui::GetIO().DeltaTime); }
     state.gameRenderData.update(state.play.viewScene(state.scene), gameViewWidth, gameViewHeight, state.play.active() ? &state.play.animation() : &state.previewAnimation);
     const auto& gameCamera = state.gameRenderData.camera();
+    auto gameDraw = state.gameRenderData.drawList();
+    gameDraw.captureGpuStats = state.viewport && state.viewport->gameStatsVisible();
 
-    auto& meshInstances = state.sceneMeshes;
     auto& frustumInstances = state.sceneFrustums;
     auto& colliderLines = state.colliderLines;
     auto& lights = state.sceneLights;
     lights.clear();
-    meshInstances.clear(); frustumInstances.clear(); colliderLines.clear();
-    int selectedMesh = -1;
+    frustumInstances.clear(); colliderLines.clear();
     const int selectedEntity = state.hierarchy ? state.hierarchy->selectedIndex() : -1;
     const float sceneAspect =
         (sceneViewHeight > 0)
@@ -164,30 +159,6 @@ void EditorSession::renderViews() {
             }
         }
         if (entity.hasLight) { lights.push_back(makeLightInstance(entity, sceneCamera.renderOrigin)); }
-        if (entity.hasMesh) {
-            MeshInstance instance{};
-            instance.world = matrixFromTransform(entity.transform, sceneCamera.renderOrigin);
-            instance.meshPath = entity.mesh.meshPath;
-            instance.materialPath = entity.mesh.materialPath;
-            instance.worldPosition = entity.transform.position;
-            instance.combineStatic = entity.mesh.combineStatic;
-            instance.meshNode = entity.mesh.meshNode;
-            const auto palette = (showLiveScene ? state.play.animation() : state.previewAnimation).meshPalette(entity);
-            if (!palette.empty()) {
-                instance.palette = palette.data();
-                instance.paletteCount = static_cast<std::uint32_t>(palette.size());
-                instance.combineStatic = false;
-            }
-            switch (entity.mesh.primitive) {
-            case MeshComponent::Primitive::Cube:
-                instance.primitive = MeshPrimitive::Cube;
-                break;
-            }
-            if (isSelected) {
-                selectedMesh = static_cast<int>(meshInstances.size());
-            }
-            meshInstances.push_back(instance);
-        }
         if (entity.hasCamera) {
             CameraFrustumInstance frustum{};
             frustum.position = toVec3(entity.transform.position - sceneCamera.renderOrigin);
@@ -217,9 +188,9 @@ void EditorSession::renderViews() {
     sceneDraw.shadowSplitLambda = visibleScene.lightingSettings.shadowSplitLambda;
     sceneDraw.bloom = visibleScene.lightingSettings.bloom;
     sceneDraw.ambient = ambientRadiance(visibleScene.lightingSettings);
-    sceneDraw.meshes = meshInstances.empty() ? nullptr : meshInstances.data();
-    sceneDraw.meshCount = static_cast<int>(meshInstances.size());
-    sceneDraw.selectedMesh = selectedMesh;
+    sceneDraw.scene = &visibleScene;
+    sceneDraw.animation = showLiveScene ? &state.play.animation() : &state.previewAnimation;
+    sceneDraw.selected = selectedId;
     sceneDraw.frustums = frustumInstances.empty() ? nullptr : frustumInstances.data();
     sceneDraw.frustumCount = static_cast<int>(frustumInstances.size());
     sceneDraw.drawGrid = true;
@@ -241,7 +212,7 @@ void EditorSession::renderViews() {
             state.renderer->renderSceneView(sceneCamera, sceneDraw);
         }
         if (gameVisible) {
-            state.renderer->renderGameView(gameCamera, state.gameRenderData.drawList());
+            state.renderer->renderGameView(gameCamera, gameDraw);
             if (state.gameUi) { state.renderer->renderUi(*state.gameUi, UiTarget::GameView); }
             state.viewport->drawGameStats();
         }
@@ -250,8 +221,12 @@ void EditorSession::renderViews() {
 
     const auto contentRevision = state.renderer->contentRevision();
     const bool sceneActive = state.viewport != nullptr && state.viewport->sceneViewInteracting();
+    const auto sceneRevision = sceneVisible || (gameVisible && sceneDraw.scene == gameDraw.scene)
+        ? state.renderer->sceneDrawRevision(visibleScene) : 0;
+    const auto gameRevision = gameVisible && gameDraw.scene != sceneDraw.scene
+        ? state.renderer->sceneDrawRevision(*gameDraw.scene) : sceneRevision;
     if (sceneVisible) {
-        const auto key = viewRenderKey(sceneCamera, sceneDraw, sceneViewWidth, sceneViewHeight);
+        const auto key = viewRenderKey(sceneCamera, sceneDraw, sceneViewWidth, sceneViewHeight, sceneRevision);
         // Navigation has to publish a new image every frame. A cached target stays one step behind.
         if (sceneActive || !state.sceneViewValid || key != state.sceneViewKey || contentRevision != state.sceneContentRevision) {
             state.renderer->renderSceneView(sceneCamera, sceneDraw);
@@ -261,9 +236,8 @@ void EditorSession::renderViews() {
         }
     }
     if (gameVisible) {
-        const auto& gameDraw = state.gameRenderData.drawList();
-        const auto key = viewRenderKey(gameCamera, gameDraw, gameViewWidth, gameViewHeight);
-        if (!state.gameViewValid || key != state.gameViewKey || contentRevision != state.gameContentRevision) {
+        const auto key = viewRenderKey(gameCamera, gameDraw, gameViewWidth, gameViewHeight, gameRevision);
+        if (gameDraw.captureGpuStats || !state.gameViewValid || key != state.gameViewKey || contentRevision != state.gameContentRevision) {
             state.renderer->renderGameView(gameCamera, gameDraw);
             state.gameViewKey = key;
             state.gameContentRevision = contentRevision;

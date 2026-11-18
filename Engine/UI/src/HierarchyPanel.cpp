@@ -64,12 +64,13 @@ struct HierarchyPanel::Impl {
     std::vector<Links> m_links;
     std::vector<std::size_t> m_branchEnds;
 
-    enum class Action { None, Remove, AddChild, Group, Reparent, AddMesh };
+    enum class Action { None, Remove, Duplicate, AddChild, Group, Reparent, AddMesh };
     Action m_action = Action::None;
     EntityId m_target = kInvalidEntityId;
     EntityId m_parent = kInvalidEntityId;
     std::string m_droppedMeshPath;
     std::string m_meshDropError;
+    std::string m_duplicateError;
 
     void selectOnly(EntityId id) {
         m_clicked = kInvalidEntityId;
@@ -252,6 +253,62 @@ struct HierarchyPanel::Impl {
         }
     }
 
+    void duplicateSelection() {
+        struct Copy {
+            std::size_t source;
+            std::size_t parentCopy = kNoIndex;
+            EntityId id = kInvalidEntityId;
+        };
+
+        const auto& entities = m_scene->entities();
+        std::vector<Copy> copies;
+        for (const EntityId root : selectionRoots(m_target)) {
+            if (const auto index = m_scene->entityIndex(root)) {
+                copies.push_back({*index});
+            }
+        }
+        std::sort(copies.begin(), copies.end(), [](const Copy& a, const Copy& b) {
+            return a.source < b.source;
+        });
+        for (std::size_t i = 0; i < copies.size(); ++i) {
+            for (std::size_t child = m_links[copies[i].source].firstChild; child != kNoIndex;
+                 child = m_links[child].nextSibling) {
+                copies.push_back({child, i});
+            }
+        }
+        if (copies.empty()) {
+            return;
+        }
+        if (entities.size() >= kMaxSceneEntities || copies.size() > kMaxSceneEntities - entities.size()) {
+            m_duplicateError = "Duplicating the selection would exceed the scene entity limit.";
+            return;
+        }
+        m_duplicateError.clear();
+
+        std::unordered_set<EntityId> selection;
+        selection.reserve(m_selected.size());
+        EntityId primary = kInvalidEntityId;
+        for (auto& copy : copies) {
+            const Entity& source = entities[copy.source];
+            const EntityId sourceId = source.id();
+            const bool isRoot = copy.parentCopy == kNoIndex;
+            const EntityId parent = isRoot ? source.parentId() : copies[copy.parentCopy].id;
+            copy.id = m_scene->duplicateEntity(sourceId, parent, isRoot ? source.name + " Copy" : std::string{});
+            if (m_selected.contains(sourceId)) {
+                selection.insert(copy.id);
+            }
+            if (sourceId == m_primary) {
+                primary = copy.id;
+            }
+        }
+
+        selectOnly(primary == kInvalidEntityId ? copies.front().id : primary);
+        selection.insert(m_primary);
+        m_selected.swap(selection);
+        cancelRename();
+        m_reveal = m_primary;
+    }
+
     void applyQueuedAction() {
         // Apply structural edits after traversal, since removal can swap indices
         // and creation can invalidate references into the scene.
@@ -260,6 +317,9 @@ struct HierarchyPanel::Impl {
             removeSelection();
             cancelRename();
             selectOnly(kInvalidEntityId);
+            break;
+        case Action::Duplicate:
+            duplicateSelection();
             break;
         case Action::AddChild: {
             m_scene->addEmpty();
@@ -437,6 +497,9 @@ struct HierarchyPanel::Impl {
                     if (ImGui::MenuItem("Rename", "F2")) {
                         beginRename(id);
                     }
+                    if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {
+                        queue(Action::Duplicate, id);
+                    }
                     if (ImGui::MenuItem("Add Empty Child")) {
                         queue(Action::AddChild, id);
                     }
@@ -553,6 +616,9 @@ void HierarchyPanel::onImGuiRender(bool readOnly) {
     if (!impl.m_meshDropError.empty()) {
         ImGui::TextWrapped("%s", impl.m_meshDropError.c_str());
     }
+    if (!impl.m_duplicateError.empty()) {
+        ImGui::TextWrapped("%s", impl.m_duplicateError.c_str());
+    }
     const bool wasRenaming = impl.m_renaming != kInvalidEntityId;
     impl.m_rowSelection = kInvalidEntityId;
     impl.drawTree(readOnly);
@@ -590,6 +656,8 @@ void HierarchyPanel::onImGuiRender(bool readOnly) {
                 impl.selectOnly(impl.m_visible.front());
                 impl.m_selected.insert(impl.m_visible.begin(), impl.m_visible.end());
             }
+        } else if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_D) && !impl.m_selected.empty()) {
+            impl.queue(Impl::Action::Duplicate, impl.m_primary);
         } else if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !impl.m_selected.empty()) {
             impl.selectOnly(kInvalidEntityId);
         } else if (ImGui::IsKeyPressed(ImGuiKey_F2)) {

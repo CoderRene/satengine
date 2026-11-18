@@ -209,7 +209,12 @@ std::uint64_t RenderSession::contentRevision() const {
     return m_state->contentRevision;
 }
 
+std::uint64_t RenderSession::sceneDrawRevision(const Scene& scene) {
+    return m_state->meshPass.sceneDrawRevision(scene);
+}
+
 void RenderSession::newFrame() {
+    ++m_state->frameNumber;
 #ifdef SAT_SHADER_HOT_RELOAD
     if (initializeShaders()) { m_state->hotReload.poll(m_state->device, m_state->shaders); }
 #endif

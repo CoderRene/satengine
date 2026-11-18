@@ -16,7 +16,7 @@ public:
     void poll(ID3D11Device* device, ShaderLibrary& library);
 private:
     Microsoft::WRL::ComPtr<slang::IGlobalSession> m_session;
-    std::array<std::filesystem::file_time_type, kShaderNames.size() + 5> m_times{};
+    std::array<std::filesystem::file_time_type, kShaderNames.size() + kComputeShaderNames.size() + 7> m_times{};
     std::chrono::steady_clock::time_point m_nextPoll{};
     bool m_initialized = false;
 };

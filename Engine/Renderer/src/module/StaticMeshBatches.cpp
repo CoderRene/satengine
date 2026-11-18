@@ -5,10 +5,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <functional>
-#include <numeric>
-#include <tuple>
-#include <utility>
 
 namespace sat {
 namespace {
@@ -28,14 +24,10 @@ Vec3 transformDirection(const float* matrix, Vec3 v) {
         matrix[2] * v.x + matrix[6] * v.y + matrix[10] * v.z};
 }
 
-struct RemappedVertex {
-    std::size_t sourceTag = 0;
-    std::uint32_t index = 0;
-};
-
+template <typename Remap>
 bool appendGeometry(const StaticMeshSource& source, const MeshData& data, DVec3 origin,
     std::size_t vertexLimit, std::vector<MeshVertex>& vertices, std::vector<std::uint32_t>& indices,
-    std::vector<RemappedVertex>& remap, std::size_t sourceTag) {
+    Remap& remap, std::size_t sourceTag) {
     // Reordered meshes append the original node indices after the main index range.
     const bool useNodeIndices = source.node && !data.nodeIndices.empty();
     const auto& sourceIndices = useNodeIndices ? data.nodeIndices : data.indices;
@@ -51,8 +43,8 @@ bool appendGeometry(const StaticMeshSource& source, const MeshData& data, DVec3 
     local.m[13] = offset.y;
     local.m[14] = offset.z;
     local = meshWorld(local, source.node);
-    MeshInstanceData object;
-    writeMeshInstance(object, local);
+    float normalColumns[12];
+    writeNormalColumns(normalColumns, local);
 
     if (remap.size() < data.vertices.size()) { remap.resize(data.vertices.size()); }
     for (UINT i = 0; i < source.indexCount; ++i) {
@@ -63,12 +55,12 @@ bool appendGeometry(const StaticMeshSource& source, const MeshData& data, DVec3 
             if (vertices.size() == vertexLimit) { return false; }
             auto vertex = data.vertices[index];
             const Vec3 position = transformPoint(local, {vertex.x, vertex.y, vertex.z});
-            const Vec3 normal = transformDirection(object.normal, {vertex.nx, vertex.ny, vertex.nz});
-            const Vec3 tangent = transformDirection(object.world, {vertex.tx, vertex.ty, vertex.tz});
+            const Vec3 normal = transformDirection(normalColumns, {vertex.nx, vertex.ny, vertex.nz});
+            const Vec3 tangent = transformDirection(local.m, {vertex.tx, vertex.ty, vertex.tz});
             vertex.x = position.x; vertex.y = position.y; vertex.z = position.z;
             vertex.nx = normal.x; vertex.ny = normal.y; vertex.nz = normal.z;
             vertex.tx = tangent.x; vertex.ty = tangent.y; vertex.tz = tangent.z;
-            vertex.tw *= object.normal[3];
+            vertex.tw *= normalColumns[3];
             mapped = {sourceTag, static_cast<std::uint32_t>(vertices.size())};
             vertices.push_back(vertex);
         }
@@ -96,95 +88,126 @@ bool upload(ID3D11Device& device, const std::vector<MeshVertex>& vertices,
     batch.mesh.indexFormat = DXGI_FORMAT_R32_UINT;
     batch.mesh.vertexCount = static_cast<UINT>(vertices.size());
     batch.mesh.indexCount = static_cast<UINT>(indices.size());
+    const auto position = [](const MeshVertex& vertex) { return Vec3{vertex.x, vertex.y, vertex.z}; };
+    Vec3 minimum = position(vertices.front()), maximum = minimum;
+    for (const auto& vertex : vertices) {
+        minimum = {std::min(minimum.x, vertex.x), std::min(minimum.y, vertex.y), std::min(minimum.z, vertex.z)};
+        maximum = {std::max(maximum.x, vertex.x), std::max(maximum.y, vertex.y), std::max(maximum.z, vertex.z)};
+    }
+    const Vec3 center = (minimum + maximum) * 0.5f;
+    batch.mesh.boundsCenter[0] = center.x;
+    batch.mesh.boundsCenter[1] = center.y;
+    batch.mesh.boundsCenter[2] = center.z;
+    batch.mesh.boundsRadius = length(maximum - center);
     return true;
 }
 
 } // namespace
 
-void StaticMeshBatches::update(ID3D11DeviceContext& context, GpuAssetCache& assets, std::uint64_t assetRevision,
-    std::span<const StaticMeshSource> sources, DVec3 renderOrigin, std::span<unsigned char> combined) {
-    const auto key = [](const StaticMeshSource& source) {
-        SourceKey result{source.mesh, source.material, source.node, source.firstIndex, source.indexCount,
-            {}, source.instance->worldPosition};
-        std::copy_n(source.instance->world.m, result.basis.size(), result.basis.begin());
-        return result;
+bool StaticMeshBatches::update(ID3D11DeviceContext& context, GpuAssetCache& assets,
+    std::span<const StaticMeshSource> sources, std::span<const unsigned> dirtySources, bool budgetAvailable,
+    std::span<unsigned char> combined) {
+    if (dirtySources.empty() && (!m_pending || !budgetAvailable)) { return false; }
+    m_locations.resize(sources.size());
+    bool changed = false;
+    const auto retire = [&](Cell& cell) {
+        if (cell.batch.mesh.valid()) {
+            for (const auto index : cell.sources) { combined[sources[index].drawIndex] = 0; }
+            cell.batch = {};
+            changed = true;
+        }
+        cell.dirty = true;
     };
-    if (assetRevision != m_assetRevision || sources.size() != m_keys.size() ||
-        !std::equal(sources.begin(), sources.end(), m_keys.begin(),
-            [&](const auto& source, const auto& stored) { return key(source) == stored; })) {
-        m_assetRevision = assetRevision;
-        m_keys.clear();
-        m_combinedSources.clear();
-        m_batches.clear();
-        m_keys.reserve(sources.size());
-        for (const auto& source : sources) { m_keys.push_back(key(source)); }
-
-        std::vector<std::size_t> order(sources.size());
-        std::iota(order.begin(), order.end(), std::size_t{0});
-        const auto cell = [&](std::size_t i) {
-            const auto origin = cellOrigin(m_keys[i].position);
-            return std::tuple{origin.x, origin.y, origin.z};
-        };
-        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-            if (sources[a].material != sources[b].material) {
-                return std::less<>{}(sources[a].material, sources[b].material);
-            }
-            return std::tuple{cell(a), a} < std::tuple{cell(b), b};
-        });
-
-        Microsoft::WRL::ComPtr<ID3D11Device> device;
-        if (order.size() > 1) { context.GetDevice(device.GetAddressOf()); }
-        std::vector<MeshVertex> vertices;
-        std::vector<std::uint32_t> indices;
-        std::vector<RemappedVertex> remap;
-        std::size_t remainingVertices = kVertexBudget;
-        std::size_t remainingIndices = kIndexBudget;
-        for (std::size_t first = 0; first < order.size();) {
-            const auto& source = sources[order[first]];
-            std::size_t last = first + 1;
-            std::size_t indexCount = source.indexCount;
-            bool differentGeometry = false;
-            while (last < order.size() && source.material == sources[order[last]].material &&
-                cell(order[first]) == cell(order[last])) {
-                const auto& next = sources[order[last]];
-                differentGeometry |= next.mesh != source.mesh || next.firstIndex != source.firstIndex ||
-                    next.indexCount != source.indexCount;
-                indexCount += next.indexCount;
-                ++last;
-            }
-            // Keep groups with a single geometry range on the instancing path.
-            if (differentGeometry && indexCount <= remainingIndices && remainingVertices != 0) {
-                Batch batch;
-                batch.material = source.material;
-                batch.instance.worldPosition = cellOrigin(source.instance->worldPosition);
-                vertices.clear();
-                indices.clear();
-                indices.reserve(indexCount);
-                bool ready = true;
-                for (std::size_t i = first; i < last; ++i) {
-                    const auto& entry = sources[order[i]];
-                    const auto* data = assets.decodedMesh(entry.instance->meshPath);
-                    if (!data || !appendGeometry(entry, *data, batch.instance.worldPosition,
-                            remainingVertices, vertices, indices, remap, i + 1)) {
-                        ready = false;
-                        break;
-                    }
-                }
-                if (ready && upload(*device.Get(), vertices, indices, batch)) {
-                    remainingVertices -= vertices.size();
-                    remainingIndices -= indices.size();
-                    m_batches.push_back(std::move(batch));
-                    const auto group = std::span(order).subspan(first, last - first);
-                    m_combinedSources.insert(m_combinedSources.end(), group.begin(), group.end());
-                }
-            }
-            first = last;
+    for (const auto index : dirtySources) {
+        const auto& source = sources[index];
+        const auto position = source.instance->worldPosition;
+        auto& previous = m_locations[index];
+        const bool finite = std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z);
+        const auto origin = finite ? cellOrigin(position) : DVec3{};
+        const CellKey key{reinterpret_cast<std::uintptr_t>(source.material), origin.x, origin.y, origin.z};
+        if (previous) {
+            auto current = m_cells.find(*previous);
+            retire(current->second);
+            if (finite && *previous == key) { continue; }
+            current->second.sources.erase(index);
+            if (current->second.sources.empty()) { m_cells.erase(current); }
+            previous.reset();
+        }
+        if (finite) {
+            auto& cell = m_cells[key];
+            retire(cell);
+            cell.material = source.material;
+            cell.origin = origin;
+            cell.sources.insert(index);
+            previous = key;
         }
     }
-    for (const auto index : m_combinedSources) { combined[sources[index].drawIndex] = 1; }
-    for (auto& batch : m_batches) {
-        batch.instance.world = translationMatrix(toVec3(batch.instance.worldPosition - renderOrigin));
+
+    Microsoft::WRL::ComPtr<ID3D11Device> device;
+    std::size_t remainingVertices = budgetAvailable ? kVertexBudget : 0;
+    std::size_t remainingIndices = budgetAvailable ? kIndexBudget : 0;
+    std::size_t tag = 0;
+    m_remap.clear();
+    m_pending = false;
+    for (auto& entry : m_cells) {
+        auto& cell = entry.second;
+        if (!cell.dirty) { continue; }
+        const auto& first = sources[*cell.sources.begin()];
+        bool different = false;
+        std::size_t indexCount = 0;
+        for (const auto index : cell.sources) {
+            const auto& source = sources[index];
+            different |= source.mesh != first.mesh || source.firstIndex != first.firstIndex ||
+                source.indexCount != first.indexCount;
+            indexCount += source.indexCount;
+            if (indexCount > kIndexBudget) { break; }
+        }
+        if (!different || indexCount > kIndexBudget) {
+            cell.dirty = false; // Single-geometry and oversized cells stay instanced.
+            continue;
+        }
+        if (indexCount > remainingIndices || remainingVertices == 0) {
+            m_pending = true;
+            continue;
+        }
+        if (!device) { context.GetDevice(device.GetAddressOf()); }
+        m_vertices.clear();
+        m_indices.clear();
+        m_indices.reserve(indexCount);
+        bool ready = true;
+        bool budgetLimited = false;
+        for (const auto index : cell.sources) {
+            const auto& source = sources[index];
+            const auto* data = assets.decodedMesh(source.instance->meshPath);
+            if (!data || !appendGeometry(source, *data, cell.origin, remainingVertices,
+                    m_vertices, m_indices, m_remap, ++tag)) {
+                ready = false;
+                budgetLimited = remainingVertices < kVertexBudget && m_vertices.size() == remainingVertices;
+                break;
+            }
+        }
+        if (ready && upload(*device.Get(), m_vertices, m_indices, cell.batch)) {
+            cell.batch.material = cell.material;
+            cell.batch.instance.worldPosition = cell.origin;
+            for (const auto index : cell.sources) { combined[sources[index].drawIndex] = 1; }
+            changed = true;
+        } else {
+            cell.batch = {};
+        }
+        // Failed attempts also consume the work budget.
+        remainingVertices -= m_vertices.size();
+        remainingIndices -= indexCount;
+        cell.dirty = budgetLimited;
+        m_pending |= budgetLimited;
     }
+    if (changed) {
+        m_batches.clear();
+        for (const auto& entry : m_cells) {
+            const auto& batch = entry.second.batch;
+            if (batch.mesh.valid()) { m_batches.push_back(&batch); }
+        }
+    }
+    return changed;
 }
 
 } // namespace sat

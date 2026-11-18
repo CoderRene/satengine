@@ -10,7 +10,7 @@ namespace {
 using Microsoft::WRL::ComPtr;
 
 bool compilePass(slang::IGlobalSession& compiler, const char* name, ID3D11Device* device,
-    ShaderLibrary& library, ShaderId id) {
+    ShaderLibrary& library, std::size_t index) {
     slang::SessionDesc options{};
     ComPtr<ISlangUnknown> optionsStorage;
     ComPtr<slang::ISession> session;
@@ -31,8 +31,9 @@ bool compilePass(slang::IGlobalSession& compiler, const char* name, ID3D11Device
     if (!module) { return fail(); }
 
     ComPtr<slang::IBlob> stages[2];
-    const char* entries[] = {"vsMain", "psMain"};
-    for (std::size_t i = 0; i < std::size(entries); ++i) {
+    const bool compute = index >= kShaderNames.size();
+    const char* entries[] = {compute ? "csMain" : "vsMain", "psMain"};
+    for (std::size_t i = 0; i < (compute ? 1u : 2u); ++i) {
         ComPtr<slang::IEntryPoint> entry;
         if (SLANG_FAILED(module->findEntryPointByName(entries[i], entry.GetAddressOf()))) { return fail(); }
         slang::IComponentType* parts[] = {module, entry.Get()};
@@ -46,7 +47,8 @@ bool compilePass(slang::IGlobalSession& compiler, const char* name, ID3D11Device
     const auto bytes = [](const ComPtr<slang::IBlob>& blob) {
         return std::string_view(static_cast<const char*>(blob->getBufferPointer()), blob->getBufferSize());
     };
-    return library.replace(device, id, bytes(stages[0]), bytes(stages[1])) || fail();
+    return (compute ? library.replace(device, static_cast<ComputeShaderId>(index - kShaderNames.size()), bytes(stages[0]))
+                    : library.replace(device, static_cast<ShaderId>(index), bytes(stages[0]), bytes(stages[1]))) || fail();
 }
 }
 
@@ -91,12 +93,16 @@ void ShaderHotReload::poll(ID3D11Device* device, ShaderLibrary& library) {
     if (now < m_nextPoll) { return; }
     m_nextPoll = now + std::chrono::milliseconds(500);
 
-    std::array<bool, kShaderNames.size()> changed{};
+    constexpr auto kPassCount = kShaderNames.size() + kComputeShaderNames.size();
+    const auto passName = [](std::size_t i) {
+        return i < kShaderNames.size() ? kShaderNames[i] : kComputeShaderNames[i - kShaderNames.size()];
+    };
+    std::array<bool, kPassCount> changed{};
     bool shared = false;
-    constexpr const char* kShared[] = {"Common", "Brdf", "Lighting", "Material", "MeshFragment"};
+    constexpr const char* kShared[] = {"Common", "Brdf", "Lighting", "Material", "MeshFragment", "Skinning", "GpuInstance"};
     for (std::size_t i = 0; i < m_times.size(); ++i) {
-        const bool pass = i < kShaderNames.size();
-        const auto* name = pass ? kShaderNames[i] : kShared[i - kShaderNames.size()];
+        const bool pass = i < kPassCount;
+        const auto* name = pass ? passName(i) : kShared[i - kPassCount];
         std::error_code ec;
         const auto time = std::filesystem::last_write_time(
             std::filesystem::path(SAT_SHADER_SOURCE_DIR) / (std::string(name) + ".slang"), ec);
@@ -109,6 +115,10 @@ void ShaderHotReload::poll(ID3D11Device* device, ShaderLibrary& library) {
     m_initialized = true;
     library.pollProjectShaders(device, shared);
     changed[static_cast<std::size_t>(ShaderId::Mesh)] |= shared;
+    changed[static_cast<std::size_t>(ShaderId::MeshSkinned)] |= shared || changed[static_cast<std::size_t>(ShaderId::Mesh)];
+    changed[static_cast<std::size_t>(ShaderId::SelectionOutlineSkinned)] |=
+        shared || changed[static_cast<std::size_t>(ShaderId::SelectionOutline)];
+    for (std::size_t i = kShaderNames.size(); i < changed.size(); ++i) { changed[i] |= shared; }
     changed[static_cast<std::size_t>(ShaderId::Shadow)] |= shared;
     changed[static_cast<std::size_t>(ShaderId::PostProcess)] |= shared;
     for (std::size_t i = 0; i < changed.size(); ++i) {
@@ -117,7 +127,7 @@ void ShaderHotReload::poll(ID3D11Device* device, ShaderLibrary& library) {
             std::cerr << "Cannot initialize Slang shader compiler\n";
             return;
         }
-        compilePass(*m_session.Get(), kShaderNames[i], device, library, static_cast<ShaderId>(i));
+        compilePass(*m_session.Get(), passName(i), device, library, i);
     }
 }
 

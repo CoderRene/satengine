@@ -171,6 +171,9 @@ struct AnimationBounds {
     Vec3 minimum{}, maximum{};
     bool valid = false;
 };
+// Expands an AABB by a joint's transformed bind-space bounds.
+void includeSkinnedBounds(AnimationBounds& bounds, const AnimationBounds& bind, const Mat4& palette);
+
 struct MeshData {
     std::vector<MeshVertex> vertices;
     std::vector<MeshSkinVertex> skinVertices;

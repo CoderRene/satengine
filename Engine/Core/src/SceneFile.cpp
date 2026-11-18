@@ -31,7 +31,8 @@ constexpr int kSceneVersionWithEntityReferences = 14;
 constexpr int kSceneVersionWithScriptFields = 13;
 constexpr int kSceneVersionWithUi = 12;
 constexpr int kSceneVersionWithoutUi = 11;
-constexpr std::size_t kMaxSceneBytes = 16 * 1024 * 1024;
+// A 100,000-entity scene can exceed 16 MiB even with default components.
+constexpr std::size_t kMaxSceneBytes = 64 * 1024 * 1024;
 constexpr std::size_t kMaxScripts = 128;
 
 bool finite(const Vec3& value) {
@@ -211,7 +212,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
     error.clear();
     const auto fail = [&](const std::string& message) { error = message; return false; };
     if (data.size() > kMaxSceneBytes) {
-        return fail("Scene exceeds the 16 MiB limit.");
+        return fail("Scene exceeds the 64 MiB limit.");
     }
     std::istringstream in{std::string(data)};
     in.imbue(std::locale::classic());

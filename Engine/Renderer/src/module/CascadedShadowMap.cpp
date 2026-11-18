@@ -1,5 +1,7 @@
 #include "CascadedShadowMap.hpp"
 
+#include "GpuCulling.hpp"
+
 #include "SceneDraw.hpp"
 
 #include <algorithm>
@@ -183,7 +185,7 @@ bool CascadedShadowMap::update(ID3D11DeviceContext* context, const Mat4& view, c
         Mat4 ortho;
         ortho.m[0] = ortho.m[5] = 1.0f / radius;
         ortho.m[10] = 1.0f / (2.0f * radius + casterMargin);
-        m_cascades[i] = {ortho * lightView, snappedCenter, radius, radius, split, texelSize};
+        m_cascades[i] = {ortho * lightView, split, texelSize};
 
         // The next cascade is sampled before its logical split begins.
         fitNear = std::lerp(split, splitNear, kBlendFraction);
@@ -196,13 +198,9 @@ Vec3 CascadedShadowMap::lightSpaceCenter(Vec3 center) const {
     return {dot(m_lightX, center), dot(m_lightY, center), dot(m_lightZ, center)};
 }
 
-bool CascadedShadowMap::overlaps(unsigned index, Vec3 lightCenter, float radius) const {
-    const auto& cascade = m_cascades[index];
-    const float reach = cascade.halfSize + radius;
-    // Ignore the light-space near plane so upstream casters survive depth clamping.
-    return std::abs(lightCenter.x - cascade.center.x) <= reach &&
-        std::abs(lightCenter.y - cascade.center.y) <= reach &&
-        lightCenter.z - cascade.center.z <= cascade.farOffset + radius;
+FrustumPlanes CascadedShadowMap::cullingPlanes(unsigned index) const {
+    // The near plane is disabled to retain upstream casters under depth clamping.
+    return frustumPlanes(m_cascades[index].viewProj, true);
 }
 
 } // namespace sat

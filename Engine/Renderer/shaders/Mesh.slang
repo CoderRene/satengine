@@ -1,3 +1,4 @@
+import GpuInstance;
 #ifdef SAT_SKINNED
 #include "Skinning.slang"
 #endif
@@ -26,6 +27,8 @@ cbuffer Frame : register(b0)
     float orthoDepthScale;
     float3 orthoViewToEye;
     uint orthographic;
+    float4 originHigh;
+    float4 originLow;
 };
 cbuffer Lights : register(b3)
 {
@@ -113,21 +116,17 @@ struct VertexInput
     float2 uv1 : TEXCOORD1;
     float4 color : COLOR0;
     float4 tangent : TANGENT;
-    float4 worldX : INSTANCE0;
-    float4 worldY : INSTANCE1;
-    float4 worldZ : INSTANCE2;
-    float4 worldTranslation : INSTANCE3;
-    float4 normalX : INSTANCE4;
-    float3 normalY : INSTANCE5;
-    float3 normalZ : INSTANCE6;
-    float3 thicknessScale : INSTANCE7;
+    uint instanceIndex : INSTANCE0;
 };
+
+StructuredBuffer<GpuInstance> instances : register(t13);
 
 [shader("vertex")]
 MeshFragment vsMain(VertexInput input)
 {
+    GpuInstance instance = instances[input.instanceIndex];
 #ifdef SAT_SKINNED
-    float4x4 skin = skinColumns(input.joints, input.weights);
+    float4x4 skin = skinColumns(input.joints, input.weights, instance.paletteOffset);
     input.position = mul(float4(input.position, 1), skin).xyz;
     float3 sx = skin[0].xyz;
     float3 sy = skin[1].xyz;
@@ -138,20 +137,21 @@ MeshFragment vsMain(VertexInput input)
     input.tangent.w *= determinant < 0 ? -1.0 : 1.0;
 #endif
     MeshFragment output;
-    float4 position = input.worldX * input.position.x + input.worldY * input.position.y +
-        input.worldZ * input.position.z + input.worldTranslation;
-    output.position = mul(viewProj, position);
-    output.worldPosition = position.xyz;
+    float3 translation = relativeTranslation(instance, originHigh.xyz, originLow.xyz);
+    float3 position = instance.basisX.xyz * input.position.x + instance.basisY.xyz * input.position.y +
+        instance.basisZ.xyz * input.position.z + translation;
+    output.position = mul(viewProj, float4(position, 1));
+    output.worldPosition = position;
     output.clipW = output.position.w;
-    output.normal = input.normalX.xyz * input.normal.x + input.normalY * input.normal.y +
-        input.normalZ * input.normal.z;
-    float3 tangent = input.worldX.xyz * input.tangent.x + input.worldY.xyz * input.tangent.y +
-        input.worldZ.xyz * input.tangent.z;
-    output.tangent = float4(tangent, input.tangent.w * input.normalX.w);
+    output.normal = instance.normalX.xyz * input.normal.x + instance.normalY.xyz * input.normal.y +
+        instance.normalZ.xyz * input.normal.z;
+    float3 tangent = instance.basisX.xyz * input.tangent.x + instance.basisY.xyz * input.tangent.y +
+        instance.basisZ.xyz * input.tangent.z;
+    output.tangent = float4(tangent, input.tangent.w * instance.normalX.w);
     output.uv = input.uv;
     output.uv1 = input.uv1;
     output.color = input.color;
-    output.thicknessScale = input.thicknessScale;
+    output.thicknessScale = instance.thicknessScale.xyz;
     return output;
 }
 

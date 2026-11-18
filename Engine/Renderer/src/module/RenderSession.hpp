@@ -57,6 +57,7 @@ public:
     [[nodiscard]] int gameViewWidth() const;
     [[nodiscard]] int gameViewHeight() const;
     [[nodiscard]] std::uint64_t contentRevision() const;
+    [[nodiscard]] std::uint64_t sceneDrawRevision(const Scene& scene);
     [[nodiscard]] AssetThumbnail assetThumbnail(std::string_view path, std::span<const Mat4> palette = {});
     [[nodiscard]] std::uintptr_t createTexture(const unsigned char* rgba, int width, int height);
     void destroyTexture(std::uintptr_t texture);

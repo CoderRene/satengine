@@ -71,14 +71,17 @@ void RenderSession::renderOffscreenView(
         hdrClear[i] = linear / std::max(1.0f - linear, 0.001f);
     }
     context->ClearRenderTargetView(hdrTarget, hdrClear);
+    auto* interval = m_state->gpuFrameQueryActive
+        ? m_state->gpuFrameQueries[m_state->gpuFrameQueryIndex].disjoint.Get() : nullptr;
+    auto* gpuStats = stats && drawList.captureGpuStats &&
+        view.gpuStats.begin(*m_state->device, *context, interval, *stats) ? &view.gpuStats : nullptr;
     auto& pass = preparedPass ? *preparedPass : m_state->meshPass;
-    if (drawList.meshCount > 0 && pass.ensure(m_state->device)) {
+    if ((drawList.scene || drawList.meshCount > 0) && pass.ensure(m_state->device)) {
         const Mat4 invView = inverse(viewMat);
-        if (!preparedPass) { pass.prepareAssets(m_state->device, drawList); }
-        pass.draw(context, m_state->shaders.program(ShaderId::Mesh), viewMat, projMat,
-            {invView.m[12], invView.m[13], invView.m[14]}, drawList, true,
-            m_state->shaders.program(ShaderId::Shadow).pixel, &m_state->shaders, camera.renderOrigin,
-            preparedPass == nullptr, stats);
+        pass.draw(context, m_state->shaders, viewMat, projMat,
+            {invView.m[12], invView.m[13], invView.m[14]}, drawList, true, camera.renderOrigin,
+            preparedPass == nullptr, stats, preparedPass ? nullptr : view.depthView.Get(), gpuStats, m_state->frameNumber,
+            &view == &m_state->scene);
     }
 
     const auto post = m_state->shaders.program(ShaderId::PostProcess);
@@ -171,6 +174,10 @@ void RenderSession::renderOffscreenView(
     constants.pass = 0;
     if (!glow) { constants.intensity = 0; }
     drawPost(view.rtv, view.hdrView.Get(), glow, view.width, view.height);
+    if (gpuStats) {
+        gpuStats->mark(*context, ViewTimestamp::PostEnd);
+        gpuStats->end();
+    }
     context->RSSetViewports(1, &viewport);
     context->OMSetRenderTargets(1, &view.rtv, view.dsv);
 
@@ -202,13 +209,16 @@ void RenderSession::renderOffscreenView(
         }
     }
 
-    if (drawList.drawEditorOverlay && drawList.selectedMesh >= 0 &&
-        drawList.selectedMesh < drawList.meshCount && drawList.meshes != nullptr) {
-        const MeshInstance& selected = drawList.meshes[drawList.selectedMesh];
+    const Entity* selectedEntity = drawList.scene ? drawList.scene->entityById(drawList.selected) : nullptr;
+    if (drawList.drawEditorOverlay && selectedEntity && selectedEntity->hasMesh) {
+        MeshInstance selected{};
+        selected.world = matrixFromTransform(selectedEntity->transform, camera.renderOrigin);
+        selected.meshPath = selectedEntity->mesh.meshPath;
+        selected.meshNode = selectedEntity->mesh.meshNode;
         const GpuMesh* meshGeometry = m_state->meshPass.geometry(selected);
         if (meshGeometry != nullptr && m_state->outlinePass.ensure(m_state->device)) {
             const bool skinned = meshGeometry->skinBuffer != nullptr;
-            if (!skinned || m_state->meshPass.bindSkin(m_state->context, selected, *meshGeometry)) {
+            if (!skinned || m_state->meshPass.bindSkin(m_state->context, drawList.selected, *meshGeometry)) {
                 m_state->outlinePass.draw(m_state->context, m_state->shaders.program(skinned ? ShaderId::SelectionOutlineSkinned : ShaderId::SelectionOutline), viewProj, selected, *meshGeometry);
             }
         }

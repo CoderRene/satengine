@@ -242,6 +242,7 @@ void RenderSession::beginGpuFrameTiming() {
             state.gpuFrameTimeMs.reset();
             return;
         }
+        state.game.gpuStats.poll(*context, queries.disjoint.Get());
         queries.pending = false;
     }
 

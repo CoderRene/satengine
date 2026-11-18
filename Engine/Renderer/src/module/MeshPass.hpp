@@ -18,6 +18,7 @@ struct ID3D11DeviceContext;
 namespace sat {
 
 struct GameViewStats;
+class GpuViewStats;
 
 class MeshPass {
 public:
@@ -29,13 +30,13 @@ public:
 
     [[nodiscard]] bool ensure(ID3D11Device* device);
     void release();
-    [[nodiscard]] bool bindSkin(ID3D11DeviceContext* context, const MeshInstance& instance, const GpuMesh& mesh) const;
+    [[nodiscard]] bool bindSkin(ID3D11DeviceContext* context, EntityId id, const GpuMesh& mesh) const;
     void draw(
-        ID3D11DeviceContext* context, ShaderProgram program,
+        ID3D11DeviceContext* context, ShaderLibrary& shaders,
         const Mat4& view, const Mat4& projection, Vec3 eye,
-        const SceneDrawList& drawList, bool hdr = false, ID3D11PixelShader* shadowPixel = nullptr,
-        ShaderLibrary* shaders = nullptr, DVec3 renderOrigin = {}, bool loadProjectShaders = true,
-        GameViewStats* stats = nullptr);
+        const SceneDrawList& drawList, bool hdr = false, DVec3 renderOrigin = {},
+        bool prepareAssets = true, GameViewStats* stats = nullptr, ID3D11ShaderResourceView* depth = nullptr,
+        GpuViewStats* gpuStats = nullptr, std::uint64_t frame = 0, bool sceneView = false);
 
     // Geometry owned by this pass for the given primitive (nullptr if unknown/unready).
     [[nodiscard]] const GpuMesh* geometry(const MeshInstance& instance) const;
@@ -57,6 +58,7 @@ public:
         return true;
     }
     [[nodiscard]] std::string assetInfo(std::string_view path) { return m_assets.info(path); }
+    [[nodiscard]] std::uint64_t sceneDrawRevision(const Scene& scene);
     void prepareAssets(ID3D11Device* device, const SceneDrawList& drawList);
     [[nodiscard]] const std::vector<std::string>& assetErrors() const { return m_assets.errors(); }
     [[nodiscard]] bool meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum, std::uint32_t meshNode = 0) {

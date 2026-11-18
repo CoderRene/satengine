@@ -37,6 +37,9 @@ struct GameViewStats {
     std::uint64_t setPassCalls = 0; // Draw batches after setting up a render pass or material.
     std::uint64_t triangles = 0;
     std::uint64_t vertices = 0; // Geometry vertices per draw, including repeats across draws.
+    std::optional<double> gpuShadowMs, gpuOpaqueMs, gpuTransmissionMs, gpuTransparentMs, gpuPostMs;
+    double cpuSceneSyncMs = 0;
+    double cpuMeshSubmitMs = 0;
     std::optional<double> gpuFrameTimeMs; // Latest completed renderer frame, before Present.
 };
 
@@ -92,6 +95,7 @@ public:
     [[nodiscard]] int gameViewHeight() const;
     // Bumps when GPU-visible shaders or assets change.
     [[nodiscard]] std::uint64_t contentRevision() const;
+    [[nodiscard]] std::uint64_t sceneDrawRevision(const Scene& scene);
 
     // Render-thread preview for mesh, material and texture assets. Borrowed SRV valid through this frame.
     [[nodiscard]] AssetThumbnail assetThumbnail(std::string_view path, std::span<const Mat4> palette = {});

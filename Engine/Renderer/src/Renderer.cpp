@@ -108,6 +108,10 @@ int Renderer::gameViewHeight() const {
     return m_impl->gameViewHeight();
 }
 
+std::uint64_t Renderer::sceneDrawRevision(const Scene& scene) {
+    return m_impl->sceneDrawRevision(scene);
+}
+
 std::uint64_t Renderer::contentRevision() const {
     return m_impl->contentRevision();
 }

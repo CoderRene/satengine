@@ -37,7 +37,7 @@ public:
     void invalidateAsset(std::string_view path);
     [[nodiscard]] const GpuMaterial* material(std::string_view path, bool fallback = true) const;
     [[nodiscard]] ID3D11ShaderResourceView* environment(std::string_view path) const;
-    void prepare(ID3D11Device* device, const SceneDrawList& drawList);
+    void prepare(ID3D11Device* device, const SceneDrawList& drawList, ID3D11DeviceContext* context = nullptr);
     [[nodiscard]] bool reimport(ID3D11Device* device, std::string_view path, const AssetImportSettings* settings,
         const AssetImportWriter& writer, std::string& error);
     [[nodiscard]] bool publishImport(ID3D11Device* device, PreparedAssetImport&& prepared,

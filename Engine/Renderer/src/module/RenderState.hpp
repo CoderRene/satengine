@@ -6,6 +6,7 @@
 
 #include "module/CameraFrustumPass.hpp"
 #include "module/MeshPass.hpp"
+#include "module/GpuViewStats.hpp"
 #include "module/SelectionOutlinePass.hpp"
 #include "module/ShaderLibrary.hpp"
 #include "module/AssetThumbnailLoader.hpp"
@@ -49,6 +50,7 @@ struct DebugLineVertex {
 };
 
 struct OffscreenView {
+    GpuViewStats gpuStats;
     struct BloomLevel {
         Microsoft::WRL::ComPtr<ID3D11RenderTargetView> downTarget, upTarget;
         Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> downView, upView;
@@ -63,6 +65,7 @@ struct OffscreenView {
     ID3D11RenderTargetView* rtv = nullptr;
     ID3D11ShaderResourceView* srv = nullptr;
     ID3D11Texture2D* depth = nullptr;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> depthView;
     ID3D11DepthStencilView* dsv = nullptr;
     int width = 0;
     int height = 0;
@@ -112,6 +115,7 @@ struct RenderSession::State {
     bool allowTearing = false;
     // Bumps when shaders or imported assets change. Edit-mode views skip redraws while it is stable.
     std::uint64_t contentRevision = 0;
+    std::uint64_t frameNumber = 0;
     std::uint64_t shaderRevisionSeen = 0;
 
     ShaderLibrary shaders;

@@ -14,13 +14,14 @@ public:
     void update(const Scene& scene, int width, int height, const AnimationSystem* animation = nullptr);
     [[nodiscard]] const GameViewCamera& camera() const { return m_camera; }
     [[nodiscard]] bool hasCamera() const { return m_hasCamera; }
-    // Borrowed mesh and light storage remains valid until the next update or destruction.
+    // Borrowed scene inputs and light storage are consumed during submission.
     // Source scene asset-path strings must remain unchanged until submission ends.
     [[nodiscard]] SceneDrawList drawList() const;
 
 private:
     GameViewCamera m_camera;
-    std::vector<MeshInstance> m_meshes;
+    const Scene* m_scene = nullptr;
+    const AnimationSystem* m_animation = nullptr;
     std::vector<LightInstance> m_lights;
     Vec3 m_ambient;
     std::string_view m_environmentPath;

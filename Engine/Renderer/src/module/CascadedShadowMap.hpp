@@ -27,9 +27,6 @@ public:
 
     struct Cascade {
         Mat4 viewProj;
-        Vec3 center;
-        float halfSize = 0;
-        float farOffset = 0;
         float split = 0;
         float texelSize = 0;
     };
@@ -40,8 +37,7 @@ public:
 
     [[nodiscard]] bool update(ID3D11DeviceContext* context, const Mat4& view, const Mat4& projection,
         DVec3 renderOrigin, Vec3 lightDirection, const SceneDrawList& settings);
-    [[nodiscard]] Vec3 lightSpaceCenter(Vec3 center) const;
-    [[nodiscard]] bool overlaps(unsigned index, Vec3 lightCenter, float radius) const;
+    [[nodiscard]] std::array<std::array<float, 4>, 6> cullingPlanes(unsigned index) const;
 
     [[nodiscard]] const Cascade& cascade(unsigned index) const { return m_cascades[index]; }
     [[nodiscard]] float nearDepth() const { return m_nearDepth; }
@@ -55,6 +51,7 @@ public:
     }
 
 private:
+    [[nodiscard]] Vec3 lightSpaceCenter(Vec3 center) const;
     [[nodiscard]] bool ensureResources(ID3D11DeviceContext* context, unsigned resolution, unsigned count);
 
     std::array<Cascade, kMaxCascades> m_cascades;

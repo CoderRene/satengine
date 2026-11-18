@@ -10,7 +10,7 @@ set(shader_source "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/shaders")
 set(shader_dir "${CMAKE_BINARY_DIR}/Shaders")
 set(shader_generated "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
 set(shader_layout "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/src/module/ShaderLayout.hpp")
-set(shader_shared Common Brdf Lighting Material MeshFragment Skinning Mesh SelectionOutline)
+set(shader_shared Common Brdf Lighting Material MeshFragment Skinning Mesh SelectionOutline GpuInstance)
 list(TRANSFORM shader_shared PREPEND "${shader_source}/")
 list(TRANSFORM shader_shared APPEND ".slang")
 set(shader_flags -target dxbc -profile sm_5_0 -matrix-layout-column-major -O3)
@@ -32,6 +32,16 @@ foreach(pass Mesh SelectionOutline CameraFrustum TransformGizmo Grid PostProcess
             VERBATIM)
         list(APPEND shader_outputs "${output}")
     endforeach()
+endforeach()
+foreach(pass ScatterInstances CullInstances DepthPyramid)
+    set(output "${shader_dir}/${pass}.cs.dxbc")
+    add_custom_command(OUTPUT "${output}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${shader_dir}"
+        COMMAND "${sat_slangc}" "${shader_source}/${pass}.slang" -entry csMain -stage compute
+            ${shader_flags} -I "${shader_source}" -o "${output}"
+        DEPENDS "${shader_source}/${pass}.slang" ${shader_shared} "${sat_slangc}"
+        VERBATIM)
+    list(APPEND shader_outputs "${output}")
 endforeach()
 string(REPLACE ";" "|" shader_entries "${shader_outputs}")
 add_custom_command(OUTPUT "${shader_dir}/ShaderManifest" "${shader_generated}/ShaderManifest.hpp"

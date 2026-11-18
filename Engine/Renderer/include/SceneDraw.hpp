@@ -7,6 +7,8 @@
 
 namespace sat {
 
+class AnimationSystem;
+
 enum class TransformTool { Move, Rotate, Scale };
 enum class TransformSpace { Global, Local };
 
@@ -88,12 +90,16 @@ struct SceneDrawList {
     const DebugLine* debugLines = nullptr;
     int debugLineCount = 0;
     Vec3 gridOffset{};
+    // Borrowed scene inputs are valid through submission. Meshes are for previews.
+    const Scene* scene = nullptr;
+    const AnimationSystem* animation = nullptr;
+    EntityId selected = kInvalidEntityId;
     const MeshInstance* meshes = nullptr;
     int meshCount = 0;
-    int selectedMesh = -1;
     const CameraFrustumInstance* frustums = nullptr;
     int frustumCount = 0;
     // Editor previews can show a reference grid without enabling gizmos/frustums.
+    bool captureGpuStats = false;
     bool drawGrid = false;
     bool drawEditorOverlay = false;
     bool showTransformGizmo = false;

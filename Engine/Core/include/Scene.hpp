@@ -193,6 +193,9 @@ public:
     [[nodiscard]] int mainCameraIndex() const;
 
     Entity& createEntity(std::string name);
+    // Copy one entity with a fresh ID under parentId, keeping its name if name is empty.
+    // The copy is never the main camera. Invalid source, parent, or capacity returns an invalid ID.
+    [[nodiscard]] EntityId duplicateEntity(EntityId sourceId, EntityId parentId, std::string name = {});
     // Insert a root from a scene copy with its original ID. The ID must be absent.
     void addEntityCopy(const Entity& entity);
     void addEmpty();

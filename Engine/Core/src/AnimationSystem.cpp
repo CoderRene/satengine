@@ -2,12 +2,13 @@
 
 #include "AnimationAsset.hpp"
 #include "AnimationGraph.hpp"
-#include "AssetImportSettings.hpp"
+#include "AssetImporter.hpp"
 #include "module/AnimationSampler.hpp"
 #include "module/AnimationStateMachine.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <numeric>
 #include <iostream>
@@ -41,7 +42,12 @@ std::string_view animatorMeshPath(const Scene& scene, const Entity& entity) {
 }
 
 struct AnimationSystem::Impl {
-    struct Rig { AnimationData data; float scale = 1; std::vector<std::size_t> order; };
+    struct Rig {
+        AnimationData data;
+        float scale = 1;
+        std::vector<std::size_t> order;
+        std::vector<AnimationBounds> jointBounds;
+    };
     struct BoundClip {
         const AnimationClip* clip = nullptr;
         std::vector<int> joints;
@@ -63,6 +69,7 @@ struct AnimationSystem::Impl {
         std::unordered_set<std::string> reportedParameters;
         std::vector<AnimationPose> pose, source;
         std::vector<Mat4> worlds;
+        AnimationBounds bounds;
         std::vector<bool> animated;
         std::vector<std::size_t> cursors;
         BoundClip* clip = nullptr;
@@ -89,6 +96,7 @@ struct AnimationSystem::Impl {
     std::vector<Mat4> palettes;
     std::string error;
     std::uint64_t revision = 0;
+    std::uint64_t poseRevision = 0;
     bool running = false;
 
     bool read(std::string_view path, std::string& bytes) {
@@ -109,6 +117,12 @@ struct AnimationSystem::Impl {
         if (metadataResult == AssetReadResult::Error ||
             (metadataResult == AssetReadResult::Found && !parseImportSettings(metadata, settings, error))) { return nullptr; }
         candidate.scale = settings.scale;
+        // Use the same imported vertex coordinates as the render mesh.
+        MeshData mesh;
+        std::string boundsError;
+        if (importMesh(path, bytes, reader, settings, mesh, boundsError)) {
+            candidate.jointBounds = std::move(mesh.jointBounds);
+        }
         // Topological order is cached once. cgltf validates the hierarchy.
         std::vector<bool> visited(candidate.data.joints.size());
         const auto visit = [&](auto&& self, std::size_t index) -> void {
@@ -271,14 +285,23 @@ struct AnimationSystem::Impl {
                 }
             }
         }
+        instance.bounds = {};
+        bool changed = false;
         for (const auto index : instance.rig->order) {
             const auto& joint = joints[index];
             const auto local = instance.animated[index] ? animationMatrix(instance.pose[index]) : joint.restLocal;
             instance.worlds[index] = joint.parent >= 0 ? instance.worlds[joint.parent] * local : local;
-            auto& palette = palettes[instance.offset + index];
-            palette = instance.worlds[index] * joint.inverseBind;
+            auto& previous = palettes[instance.offset + index];
+            Mat4 palette = instance.worlds[index] * joint.inverseBind;
             palette.m[12] *= instance.rig->scale; palette.m[13] *= instance.rig->scale; palette.m[14] *= instance.rig->scale;
+            changed |= std::memcmp(previous.m, palette.m, sizeof(palette.m)) != 0;
+            previous = palette;
+
+            if (index < instance.rig->jointBounds.size()) {
+                includeSkinnedBounds(instance.bounds, instance.rig->jointBounds[index], palette);
+            }
         }
+        poseRevision += changed;
     }
     bool parameter(EntityId id, std::string_view name, AnimationParameterType type, double value) {
         auto* instance = ensure(id);
@@ -309,6 +332,7 @@ void AnimationSystem::setAssetRevision(std::uint64_t revision) {
 }
 bool AnimationSystem::start() { m_impl->running = true; m_impl->error.clear(); update(0); return m_impl->error.empty(); }
 void AnimationSystem::stop() {
+    ++m_impl->poseRevision;
     m_impl->running = false; m_impl->instances.clear(); m_impl->failedInstances.clear(); m_impl->palettes.clear();
     m_impl->rigs.clear(); m_impl->clips.clear(); m_impl->graphs.clear();
 }
@@ -326,6 +350,7 @@ void AnimationSystem::update(float deltaSeconds, float timeScale) {
         if (!instance) { continue; }
         instance->offset = count; count += instance->pose.size();
     }
+    impl.poseRevision += impl.palettes.size() != count;
     impl.palettes.resize(count);
     for (auto& [id, instance] : impl.instances) {
         const double dt = double(deltaSeconds) * timeScale;
@@ -398,7 +423,15 @@ std::span<const Mat4> AnimationSystem::palette(EntityId id) const {
     return {m_impl->palettes.data() + instance.offset, instance.pose.size()};
 }
 std::span<const Mat4> AnimationSystem::meshPalette(const Entity& meshEntity) const {
-    if (meshEntity.hasAnimator) { return palette(meshEntity.id()); }
+    return meshPose(meshEntity).palette;
+}
+std::uint64_t AnimationSystem::poseRevision() const { return m_impl->poseRevision; }
+AnimationMeshPose AnimationSystem::meshPose(const Entity& meshEntity) const {
+    if (meshEntity.hasAnimator) {
+        const auto found = m_impl->instances.find(meshEntity.id());
+        return found == m_impl->instances.end() ? AnimationMeshPose{} :
+            AnimationMeshPose{palette(meshEntity.id()), found->second.bounds};
+    }
     if (meshEntity.mesh.meshNode == 0 || m_impl->instances.empty()) { return {}; }
     const auto& path = meshEntity.mesh.meshPath;
     const auto& scene = m_impl->scene;
@@ -406,7 +439,7 @@ std::span<const Mat4> AnimationSystem::meshPalette(const Entity& meshEntity) con
         parent = scene.entityById(parent->parentId())) {
         if (!parent->hasAnimator) { continue; }
         const auto found = m_impl->instances.find(parent->id());
-        if (found != m_impl->instances.end() && found->second.meshPath == path) { return palette(parent->id()); }
+        if (found != m_impl->instances.end() && found->second.meshPath == path) { return {palette(parent->id()), found->second.bounds}; }
     }
     return {};
 }

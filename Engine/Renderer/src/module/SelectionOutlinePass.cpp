@@ -223,7 +223,7 @@ void SelectionOutlinePass::draw(
     context->RSSetState(m_impl->backCull);
     context->OMSetDepthStencilState(m_impl->stencilWrite, 1);
     context->OMSetBlendState(m_impl->noColorWrite, blendFactor, 0xffffffff);
-    context->DrawIndexed(indexCount, firstIndex, 0);
+    context->DrawIndexed(indexCount, geometry.firstIndex + firstIndex, geometry.baseVertex);
 
     // Expanded inverted hull where stencil is not marked.
     const Mat4 outlineWorld = meshWorld(selected.world * scaleUniform(kOutlineScale), node);
@@ -239,7 +239,7 @@ void SelectionOutlinePass::draw(
     context->RSSetState(m_impl->frontCull);
     context->OMSetDepthStencilState(m_impl->stencilOutline, 1);
     context->OMSetBlendState(nullptr, blendFactor, 0xffffffff);
-    context->DrawIndexed(indexCount, firstIndex, 0);
+    context->DrawIndexed(indexCount, geometry.firstIndex + firstIndex, geometry.baseVertex);
     context->OMSetDepthStencilState(nullptr, 0);
 }
 

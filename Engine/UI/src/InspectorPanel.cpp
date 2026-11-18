@@ -24,6 +24,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -339,8 +340,26 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
         editVector("Scale", ImGuiDataType_Float, entity->transform.scale, visible.scale, 0.05f);
     }
 
+    const auto componentHeader = [content, &changed](const char* label, auto&& remove,
+        std::initializer_list<std::string_view> paths = {}) {
+        bool keep = true;
+        const bool expanded = ImGui::CollapsingHeader(label, &keep, ImGuiTreeNodeFlags_DefaultOpen);
+        if (!keep) {
+            remove();
+            changed = true;
+            return false;
+        }
+        if (content && paths.size() != 0 && ImGui::IsItemClicked()) {
+            content->revealReferences(paths);
+        }
+        return expanded;
+    };
+
     if (entity->hasCamera &&
-        ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+        componentHeader("Camera", [&] {
+            entity->hasCamera = false;
+            entity->camera = {};
+        })) {
         changed |= dragFloat("Field of View", &entity->camera.fieldOfView, 0.1f, 1.0f, 179.0f);
         changed |= dragFloat("Near Clip", &entity->camera.nearClip, 0.01f, 0.001f, 1000.0f);
         changed |= dragFloat("Far Clip", &entity->camera.farClip, 1.0f, 0.1f, 100000.0f);
@@ -358,21 +377,10 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
         }
     }
 
-    if (entity->hasCamera && ImGui::Button("Remove Camera")) {
-        entity->hasCamera = false;
-        changed = true;
-        entity->camera = {};
-    }
-
-    const auto componentHeader = [content](const char* label, std::initializer_list<std::string_view> paths) {
-        const bool expanded = ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
-        if (content && ImGui::IsItemClicked()) {
-            content->revealReferences(paths);
-        }
-        return expanded;
-    };
-
-    if (entity->hasMesh && componentHeader("Mesh", {entity->mesh.meshPath, entity->mesh.materialPath})) {
+    if (entity->hasMesh && componentHeader("Mesh", [&] {
+        entity->hasMesh = false;
+        entity->mesh = {};
+    }, {entity->mesh.meshPath, entity->mesh.materialPath})) {
         if (m_impl->assetPicker("Geometry", "Built-in Cube", entity->mesh.meshPath, m_impl->meshes)) {
             entity->mesh.meshNode = 0;
             changed = true;
@@ -384,11 +392,6 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Combine nearby imported geometry that uses the same material.");
             }
-        }
-
-        if (entity->hasMesh && ImGui::Button("Remove Mesh")) {
-            entity->hasMesh = false;
-            changed = true;
         }
     }
 
@@ -406,15 +409,14 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             }
             ImGui::SameLine();
         }
-        if (componentHeader(label.c_str(), {scriptPath})) {
+        if (componentHeader(label.c_str(), [&] {
+            removeScript = static_cast<int>(index);
+        }, {scriptPath})) {
             changed |= ImGui::Checkbox("Enabled", &script.enabled);
             ImGui::TextWrapped("Scripts/%s", script.path.c_str());
             ImGui::Separator();
             if (m_impl->project->isOpen() && isValidScriptPath(script.path)) {
                 changed |= m_impl->drawScriptFields(script);
-            }
-            if (ImGui::Button("Remove Script")) {
-                removeScript = static_cast<int>(index);
             }
         }
         ImGui::PopID();
@@ -425,19 +427,21 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
         changed = true;
     }
 
-    if (entity->gameUi && componentHeader("Game UI", {entity->gameUi->documentPath, entity->gameUi->fontPath})) {
+    if (entity->gameUi && componentHeader("Game UI", [&] {
+        entity->gameUi.reset();
+    }, {entity->gameUi->documentPath, entity->gameUi->fontPath})) {
         auto& ui = *entity->gameUi;
         changed |= m_impl->assetPicker("Document", "None", ui.documentPath, m_impl->uiDocuments);
         changed |= m_impl->assetPicker("Font", "None", ui.fontPath, m_impl->uiFonts);
         changed |= ImGui::Checkbox("Show on Start", &ui.visible);
-        if (ImGui::Button("Remove Game UI")) {
-            entity->gameUi.reset();
-            changed = true;
-        }
     }
 
     changed |= drawPhysicsInspector(*entity);
-    if (entity->hasAnimator && ImGui::CollapsingHeader("Animator", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (entity->hasAnimator && componentHeader("Animator", [&] {
+        entity->hasAnimator = false;
+        entity->animator = {};
+        m_impl->controllerMode = false;
+    })) {
         auto& animator = entity->animator;
         int mode = m_impl->controllerMode ? 1 : 0;
         if (ImGui::Combo("Mode", &mode, "Clip\0Controller\0")) {
@@ -508,9 +512,11 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             if (ImGui::SliderFloat("Time", &time, 0, duration)) { (void)animation->setTime(entity->id(), time); }
             if (!animation->error().empty()) { ImGui::TextWrapped("%s", animation->error().c_str()); }
         }
-        if (ImGui::Button("Remove Animator")) { entity->hasAnimator = false; entity->animator = {}; changed = true; }
     }
-    if (entity->hasAudioSource && componentHeader("Audio Source", {entity->audioSource.clipPath})) {
+    if (entity->hasAudioSource && componentHeader("Audio Source", [&] {
+        entity->hasAudioSource = false;
+        entity->audioSource = {};
+    }, {entity->audioSource.clipPath})) {
         auto& source = entity->audioSource;
         changed |= m_impl->assetPicker("Clip", "None", source.clipPath, m_impl->clips);
         changed |= dragFloat("Volume", &source.volume, 0.01f, 0.0f, 16.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -532,13 +538,11 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             changed = true;
         }
         changed |= ImGui::InputInt("Priority", &source.priority);
-        if (ImGui::Button("Remove Audio Source")) {
-            entity->hasAudioSource = false;
-            entity->audioSource = {};
-            changed = true;
-        }
     }
-    if (entity->hasLight && ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (entity->hasLight && componentHeader("Light", [&] {
+        entity->hasLight = false;
+        entity->light = {};
+    })) {
         auto& light = entity->light;
         int type = static_cast<int>(light.type);
         if (ImGui::Combo("Light Type", &type, "Directional\0Point\0Spot\0")) {
@@ -558,13 +562,9 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             changed |= ImGui::SliderFloat("Outer Cone", &light.outerConeDegrees, light.innerConeDegrees,
                 89.9f, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
         }
-        if (ImGui::Button("Remove Light")) { entity->hasLight = false; changed = true; }
     }
-    if (entity->hasAudioListener && ImGui::CollapsingHeader("Audio Listener", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (ImGui::Button("Remove Audio Listener")) {
-            entity->hasAudioListener = false;
-            changed = true;
-        }
+    if (entity->hasAudioListener) {
+        componentHeader("Audio Listener", [&] { entity->hasAudioListener = false; });
     }
     ImGui::Separator();
     if (ImGui::Button("Add Component", ImVec2(-1.0f, 0.0f))) {

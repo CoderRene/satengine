@@ -12,7 +12,6 @@
 #include <iterator>
 #include <cmath>
 #include <cstddef>
-#include <cstring>
 
 namespace sat {
 
@@ -36,17 +35,11 @@ struct alignas(16) MeshFrameCb {
     float orthoDepthScale;
     float orthoViewToEye[3];
     unsigned orthographic;
+    float originHigh[4];
+    float originLow[4];
 };
 
-struct alignas(16) MeshInstanceData {
-    float world[16];
-    float normal[12]; // Three columns. The first column's W stores tangent handedness.
-    float thicknessScale[3];
-    float padding;
-};
-
-inline void writeMeshInstance(MeshInstanceData& object, const Mat4& matrix) {
-    std::memcpy(object.world, matrix.m, sizeof(object.world));
+inline void writeNormalColumns(float* normal, const Mat4& matrix) {
     // Orthogonal TRS columns give inverse-transpose via reciprocal squared lengths.
     const auto& world = matrix.m;
     const Vec3 x{world[0], world[1], world[2]};
@@ -60,12 +53,43 @@ inline void writeMeshInstance(MeshInstanceData& object, const Mat4& matrix) {
     for (int column = 0; column < 3; ++column) {
         const float scale = uniform || scales[column] <= 1e-20f ? 1.0f : 1.0f / scales[column];
         for (int row = 0; row < 3; ++row) {
-            object.normal[column * 4 + row] = world[column * 4 + row] * scale;
+            normal[column * 4 + row] = world[column * 4 + row] * scale;
         }
-        object.normal[column * 4 + 3] = 0;
+        normal[column * 4 + 3] = 0;
     }
-    object.normal[3] = sign;
+    normal[3] = sign;
 }
+
+struct alignas(16) GpuInstance {
+    float basis[3][4];
+    float normal[3][4];
+    float translationHigh[3];
+    unsigned paletteOffset;
+    float translationLow[3];
+    unsigned flags;
+    float bounds[4]; // Center relative to split translation, then radius.
+    float thicknessScale[4];
+};
+static_assert(sizeof(GpuInstance) == 160 && offsetof(GpuInstance, normal) == 48 &&
+    offsetof(GpuInstance, translationHigh) == 96 && offsetof(GpuInstance, translationLow) == 112 &&
+    offsetof(GpuInstance, bounds) == 128 && offsetof(GpuInstance, thicknessScale) == 144);
+
+struct alignas(16) DirtyGpuInstance {
+    unsigned index;
+    unsigned padding[3];
+    GpuInstance data;
+};
+static_assert(sizeof(DirtyGpuInstance) == 176 && offsetof(DirtyGpuInstance, data) == 16);
+
+struct GpuDrawItem {
+    unsigned instance, batch, visibleStart, passes;
+};
+struct GpuBatch {
+    unsigned indexCount, instanceCount, firstIndex;
+    int baseVertex;
+    unsigned firstInstance;
+};
+static_assert(sizeof(GpuDrawItem) == 16 && sizeof(GpuBatch) == 20 && offsetof(GpuBatch, instanceCount) == 4);
 
 struct alignas(16) SkinCb { unsigned paletteOffset = 0; unsigned padding[3]{}; };
 
@@ -157,11 +181,10 @@ struct alignas(16) GizmoFrameCb {
 static_assert(sizeof(MeshVertex) == 72 && offsetof(MeshVertex, nx) == 12 &&
     offsetof(MeshVertex, u) == 24 && offsetof(MeshVertex, tx) == 32 &&
     offsetof(MeshVertex, u1) == 48 && offsetof(MeshVertex, color) == 56);
-static_assert(sizeof(MeshFrameCb) == 448 && alignof(MeshFrameCb) == 16 &&
+static_assert(sizeof(MeshFrameCb) == 480 && alignof(MeshFrameCb) == 16 &&
     offsetof(MeshFrameCb, cascadeViewProj) == 128 && offsetof(MeshFrameCb, cascadeSplits) == 384 &&
-    offsetof(MeshFrameCb, cascadeTexel) == 400 && offsetof(MeshFrameCb, cascadeCount) == 416);
-static_assert(sizeof(MeshInstanceData) == 128 && offsetof(MeshInstanceData, normal) == 64 &&
-    offsetof(MeshInstanceData, thicknessScale) == 112);
+    offsetof(MeshFrameCb, cascadeTexel) == 400 && offsetof(MeshFrameCb, cascadeCount) == 416 &&
+    offsetof(MeshFrameCb, originHigh) == 448 && offsetof(MeshFrameCb, originLow) == 464);
 static_assert(sizeof(MaterialCb) == 448 && offsetof(MaterialCb, uv) == 64 &&
     offsetof(MaterialCb, transmission) == 288 && offsetof(MaterialCb, coatUv) == 320 &&
     offsetof(MaterialCb, clearcoat) == 416 && offsetof(MaterialCb, transmissionRoughnessStrength) == 432 &&
@@ -181,14 +204,7 @@ inline constexpr D3D11_INPUT_ELEMENT_DESC kMeshLayout[] = {
         {"TANGENT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"TEXCOORD", 1, DXGI_FORMAT_R32G32_FLOAT, 0, offsetof(MeshVertex, u1), D3D11_INPUT_PER_VERTEX_DATA, 0},
         {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, offsetof(MeshVertex, color), D3D11_INPUT_PER_VERTEX_DATA, 0},
-        {"INSTANCE", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1},
-        {"INSTANCE", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 16, D3D11_INPUT_PER_INSTANCE_DATA, 1},
-        {"INSTANCE", 2, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 32, D3D11_INPUT_PER_INSTANCE_DATA, 1},
-        {"INSTANCE", 3, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 48, D3D11_INPUT_PER_INSTANCE_DATA, 1},
-        {"INSTANCE", 4, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 64, D3D11_INPUT_PER_INSTANCE_DATA, 1},
-        {"INSTANCE", 5, DXGI_FORMAT_R32G32B32_FLOAT, 1, 80, D3D11_INPUT_PER_INSTANCE_DATA, 1},
-        {"INSTANCE", 6, DXGI_FORMAT_R32G32B32_FLOAT, 1, 96, D3D11_INPUT_PER_INSTANCE_DATA, 1},
-        {"INSTANCE", 7, DXGI_FORMAT_R32G32B32_FLOAT, 1, offsetof(MeshInstanceData, thicknessScale), D3D11_INPUT_PER_INSTANCE_DATA, 1},
+        {"INSTANCE", 0, DXGI_FORMAT_R32_UINT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1},
     };
 
 inline constexpr auto kMeshSkinnedLayout = [] {

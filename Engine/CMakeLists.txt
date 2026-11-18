@@ -259,6 +259,9 @@ add_library(SatRuntime STATIC
     Renderer/src/module/AssetThumbnail.cpp
     Renderer/src/module/AssetThumbnailLoader.cpp
     Renderer/src/module/MeshPass.cpp
+    Renderer/src/module/GpuScene.cpp
+    Renderer/src/module/GpuCulling.cpp
+    Renderer/src/module/GpuViewStats.cpp
     Renderer/src/module/StaticMeshBatches.cpp
     Renderer/src/module/CascadedShadowMap.cpp
     Renderer/src/module/ShaderLibrary.cpp

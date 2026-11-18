@@ -44,7 +44,6 @@ struct EditorSession::State {
     Project& project;
     Scene& scene;
     SceneRenderData gameRenderData;
-    std::vector<MeshInstance> sceneMeshes;
     std::vector<LightInstance> sceneLights;
     std::vector<CameraFrustumInstance> sceneFrustums;
     std::vector<DebugLine> colliderLines;

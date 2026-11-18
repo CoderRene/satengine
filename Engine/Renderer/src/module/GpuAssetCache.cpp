@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <list>
+#include <limits>
 #include <numeric>
 #include <string>
 #include <unordered_map>
@@ -37,7 +39,94 @@ struct MaterialResource {
     GpuMaterial view;
 };
 using Textures = std::unordered_map<std::string, TextureResource, StringHash, std::equal_to<>>;
+// Pages never move. Returning a range coalesces adjacent free ranges without
+// allocation. Uploads and draws are ordered on the same immediate context.
+class GeometryPool {
+    struct Range { UINT first, count; bool free; };
+    struct Page {
+        ComPtr<ID3D11Buffer> buffer;
+        std::list<Range> ranges;
+    };
+public:
+    class Allocation {
+    public:
+        Allocation() = default;
+        Allocation(std::shared_ptr<Page> page, std::list<Range>::iterator range)
+            : m_page(std::move(page)), m_range(range) {}
+        Allocation(Allocation&& other) noexcept
+            : m_page(std::move(other.m_page)), m_range(other.m_range) {}
+        Allocation& operator=(Allocation&& other) noexcept {
+            if (this != &other) {
+                release();
+                m_page = std::move(other.m_page);
+                m_range = other.m_range;
+            }
+            return *this;
+        }
+        ~Allocation() { release(); }
+
+        [[nodiscard]] ID3D11Buffer* buffer() const { return m_page ? m_page->buffer.Get() : nullptr; }
+        [[nodiscard]] UINT first() const { return m_range->first; }
+
+    private:
+        void release() noexcept {
+            if (!m_page) { return; }
+            auto& ranges = m_page->ranges;
+            m_range->free = true;
+            auto next = std::next(m_range);
+            if (next != ranges.end() && next->free) {
+                m_range->count += next->count;
+                ranges.erase(next);
+            }
+            if (m_range != ranges.begin()) {
+                const auto previous = std::prev(m_range);
+                if (previous->free) {
+                    previous->count += m_range->count;
+                    ranges.erase(m_range);
+                }
+            }
+        }
+        std::shared_ptr<Page> m_page;
+        std::list<Range>::iterator m_range{};
+    };
+
+    [[nodiscard]] Allocation upload(ID3D11Device& device, ID3D11DeviceContext& context,
+        const void* data, UINT count, UINT stride, UINT binds) {
+        const auto commit = [&](const std::shared_ptr<Page>& page, std::list<Range>::iterator range) {
+            if (range->count > count) {
+                page->ranges.insert(std::next(range), {range->first + count, range->count - count, true});
+                range->count = count;
+            }
+            range->free = false;
+            const D3D11_BOX box{range->first * stride, 0, 0, (range->first + count) * stride, 1, 1};
+            context.UpdateSubresource(page->buffer.Get(), 0, &box, data, 0, 0);
+            return Allocation(page, range);
+        };
+        for (const auto& page : m_pages) {
+            const auto range = std::ranges::find_if(page->ranges,
+                [count](const Range& entry) { return entry.free && entry.count >= count; });
+            if (range != page->ranges.end()) { return commit(page, range); }
+        }
+        constexpr UINT kPageBytes = 8 * 1024 * 1024;
+        const UINT capacity = std::max(count, kPageBytes / stride);
+        auto page = std::make_shared<Page>();
+        D3D11_BUFFER_DESC desc{};
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.ByteWidth = capacity * stride;
+        desc.BindFlags = binds;
+        if (FAILED(device.CreateBuffer(&desc, nullptr, page->buffer.GetAddressOf()))) { return {}; }
+        page->ranges.push_back({0, capacity, true});
+        // An oversized mesh gets its own page, released with that mesh.
+        if (count <= kPageBytes / stride) { m_pages.push_back(page); }
+        return commit(page, page->ranges.begin());
+    }
+
+private:
+    std::vector<std::shared_ptr<Page>> m_pages;
+};
+
 struct MeshResource {
+    GeometryPool::Allocation pooledVertices, pooledIndices;
     ComPtr<ID3D11Buffer> vertices;
     ComPtr<ID3D11Buffer> skin;
     ComPtr<ID3D11Buffer> indices;
@@ -48,28 +137,56 @@ struct MeshResource {
     std::vector<MaterialResource> materials;
     bool materialsReady = false;
 };
-bool createMesh(ID3D11Device* device, const MeshData& data, MeshResource& resource, std::string& error) {
+bool createMesh(ID3D11Device* device, ID3D11DeviceContext* context, GeometryPool& vertexPool,
+    GeometryPool& indexPool, const MeshData& data, MeshResource& resource, std::string& error) {
+    std::vector<std::uint32_t> combined;
+    if (!data.nodeIndices.empty()) {
+        combined.reserve(data.indices.size() + data.nodeIndices.size());
+        combined.insert(combined.end(), data.indices.begin(), data.indices.end());
+        combined.insert(combined.end(), data.nodeIndices.begin(), data.nodeIndices.end());
+    }
+    const auto& indices = combined.empty() ? data.indices : combined;
+    constexpr auto kMaxBufferBytes = std::numeric_limits<UINT>::max();
+    if (data.vertices.empty() || indices.empty() || data.vertices.size() > kMaxBufferBytes / sizeof(MeshVertex) ||
+        indices.size() > kMaxBufferBytes / sizeof(std::uint32_t)) {
+        error = "Invalid GPU mesh buffer size";
+        return false;
+    }
+    const auto vertexCount = static_cast<UINT>(data.vertices.size());
+    const auto indexCount = static_cast<UINT>(indices.size());
+    if (context && data.skinVertices.empty()) {
+        resource.pooledVertices = vertexPool.upload(*device, *context, data.vertices.data(), vertexCount,
+            sizeof(MeshVertex), D3D11_BIND_VERTEX_BUFFER);
+        if (resource.pooledVertices.buffer()) {
+            resource.pooledIndices = indexPool.upload(*device, *context, indices.data(), indexCount,
+                sizeof(std::uint32_t), D3D11_BIND_INDEX_BUFFER);
+        }
+    }
     D3D11_BUFFER_DESC desc{};
     desc.Usage = D3D11_USAGE_IMMUTABLE;
-    desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    desc.ByteWidth = static_cast<UINT>(data.vertices.size() * sizeof(MeshVertex));
     D3D11_SUBRESOURCE_DATA initial{};
-    initial.pSysMem = data.vertices.data();
-    HRESULT hr = device->CreateBuffer(&desc, &initial, resource.vertices.GetAddressOf());
-    if (SUCCEEDED(hr)) {
-        std::vector<std::uint32_t> combined;
-        if (!data.nodeIndices.empty()) {
-            combined.reserve(data.indices.size() + data.nodeIndices.size());
-            combined.insert(combined.end(), data.indices.begin(), data.indices.end());
-            combined.insert(combined.end(), data.nodeIndices.begin(), data.nodeIndices.end());
+    auto* pooledIndices = resource.pooledIndices.buffer();
+    if (pooledIndices) {
+        resource.view.vertexBuffer = resource.pooledVertices.buffer();
+        resource.view.indexBuffer = pooledIndices;
+        resource.view.baseVertex = static_cast<INT>(resource.pooledVertices.first());
+        resource.view.firstIndex = resource.pooledIndices.first();
+    } else {
+        resource.pooledVertices = {};
+        desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        desc.ByteWidth = vertexCount * sizeof(MeshVertex);
+        initial.pSysMem = data.vertices.data();
+        HRESULT hr = device->CreateBuffer(&desc, &initial, resource.vertices.GetAddressOf());
+        if (SUCCEEDED(hr)) {
+            desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+            desc.ByteWidth = indexCount * sizeof(std::uint32_t);
+            initial.pSysMem = indices.data();
+            hr = device->CreateBuffer(&desc, &initial, resource.indices.GetAddressOf());
         }
-        const auto& indices = combined.empty() ? data.indices : combined;
-        desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-        desc.ByteWidth = static_cast<UINT>(indices.size() * sizeof(std::uint32_t));
-        initial.pSysMem = indices.data();
-        hr = device->CreateBuffer(&desc, &initial, resource.indices.GetAddressOf());
+        if (FAILED(hr)) { error = "Cannot create GPU mesh buffers (HRESULT " + std::to_string(hr) + ")"; return false; }
+        resource.view.vertexBuffer = resource.vertices.Get();
+        resource.view.indexBuffer = resource.indices.Get();
     }
-    if (FAILED(hr)) { error = "Cannot create GPU mesh buffers (HRESULT " + std::to_string(hr) + ")"; return false; }
     if (!data.skinVertices.empty()) {
         if (data.skinVertices.size() != data.vertices.size()) { error = "Skin vertex count mismatch"; return false; }
         desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
@@ -77,11 +194,11 @@ bool createMesh(ID3D11Device* device, const MeshData& data, MeshResource& resour
         initial.pSysMem = data.skinVertices.data();
         if (FAILED(device->CreateBuffer(&desc, &initial, resource.skin.GetAddressOf()))) { error = "Cannot create skin vertex buffer"; return false; }
         resource.view.skinBuffer = resource.skin.Get();
-        resource.view.jointBounds = data.jointBounds;
+        for (std::size_t joint = 0; joint < std::min(data.restPalette.size(), data.jointBounds.size()); ++joint) {
+            includeSkinnedBounds(resource.view.restBounds, data.jointBounds[joint], data.restPalette[joint]);
+        }
         resource.view.restPalette = data.restPalette;
     }
-    resource.view.vertexBuffer = resource.vertices.Get();
-    resource.view.indexBuffer = resource.indices.Get();
     resource.view.indexCount = static_cast<UINT>(data.indices.size());
     resource.view.vertexCount = static_cast<UINT>(data.vertices.size());
     resource.view.vertexStride = static_cast<UINT>(sizeof(MeshVertex));
@@ -181,6 +298,7 @@ bool createTexture(ID3D11Device* device, const TextureData& data, TextureResourc
 }
 struct GpuAssetCache::Impl {
     AssetLibrary library;
+    GeometryPool vertexPool, indexPool;
     std::unordered_map<std::string, MeshResource, StringHash, std::equal_to<>> meshes;
     Textures textures;
     std::array<ComPtr<ID3D11SamplerState>, 6> samplers;
@@ -246,9 +364,9 @@ struct GpuAssetCache::Impl {
         }
         return sampler.Get();
     }
-    bool createMeshAsset(ID3D11Device* device, const MeshData& data, MeshResource& resource,
+    bool createMeshAsset(ID3D11Device* device, ID3D11DeviceContext* context, const MeshData& data, MeshResource& resource,
         std::string& error, std::vector<std::string>& diagnostics) {
-        if (!createMesh(device, data, resource, error)) { return false; }
+        if (!createMesh(device, context, vertexPool, indexPool, data, resource, error)) { return false; }
         resource.sourceMaterials = data.materials;
         resource.dependencies = data.dependencies;
         if (!data.materialWarning.empty()) { diagnostics.push_back(data.materialWarning); }
@@ -277,7 +395,7 @@ struct GpuAssetCache::Impl {
     void reportMeshDiagnostics(std::string_view path, const std::vector<std::string>& diagnostics) {
         for (const auto& diagnostic : diagnostics) { errors.push_back(std::string(path) + ": " + diagnostic); }
     }
-    void loadMesh(ID3D11Device* device, std::string_view path) {
+    void loadMesh(ID3D11Device* device, ID3D11DeviceContext* context, std::string_view path) {
         if (meshes.contains(path) || !hasSpace()) { return; }
         auto& destination = meshes.try_emplace(std::string(path)).first->second;
         const auto* data = library.mesh(path);
@@ -285,7 +403,7 @@ struct GpuAssetCache::Impl {
         MeshResource candidate;
         std::string error;
         std::vector<std::string> diagnostics;
-        if (!createMeshAsset(device, *data, candidate, error, diagnostics)) {
+        if (!createMeshAsset(device, context, *data, candidate, error, diagnostics)) {
             errors.push_back(std::string(path) + ": " + error);
             return;
         }
@@ -464,7 +582,9 @@ GpuAssetCache::~GpuAssetCache() = default;
 void GpuAssetCache::setReader(AssetReader reader) {
     m_impl->materials.clear(); m_impl->defaults = {};
     m_impl->defaultsReady = m_impl->defaultsFailed = false;
-    m_impl->meshes.clear(); m_impl->textures.clear(); m_impl->samplers = {};
+    m_impl->meshes.clear();
+    m_impl->vertexPool = {}; m_impl->indexPool = {};
+    m_impl->textures.clear(); m_impl->samplers = {};
     m_impl->materialSamplers = {};
     m_impl->errors.clear(); m_impl->reportedCpuErrors = 0; m_impl->limitReported = false;
     m_impl->library.setReader(std::move(reader));
@@ -473,29 +593,34 @@ void GpuAssetCache::releaseDecodedAssets() {
     m_impl->library.setReader({});
     m_impl->reportedCpuErrors = 0;
 }
-void GpuAssetCache::prepare(ID3D11Device* device, const SceneDrawList& drawList) {
-    if (device == nullptr || drawList.meshes == nullptr) { return; }
+void GpuAssetCache::prepare(ID3D11Device* device, const SceneDrawList& drawList, ID3D11DeviceContext* context) {
+    if (device == nullptr) { return; }
     if (!drawList.environmentPath.empty()) {
         m_impl->loadTexture(device, drawList.environmentPath);
         const auto found = m_impl->textures.find(drawList.environmentPath);
         if (found != m_impl->textures.end()) { (void)m_impl->colorView(device, found->second); }
     }
     m_impl->loadMaterial(device, {});
-    std::string_view previousMesh;
-    std::string_view previousMaterial;
-    for (int i = 0; i < drawList.meshCount; ++i) {
-        const auto& instance = drawList.meshes[i];
-        if (instance.meshPath == previousMesh && instance.materialPath == previousMaterial) { continue; }
-        previousMesh = instance.meshPath;
-        previousMaterial = instance.materialPath;
-        if (!instance.meshPath.empty()) {
-            m_impl->loadMesh(device, instance.meshPath);
-            if (instance.materialPath.empty()) {
-                const auto found = m_impl->meshes.find(instance.meshPath);
-                if (found != m_impl->meshes.end()) { m_impl->loadMeshMaterials(device, instance.meshPath, found->second); }
+    std::unordered_set<std::string_view> meshes, embedded, materials;
+    const auto prepare = [&](std::string_view mesh, std::string_view material) {
+        if (!mesh.empty()) {
+            if (meshes.insert(mesh).second) { m_impl->loadMesh(device, context, mesh); }
+            if (material.empty() && embedded.insert(mesh).second) {
+                const auto found = m_impl->meshes.find(mesh);
+                if (found != m_impl->meshes.end()) { m_impl->loadMeshMaterials(device, mesh, found->second); }
             }
         }
-        if (!instance.materialPath.empty()) { m_impl->loadMaterial(device, instance.materialPath); }
+        if (!material.empty() && materials.insert(material).second) { m_impl->loadMaterial(device, material); }
+    };
+    if (drawList.scene) {
+        for (const auto& entity : drawList.scene->entities()) {
+            if (entity.hasMesh) { prepare(entity.mesh.meshPath, entity.mesh.materialPath); }
+        }
+    } else if (drawList.meshes) {
+        for (int i = 0; i < drawList.meshCount; ++i) {
+            const auto& mesh = drawList.meshes[i];
+            prepare(mesh.meshPath, mesh.materialPath);
+        }
     }
 }
 ID3D11ShaderResourceView* GpuAssetCache::environment(std::string_view path) const {
@@ -539,7 +664,9 @@ bool GpuAssetCache::publishPrepared(ID3D11Device* device, PreparedAssetImport& p
     TextureResource texture;
     std::vector<std::string> diagnostics;
     if (prepared.isMesh) {
-        if (!m_impl->createMeshAsset(device, prepared.mesh, mesh, error, diagnostics)) { return cancel(); }
+        ComPtr<ID3D11DeviceContext> context;
+        device->GetImmediateContext(context.GetAddressOf());
+        if (!m_impl->createMeshAsset(device, context.Get(), prepared.mesh, mesh, error, diagnostics)) { return cancel(); }
         m_impl->meshes.try_emplace(prepared.path);
     } else {
         if (!createTexture(device, prepared.texture, texture, error) || !m_impl->ensureSampler(device, texture.sampler, error)) { return cancel(); }

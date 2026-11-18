@@ -29,6 +29,7 @@ public:
         GameUi* ui = nullptr, const Input* input = nullptr);
 
     // Append the overlay after the game target is rendered, before ImGui::Render().
+    [[nodiscard]] bool gameStatsVisible() const;
     void drawGameStats();
     void resetInteraction();
     [[nodiscard]] bool showColliders() const;

@@ -196,6 +196,28 @@ Entity& Scene::createEntity(std::string name) {
     return insertEntity(std::move(entity));
 }
 
+EntityId Scene::duplicateEntity(EntityId sourceId, EntityId parentId, std::string name) {
+    const Entity* source = entityById(sourceId);
+    const auto parent = entityIndex(parentId);
+    if (!source || (parentId != kInvalidEntityId && !parent) || entityCount() >= kMaxSceneEntities) {
+        return kInvalidEntityId;
+    }
+
+    Entity copy = *source;
+    if (!name.empty()) {
+        copy.name = std::move(name);
+    }
+    copy.camera.isMain = false;
+    copy.m_id = nextEntityId();
+    copy.m_parentId = parentId;
+    copy.m_childCount = 0;
+    const EntityId id = insertEntity(std::move(copy)).id();
+    if (parent) {
+        ++m_entities[*parent].m_childCount;
+    }
+    return id;
+}
+
 void Scene::addEntityCopy(const Entity& entity) {
     Entity copy = entity;
     copy.m_parentId = kInvalidEntityId;

@@ -1482,4 +1482,24 @@ bool decodeGltfMaterials(std::string_view bytes, std::string_view path, const As
     embedded = std::move(images);
     return true;
 }
+
+void includeSkinnedBounds(AnimationBounds& bounds, const AnimationBounds& bind, const Mat4& palette) {
+    if (!bind.valid) { return; }
+    const Vec3 center = transformPoint(palette, (bind.minimum + bind.maximum) * 0.5f);
+    const Vec3 radius = (bind.maximum - bind.minimum) * 0.5f;
+    const auto& m = palette.m;
+    const Vec3 extents{
+        std::abs(m[0]) * radius.x + std::abs(m[4]) * radius.y + std::abs(m[8]) * radius.z,
+        std::abs(m[1]) * radius.x + std::abs(m[5]) * radius.y + std::abs(m[9]) * radius.z,
+        std::abs(m[2]) * radius.x + std::abs(m[6]) * radius.y + std::abs(m[10]) * radius.z};
+    const Vec3 minimum = center - extents, maximum = center + extents;
+    if (!bounds.valid) {
+        bounds = {minimum, maximum, true};
+        return;
+    }
+    bounds.minimum = {std::min(bounds.minimum.x, minimum.x), std::min(bounds.minimum.y, minimum.y),
+        std::min(bounds.minimum.z, minimum.z)};
+    bounds.maximum = {std::max(bounds.maximum.x, maximum.x), std::max(bounds.maximum.y, maximum.y),
+        std::max(bounds.maximum.z, maximum.z)};
+}
 } // namespace sat

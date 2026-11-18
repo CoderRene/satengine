@@ -732,6 +732,8 @@ void ViewportPanel::onImGuiRender(int& selectedIndex, const Scene& gameScene, bo
     m_impl->drawGamePanel(gameScene, focusGameView, ui, input);
 }
 
+bool ViewportPanel::gameStatsVisible() const { return m_impl->m_showGameStats; }
+
 void ViewportPanel::drawGameStats() {
     auto& panel = *m_impl;
     auto* draw = std::exchange(panel.m_gameStatsDrawList, nullptr);
@@ -745,11 +747,20 @@ void ViewportPanel::drawGameStats() {
     if (stats.gpuFrameTimeMs) {
         std::snprintf(gpuTime, sizeof(gpuTime), "%.2f ms", *stats.gpuFrameTimeMs);
     }
-    char text[256];
+    const auto timing = [](std::optional<double> value) {
+        char result[24] = "N/A";
+        if (value) { std::snprintf(result, sizeof(result), "%.2f ms", *value); }
+        return std::string(result);
+    };
+    char text[512];
     std::snprintf(text, sizeof(text),
         "Global Frametime  %.2f ms\nGPU Frametime  %s\n"
+        "CPU Scene Sync  %.2f ms\nCPU Mesh Submission  %.2f ms\n"
+        "GPU Shadows  %s\nGPU Opaque  %s\nGPU Transmission  %s\nGPU Transparent  %s\nGPU Post  %s\n"
         "Draw Calls  %" PRIu64 "\nSetPass Calls  %" PRIu64 "\nTriangles  %" PRIu64 "\nVertices  %" PRIu64,
         static_cast<double>(ImGui::GetIO().DeltaTime) * 1000.0, gpuTime,
+        stats.cpuSceneSyncMs, stats.cpuMeshSubmitMs, timing(stats.gpuShadowMs).c_str(), timing(stats.gpuOpaqueMs).c_str(),
+        timing(stats.gpuTransmissionMs).c_str(), timing(stats.gpuTransparentMs).c_str(), timing(stats.gpuPostMs).c_str(),
         stats.drawCalls, stats.setPassCalls, stats.triangles, stats.vertices);
     const ImVec2 size = ImGui::CalcTextSize(text);
     constexpr float kPadding = 8.0f;

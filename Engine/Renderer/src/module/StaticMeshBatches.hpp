@@ -5,10 +5,13 @@
 
 #include <wrl/client.h>
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <map>
+#include <optional>
+#include <set>
+#include <tuple>
 #include <vector>
 
 namespace sat {
@@ -36,27 +39,33 @@ public:
         const GpuMaterial* material = nullptr;
     };
 
-    void update(ID3D11DeviceContext& context, GpuAssetCache& assets, std::uint64_t assetRevision,
-        std::span<const StaticMeshSource> sources, DVec3 renderOrigin, std::span<unsigned char> combined);
-    [[nodiscard]] const std::vector<Batch>& batches() const { return m_batches; }
+    // Returns true when the published merged geometry or membership changed.
+    [[nodiscard]] bool update(ID3D11DeviceContext& context, GpuAssetCache& assets,
+        std::span<const StaticMeshSource> sources, std::span<const unsigned> dirtySources, bool budgetAvailable,
+        std::span<unsigned char> combined);
+    [[nodiscard]] const std::vector<const Batch*>& batches() const { return m_batches; }
+    [[nodiscard]] bool pending() const { return m_pending; }
 
 private:
-    struct SourceKey {
-        const GpuMesh* mesh;
-        const GpuMaterial* material;
-        const GpuMeshNode* node;
-        UINT firstIndex;
-        UINT indexCount;
-        std::array<float, 12> basis;
-        DVec3 position;
-
-        bool operator==(const SourceKey&) const = default;
+    using CellKey = std::tuple<std::uintptr_t, double, double, double>;
+    struct Cell {
+        const GpuMaterial* material = nullptr;
+        DVec3 origin;
+        std::set<std::size_t> sources;
+        Batch batch;
+        bool dirty = true;
     };
-
-    std::vector<SourceKey> m_keys;
-    std::vector<std::size_t> m_combinedSources;
-    std::vector<Batch> m_batches;
-    std::uint64_t m_assetRevision = 0;
+    struct RemappedVertex {
+        std::size_t sourceTag = 0;
+        std::uint32_t index = 0;
+    };
+    std::vector<MeshVertex> m_vertices;
+    std::vector<std::uint32_t> m_indices;
+    std::vector<RemappedVertex> m_remap;
+    std::map<CellKey, Cell> m_cells; // Stable batch addresses until the cell is retired.
+    std::vector<std::optional<CellKey>> m_locations;
+    std::vector<const Batch*> m_batches;
+    bool m_pending = false;
 };
 
 } // namespace sat

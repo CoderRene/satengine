@@ -21,7 +21,8 @@ Vec3 ambientRadiance(const LightingSettings& settings) {
 
 void SceneRenderData::update(const Scene& scene, int width, int height, const AnimationSystem* animation) {
     m_camera = GameViewCamera{};
-    m_meshes.clear();
+    m_scene = nullptr;
+    m_animation = nullptr;
     m_lights.clear();
     m_ambient = ambientRadiance(scene.lightingSettings);
     m_environmentPath = scene.lightingSettings.environmentPath;
@@ -41,6 +42,8 @@ void SceneRenderData::update(const Scene& scene, int width, int height, const An
     if (cameraEntity == nullptr || !cameraEntity->hasCamera) {
         return;
     }
+    m_scene = &scene;
+    m_animation = animation;
     m_hasCamera = true;
     const auto& camera = cameraEntity->camera;
     std::memcpy(m_camera.clearColor, camera.clearColor, sizeof(m_camera.clearColor));
@@ -53,28 +56,7 @@ void SceneRenderData::update(const Scene& scene, int width, int height, const An
     std::memcpy(m_camera.projection, projection.m, sizeof(m_camera.projection));
     for (const Entity& entity : scene.entities()) {
         if (entity.hasLight) { m_lights.push_back(makeLightInstance(entity, m_camera.renderOrigin)); }
-        if (!entity.hasMesh) {
-            continue;
-        }
-        MeshInstance instance{};
-        instance.world = matrixFromTransform(entity.transform, m_camera.renderOrigin);
-        instance.meshPath = entity.mesh.meshPath;
-        instance.materialPath = entity.mesh.materialPath;
-        instance.worldPosition = entity.transform.position;
-        instance.combineStatic = entity.mesh.combineStatic;
-        instance.meshNode = entity.mesh.meshNode;
-        const auto palette = animation ? animation->meshPalette(entity) : std::span<const Mat4>{};
-        if (!palette.empty()) {
-            instance.palette = palette.data();
-            instance.paletteCount = static_cast<std::uint32_t>(palette.size());
-            instance.combineStatic = false;
-        }
-        switch (entity.mesh.primitive) {
-        case MeshComponent::Primitive::Cube:
-            instance.primitive = MeshPrimitive::Cube;
-            break;
-        }
-        m_meshes.push_back(instance);
+
     }
 }
 
@@ -91,8 +73,8 @@ SceneDrawList SceneRenderData::drawList() const {
     draw.shadowSplitLambda = m_shadowSplitLambda;
     draw.bloom = m_bloom;
     draw.ambient = m_ambient;
-    draw.meshes = m_meshes.empty() ? nullptr : m_meshes.data();
-    draw.meshCount = static_cast<int>(m_meshes.size());
+    draw.scene = m_scene;
+    draw.animation = m_animation;
     return draw;
 }
 

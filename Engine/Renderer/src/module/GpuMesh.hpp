@@ -53,10 +53,12 @@ inline Mat4 meshWorld(const Mat4& world, const GpuMeshNode* node) {
 struct GpuMesh {
     ID3D11Buffer* vertexBuffer = nullptr;
     ID3D11Buffer* skinBuffer = nullptr;
-    std::vector<AnimationBounds> jointBounds;
+    AnimationBounds restBounds;
     std::vector<Mat4> restPalette;
     ID3D11Buffer* indexBuffer = nullptr;
     UINT indexCount = 0;
+    UINT firstIndex = 0;
+    INT baseVertex = 0;
     UINT vertexCount = 0;
     UINT vertexStride = 0;
     DXGI_FORMAT indexFormat = DXGI_FORMAT_R16_UINT;
