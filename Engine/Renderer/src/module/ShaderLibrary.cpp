@@ -103,7 +103,7 @@ ShaderProgram ShaderLibrary::program(ShaderId id) const {
 
 bool ShaderLibrary::replace(ID3D11Device* device, ShaderId id, std::string_view vs, std::string_view ps) {
     constexpr std::span<const D3D11_INPUT_ELEMENT_DESC> kLayouts[]{
-        kMeshLayout, kSelectionOutlineLayout, kCameraFrustumLayout, kTransformGizmoLayout, kGridLayout, {}, {}, kUiLayout, {}, kUiLayout, kMeshSkinnedLayout, kSelectionOutlineSkinnedLayout
+        kMeshLayout, kSelectionOutlineLayout, kCameraFrustumLayout, kTransformGizmoLayout, kGridLayout, {}, {}, kUiLayout, {}, kUiLayout, kMeshSkinnedLayout, {}
     };
     static_assert(std::size(kLayouts) == kShaderNames.size());
     const auto index = static_cast<std::size_t>(id);

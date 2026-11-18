@@ -35,6 +35,8 @@ namespace sat {
 
 namespace {
 
+constexpr UINT kSkinnedVertexSlot = 14;
+
 constexpr UINT kOpaqueSceneSlot = 12;
 
 
@@ -180,15 +182,14 @@ struct MeshPass::Impl {
 };
 
 bool MeshPass::bindSkin(ID3D11DeviceContext* context, EntityId id, const GpuMesh& mesh) const {
-    if (!m_impl || !m_impl->currentScene || !mesh.skinBuffer) { return false; }
-    auto* palette = m_impl->currentScene->palettesView();
-    if (!palette) { return false; }
-    const SkinCb constants{m_impl->currentScene->paletteOffset(id)};
+    if (!m_impl || !m_impl->currentScene || !mesh.skinVertices) { return false; }
+    auto* vertices = m_impl->currentScene->skinnedVerticesView();
+    const auto base = m_impl->currentScene->skinnedVertexBase(id);
+    if (!vertices || !base) { return false; }
+    const SkinCb constants{*base};
     context->UpdateSubresource(m_impl->skinCb.Get(), 0, nullptr, &constants, 0, 0);
     context->VSSetConstantBuffers(5, 1, m_impl->skinCb.GetAddressOf());
-    context->VSSetShaderResources(8, 1, &palette);
-    const UINT stride = sizeof(MeshSkinVertex), offset = 0;
-    context->IASetVertexBuffers(2, 1, &mesh.skinBuffer, &stride, &offset);
+    context->VSSetShaderResources(kSkinnedVertexSlot, 1, &vertices);
     return true;
 }
 
@@ -417,7 +418,7 @@ void MeshPass::draw(
     Microsoft::WRL::ComPtr<ID3D11Device> device;
     context->GetDevice(device.GetAddressOf());
     ID3D11ShaderResourceView* nullView = nullptr;
-    context->VSSetShaderResources(8, 1, &nullView);
+    context->VSSetShaderResources(kSkinnedVertexSlot, 1, &nullView);
     context->VSSetShaderResources(13, 1, &nullView);
     if (!scene.sync(*context, shaders, m_assets, m_impl->cubeMesh, drawList,
             m_assetRevision, renderOrigin, prepareAssets, frameNumber) ||
@@ -587,12 +588,12 @@ void MeshPass::draw(
     auto* boundVertex = program.vertex;
     auto* boundLayout = program.layout;
     auto* instances = scene.instancesView();
-    auto* palettes = scene.palettesView();
+    auto* skinnedVertices = scene.skinnedVerticesView();
     context->VSSetShaderResources(13, 1, &instances);
-    context->VSSetShaderResources(8, 1, &palettes);
+    context->VSSetShaderResources(kSkinnedVertexSlot, 1, &skinnedVertices);
     const auto skinned = shaders.program(ShaderId::MeshSkinned);
     const auto bindDraw = [&](const GpuScene::DrawRange& draw) {
-        const auto vertexProgram = draw.mesh->skinBuffer ? skinned : program;
+        const auto vertexProgram = draw.mesh->skinVertices ? skinned : program;
         if (vertexProgram.vertex != boundVertex) {
             context->VSSetShader(vertexProgram.vertex, nullptr, 0);
             boundVertex = vertexProgram.vertex;
@@ -618,10 +619,6 @@ void MeshPass::draw(
             }
             if (!boundMesh || mesh->indexBuffer != boundMesh->indexBuffer || mesh->indexFormat != boundMesh->indexFormat) {
                 context->IASetIndexBuffer(mesh->indexBuffer, mesh->indexFormat, 0);
-            }
-            if (mesh->skinBuffer && (!boundMesh || mesh->skinBuffer != boundMesh->skinBuffer)) {
-                const UINT stride = sizeof(MeshSkinVertex);
-                context->IASetVertexBuffers(2, 1, &mesh->skinBuffer, &stride, &offset);
             }
             boundMesh = mesh;
         }

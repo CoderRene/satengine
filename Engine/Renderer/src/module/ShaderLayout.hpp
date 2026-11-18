@@ -64,7 +64,7 @@ struct alignas(16) GpuInstance {
     float basis[3][4];
     float normal[3][4];
     float translationHigh[3];
-    unsigned paletteOffset;
+    unsigned paletteOffset; // Skinned vertex base for skinned instances.
     float translationLow[3];
     unsigned flags;
     float bounds[4]; // Center relative to split translation, then radius.
@@ -91,7 +91,14 @@ struct GpuBatch {
 };
 static_assert(sizeof(GpuDrawItem) == 16 && sizeof(GpuBatch) == 20 && offsetof(GpuBatch, instanceCount) == 4);
 
-struct alignas(16) SkinCb { unsigned paletteOffset = 0; unsigned padding[3]{}; };
+struct alignas(16) SkinCb { unsigned vertexBase = 0; unsigned padding[3]{}; };
+struct alignas(16) SkinDispatchCb { unsigned vertexStart, vertexCount, paletteOffset, outputBase; };
+struct SkinnedVertex { float position[3], normal[3], tangent[4]; };
+static_assert(sizeof(SkinDispatchCb) == 16 && sizeof(SkinnedVertex) == 40);
+// Raw buffer layout consumed by SkinVertices.slang.
+static_assert(sizeof(MeshVertex) == 72 && offsetof(MeshVertex, x) == 0 &&
+    offsetof(MeshVertex, nx) == 12 && offsetof(MeshVertex, tx) == 32);
+static_assert(offsetof(MeshSkinVertex, joints) == 0 && offsetof(MeshSkinVertex, weights) == 4);
 
 struct MaterialUvCb {
     float matrix[4]; // UV transform rows.
@@ -207,18 +214,10 @@ inline constexpr D3D11_INPUT_ELEMENT_DESC kMeshLayout[] = {
         {"INSTANCE", 0, DXGI_FORMAT_R32_UINT, 1, 0, D3D11_INPUT_PER_INSTANCE_DATA, 1},
     };
 
-inline constexpr auto kMeshSkinnedLayout = [] {
-    std::array<D3D11_INPUT_ELEMENT_DESC, std::size(kMeshLayout) + 2> result{};
-    std::copy(std::begin(kMeshLayout), std::end(kMeshLayout), result.begin());
-    result[std::size(kMeshLayout)] = {"BLENDINDICES", 0, DXGI_FORMAT_R8G8B8A8_UINT, 2, 0, D3D11_INPUT_PER_VERTEX_DATA, 0};
-    result[std::size(kMeshLayout) + 1] = {"BLENDWEIGHT", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 2, 4, D3D11_INPUT_PER_VERTEX_DATA, 0};
-    return result;
-}();
-inline constexpr D3D11_INPUT_ELEMENT_DESC kSelectionOutlineSkinnedLayout[] = {
-    {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-    {"BLENDINDICES", 0, DXGI_FORMAT_R8G8B8A8_UINT, 2, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
-    {"BLENDWEIGHT", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 2, 4, D3D11_INPUT_PER_VERTEX_DATA, 0},
+inline constexpr D3D11_INPUT_ELEMENT_DESC kMeshSkinnedLayout[] = {
+    kMeshLayout[2], kMeshLayout[4], kMeshLayout[5], kMeshLayout[6],
 };
+
 inline constexpr D3D11_INPUT_ELEMENT_DESC kSelectionOutlineLayout[] = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
     };

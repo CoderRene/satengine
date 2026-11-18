@@ -1,11 +1,13 @@
 #pragma once
 
+#include "AnimationSystem.hpp"
 #include "GpuAssetCache.hpp"
 #include "ShaderLayout.hpp"
 #include "StaticMeshBatches.hpp"
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -45,10 +47,10 @@ public:
     [[nodiscard]] unsigned itemCount() const { return static_cast<unsigned>(m_items.size()); }
     [[nodiscard]] ID3D11ShaderResourceView* instancesView() const { return m_instanceBuffer.view.Get(); }
     [[nodiscard]] ID3D11ShaderResourceView* itemsView() const { return m_itemBuffer.view.Get(); }
-    [[nodiscard]] ID3D11ShaderResourceView* palettesView() const { return m_paletteBuffer.view.Get(); }
+    [[nodiscard]] ID3D11ShaderResourceView* skinnedVerticesView() const { return m_skinnedVertices.view.Get(); }
     [[nodiscard]] ID3D11Buffer* argsTemplate() const { return m_args.Get(); }
     [[nodiscard]] ID3D11PixelShader* customPixel(const GpuMaterial* material) const;
-    [[nodiscard]] unsigned paletteOffset(EntityId id) const;
+    [[nodiscard]] std::optional<unsigned> skinnedVertexBase(EntityId id) const;
     [[nodiscard]] std::uint64_t observeRevision(const Scene& scene);
     void retryNextFrame() { m_allDirty = true; m_observedDirty = false; }
 
@@ -59,7 +61,7 @@ private:
         Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> output;
         std::size_t capacity = 0;
         [[nodiscard]] bool ensure(ID3D11Device& device, std::size_t count, UINT stride, bool writable = false);
-        void upload(ID3D11DeviceContext& context, const void* data, UINT bytes) const;
+        void upload(ID3D11DeviceContext& context, const void* data, UINT bytes, UINT offset = 0) const;
     };
     struct Source {
         std::size_t entityIndex;
@@ -76,7 +78,10 @@ private:
         std::size_t sourceIndex;
         unsigned firstInstance, instanceCount = 0;
         unsigned firstStaticSource = 0, staticSourceCount = 0;
-        unsigned paletteOffset = 0;
+        unsigned paletteOffset = 0, skinnedVertexBase = 0;
+        AnimationInstanceHandle animationHandle;
+        std::uint64_t skinnedPoseRevision = 0;
+        bool animated = false, boundsDirty = false;
         AnimationBounds animatedBounds{};
         bool initialized = false;
     };
@@ -85,8 +90,9 @@ private:
     void writeInstance(unsigned index, const GpuInstance& data);
     [[nodiscard]] bool uploadTable(ID3D11DeviceContext& context, ID3D11Device& device);
     [[nodiscard]] bool uploadInstances(ID3D11DeviceContext& context, ID3D11Device& device, ShaderLibrary& shaders);
-    [[nodiscard]] bool uploadPalettes(ID3D11DeviceContext& context, ID3D11Device& device,
+    [[nodiscard]] bool skinVertices(ID3D11DeviceContext& context, ID3D11Device& device, ShaderLibrary& shaders,
         const SceneDrawList& list);
+    [[nodiscard]] bool resolvePalettes(const SceneDrawList& list, std::size_t animatedCount);
 
     const Scene* m_scene = nullptr;
     const Entity* m_entities = nullptr;
@@ -108,7 +114,9 @@ private:
     std::vector<unsigned> m_dirtyStaticSources;
     std::vector<unsigned char> m_combined;
     const AnimationSystem* m_animation = nullptr;
-    std::uint64_t m_poseRevision = 0;
+    std::uint64_t m_poseRevision = 0, m_layoutRevision = 0, m_skinShaderRevision = 0;
+    std::size_t m_skinnedVertexCount = 0;
+    bool m_skinLayoutDirty = true, m_skinBindingsDirty = true;
     std::uint64_t m_revision = 0;
     std::uint64_t m_staticFrame = ~std::uint64_t{};
     bool m_observedDirty = false;
@@ -119,12 +127,10 @@ private:
     std::vector<GpuDrawItem> m_items;
     ItemRange m_opaqueItems, m_transmissionItems;
     std::vector<DirtyGpuInstance> m_dirtyInstances;
-    std::vector<Mat4> m_palettes;
-    std::vector<Mat4> m_uploadedPalettes;
-    std::unordered_map<const Mat4*, unsigned> m_paletteOffsets;
+    std::vector<Mat4> m_fallbackPalettes;
     std::unordered_map<const GpuMaterial*, ID3D11PixelShader*> m_pixels;
-    Structured m_instanceBuffer, m_itemBuffer, m_paletteBuffer;
-    Microsoft::WRL::ComPtr<ID3D11Buffer> m_args, m_scatterCb, m_scatterBuffer;
+    Structured m_instanceBuffer, m_itemBuffer, m_paletteBuffer, m_skinnedVertices;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_args, m_scatterCb, m_scatterBuffer, m_skinDispatchCb;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_scatterView;
     std::size_t m_scatterCapacity = 0;
     bool m_scatterUnavailable = false;

@@ -5,21 +5,75 @@
 #include "AssetImporter.hpp"
 #include "module/AnimationSampler.hpp"
 #include "module/AnimationStateMachine.hpp"
+#include "module/WorkerPool.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <limits>
-#include <numeric>
+#include <functional>
 #include <iostream>
-#include <unordered_set>
+#include <limits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace sat {
 namespace {
 bool isPartOfRig(const Entity& entity, std::string_view path) {
     return !entity.hasMesh || (entity.mesh.meshNode != 0 && entity.mesh.meshPath == path);
+}
+
+bool isAffine(const Mat4& matrix) {
+    return matrix.m[3] == 0 && matrix.m[7] == 0 && matrix.m[11] == 0;
+}
+
+Mat4 affineMultiply(const Mat4& a, const Mat4& b) {
+    Mat4 out;
+    for (int column = 0; column < 16; column += 4) {
+        for (int row = 0; row < 3; ++row) {
+            out.m[column + row] = a.m[row] * b.m[column] + a.m[4 + row] * b.m[column + 1] +
+                a.m[8 + row] * b.m[column + 2];
+        }
+    }
+    for (int row = 0; row < 3; ++row) { out.m[12 + row] += a.m[12 + row] * b.m[15]; }
+    // Inverting a float affine matrix can leave its homogeneous scale close to one.
+    out.m[15] = a.m[15] * b.m[15];
+    return out;
+}
+
+struct AnimationFrustum {
+    DVec3 eye;
+    Vec3 right, up, forward;
+    float verticalSlope, horizontalSlope, verticalRadius, horizontalRadius, nearClip, farClip;
+};
+
+AnimationFrustum animationFrustum(const Entity& camera) {
+    // The runtime camera does not carry the viewport dimensions. Allow up to 32:9.
+    constexpr float kMaxAspect = 32.0f / 9.0f;
+    const auto view = viewFromEuler({}, camera.transform.rotation);
+    const float vertical = std::tan(camera.camera.fieldOfView * kDegToRad * 0.5f);
+    const float horizontal = vertical * kMaxAspect;
+    return {camera.transform.position, {view.m[0], view.m[4], view.m[8]}, {view.m[1], view.m[5], view.m[9]},
+        {view.m[2], view.m[6], view.m[10]}, vertical, horizontal, std::sqrt(1 + vertical * vertical),
+        std::sqrt(1 + horizontal * horizontal), camera.camera.nearClip, camera.camera.farClip};
+}
+
+unsigned evaluationInterval(const AnimationFrustum& camera, const Transform& transform, Vec3 localCenter, float localRadius) {
+    const Vec3 scaledCenter{localCenter.x * transform.scale.x, localCenter.y * transform.scale.y,
+        localCenter.z * transform.scale.z};
+    const auto rotatedCenter = transform.rotation == Vec3{} ? scaledCenter :
+        transformPoint(rotationMatrixEuler(transform.rotation), scaledCenter);
+    const auto center = toVec3(transform.position - camera.eye) + rotatedCenter;
+    const float scale = std::max({std::abs(transform.scale.x), std::abs(transform.scale.y), std::abs(transform.scale.z)});
+    const float radius = localRadius * scale * 1.25f + 0.5f;
+    const float depth = dot(center, camera.forward);
+    if (depth + radius < camera.nearClip || depth - radius > camera.farClip ||
+        std::abs(dot(center, camera.right)) > depth * camera.horizontalSlope + radius * camera.horizontalRadius ||
+        std::abs(dot(center, camera.up)) > depth * camera.verticalSlope + radius * camera.verticalRadius) { return 0; }
+    constexpr float kNearDistance = 20, kMiddleDistance = 50;
+    const float distanceSquared = dot(center, center);
+    if (distanceSquared < kNearDistance * kNearDistance) { return 1; }
+    return distanceSquared < kMiddleDistance * kMiddleDistance ? 2 : 4;
 }
 }
 
@@ -42,38 +96,52 @@ std::string_view animatorMeshPath(const Scene& scene, const Entity& entity) {
 }
 
 struct AnimationSystem::Impl {
-    struct Rig {
-        AnimationData data;
-        float scale = 1;
-        std::vector<std::size_t> order;
-        std::vector<AnimationBounds> jointBounds;
-    };
     struct BoundClip {
-        const AnimationClip* clip = nullptr;
-        std::vector<int> joints;
+        const CompiledClip* clip = nullptr;
         float start = 0, end = 0, speed = 1;
     };
     struct NameHash {
         using is_transparent = void;
         std::size_t operator()(std::string_view value) const { return std::hash<std::string_view>{}(value); }
     };
+    struct Rig {
+        struct Binding {
+            CompiledClip clip;
+            BoundClip range;
+        };
+        AnimationData data;
+        float scale = 1;
+        bool affine = true;
+        std::vector<std::size_t> order;
+        std::vector<AnimationBounds> jointBounds;
+        std::vector<Vec3> nodeOrigins;
+        std::unordered_map<std::string, Binding, NameHash, std::equal_to<>> bindings;
+    };
+    struct CachedGraph {
+        AnimationGraph asset;
+        AnimationTransitionLists transitions;
+    };
     struct Instance {
+        EntityId id = kInvalidEntityId;
         std::string meshPath;
-        std::uint64_t sceneRevision = 0;
+        std::uint64_t sceneRevision = 0, poseRevision = 0;
         AnimatorComponent settings;
         Rig* rig = nullptr;
         const AnimationGraph* graph = nullptr;
-        std::unordered_map<std::string, BoundClip> bindings;
+        const CachedGraph* cachedGraph = nullptr;
         std::unordered_map<std::string, std::size_t, NameHash, std::equal_to<>> parameterIndices;
         std::vector<double> parameters;
         std::unordered_set<std::string> reportedParameters;
         std::vector<AnimationPose> pose, source;
         std::vector<Mat4> worlds;
         AnimationBounds bounds;
-        std::vector<bool> animated;
+        Vec3 boundsCenter;
+        float boundsRadius = 0;
+        std::vector<std::size_t> meshEntities;
+        std::vector<std::uint8_t> animated, sourceAnimated;
         std::vector<std::size_t> cursors;
-        BoundClip* clip = nullptr;
-        BoundClip* sourceClip = nullptr;
+        const BoundClip* clip = nullptr;
+        const BoundClip* sourceClip = nullptr;
         double sourceTime = 0;
         float sourceSpeed = 1;
         bool sourceLoop = true, frozenSource = false;
@@ -83,6 +151,7 @@ struct AnimationSystem::Impl {
         double time = 0;
         float speed = 1, fade = 0, fadeTime = 0;
         bool playing = false, loop = true;
+        bool dirty = true, initialized = false, visible = true, changed = false;
     };
     explicit Impl(Scene& value, Mode modeIn) : scene(value), mode(modeIn) {}
     Scene& scene;
@@ -90,14 +159,56 @@ struct AnimationSystem::Impl {
     AssetReader reader;
     std::unordered_map<std::string, Rig> rigs;
     std::unordered_map<std::string, AnimationClipAsset> clips;
-    std::unordered_map<std::string, AnimationGraph> graphs;
-    std::unordered_map<EntityId, Instance> instances;
+    std::unordered_map<std::string, CachedGraph> graphs;
+    std::vector<Instance> instances;
+    std::unordered_map<EntityId, std::uint32_t> instanceIndices;
+    std::vector<std::uint32_t> evaluation;
     std::unordered_map<EntityId, std::uint64_t> failedInstances;
     std::vector<Mat4> palettes;
     std::string error;
     std::uint64_t revision = 0;
     std::uint64_t poseRevision = 0;
-    bool running = false;
+    std::uint64_t layoutRevision = 0;
+    std::uint64_t editRevision = 0, destructionRevision = 0, frame = 0;
+    std::size_t entityCount = 0;
+    int cameraIndex = -1;
+    bool layoutDirty = true, running = false;
+    WorkerPool workers;
+
+    Instance* find(EntityId id) {
+        const auto found = instanceIndices.find(id);
+        return found == instanceIndices.end() ? nullptr : &instances[found->second];
+    }
+    const Instance* meshOwner(const Entity& mesh) const {
+        if (mesh.hasAnimator) {
+            const auto found = instanceIndices.find(mesh.id());
+            return found == instanceIndices.end() ? nullptr : &instances[found->second];
+        }
+        if (mesh.mesh.meshNode == 0 || instances.empty()) { return nullptr; }
+        const auto& path = mesh.mesh.meshPath;
+        for (const auto* parent = scene.entityById(mesh.parentId()); parent && isPartOfRig(*parent, path);
+            parent = scene.entityById(parent->parentId())) {
+            if (!parent->hasAnimator) { continue; }
+            const auto found = instanceIndices.find(parent->id());
+            if (found != instanceIndices.end() && instances[found->second].meshPath == path) {
+                return &instances[found->second];
+            }
+        }
+        return nullptr;
+    }
+    void remove(EntityId id) {
+        const auto found = instanceIndices.find(id);
+        if (found == instanceIndices.end()) { return; }
+        const auto index = found->second;
+        if (index != instances.size() - 1) {
+            instances[index] = std::move(instances.back());
+            instanceIndices.find(instances[index].id)->second = index;
+        }
+        instances.pop_back();
+        instanceIndices.erase(found);
+        ++layoutRevision;
+        layoutDirty = true;
+    }
 
     bool read(std::string_view path, std::string& bytes) {
         if (!reader || reader(path, bytes, error) != AssetReadResult::Found) {
@@ -117,11 +228,21 @@ struct AnimationSystem::Impl {
         if (metadataResult == AssetReadResult::Error ||
             (metadataResult == AssetReadResult::Found && !parseImportSettings(metadata, settings, error))) { return nullptr; }
         candidate.scale = settings.scale;
+        for (auto& joint : candidate.data.joints) {
+            normalizeQuaternion(joint.restTRS.rotation);
+            candidate.affine &= isAffine(joint.restLocal) && isAffine(joint.inverseBind);
+        }
         // Use the same imported vertex coordinates as the render mesh.
         MeshData mesh;
         std::string boundsError;
         if (importMesh(path, bytes, reader, settings, mesh, boundsError)) {
             candidate.jointBounds = std::move(mesh.jointBounds);
+            candidate.nodeOrigins.resize(candidate.data.joints.size() + 1);
+            for (const auto& node : mesh.nodes) {
+                if (node.id < candidate.nodeOrigins.size()) {
+                    candidate.nodeOrigins[node.id] = {node.origin[0], node.origin[1], node.origin[2]};
+                }
+            }
         }
         // Topological order is cached once. cgltf validates the hierarchy.
         std::vector<bool> visited(candidate.data.joints.size());
@@ -135,10 +256,17 @@ struct AnimationSystem::Impl {
         for (std::size_t i = 0; i < visited.size(); ++i) { visit(visit, i); }
         return &rigs.emplace(key, std::move(candidate)).first->second;
     }
-    BoundClip* bind(Instance& instance, std::string_view reference) {
+    const BoundClip* bind(Instance& instance, std::string_view reference) {
+        auto& bindings = instance.rig->bindings;
+        const auto& embeddedClips = instance.rig->data.clips;
+        if (!embeddedClips.empty() && reference == embeddedClips.front().name && !isAnimationClipAssetPath(reference)) {
+            reference = {};
+        }
+        if (const auto found = bindings.find(reference); found != bindings.end()) { return &found->second.range; }
         const std::string key(reference);
-        if (auto found = instance.bindings.find(key); found != instance.bindings.end()) { return &found->second; }
         BoundClip bound;
+        const AnimationClip* clip = nullptr;
+        std::vector<int> remap;
         if (isAnimationClipAssetPath(reference)) {
             auto found = clips.find(key);
             if (found == clips.end()) {
@@ -147,72 +275,81 @@ struct AnimationSystem::Impl {
                 if (!read(reference, bytes) || !decodeAnimationClip(bytes, asset, error)) { return nullptr; }
                 found = clips.emplace(key, std::move(asset)).first;
             }
-            bound.clip = &found->second.clip;
-            bound.joints = bindAnimationClip(found->second, instance.rig->data);
-            bound.start = found->second.startSeconds; bound.end = found->second.endSeconds; bound.speed = found->second.speed;
-            if (std::find(bound.joints.begin(), bound.joints.end(), -1) != bound.joints.end()) {
+            const auto& asset = found->second;
+            clip = &asset.clip;
+            remap = bindAnimationClip(asset, instance.rig->data);
+            bound.start = asset.startSeconds; bound.end = asset.endSeconds; bound.speed = asset.speed;
+            if (std::find(remap.begin(), remap.end(), -1) != remap.end()) {
                 std::cerr << "Animation clip " << key << " has joints absent from " << instance.meshPath << "; those channels are skipped\n";
             }
         } else {
-            for (const auto& clip : instance.rig->data.clips) {
-                if (reference.empty() || clip.name == reference) { bound.clip = &clip; break; }
+            for (const auto& embedded : embeddedClips) {
+                if (reference.empty() || embedded.name == reference) { clip = &embedded; break; }
             }
-            if (!bound.clip) { error = "Unknown embedded animation clip " + key; return nullptr; }
-            bound.end = bound.clip->duration;
-            bound.joints.resize(instance.rig->data.joints.size());
-            std::iota(bound.joints.begin(), bound.joints.end(), 0);
+            if (!clip) { error = "Unknown embedded animation clip " + key; return nullptr; }
+            bound.end = clip->duration;
         }
-        return &instance.bindings.emplace(key, std::move(bound)).first->second;
+        auto& binding = bindings.emplace(key, Rig::Binding{compileAnimationClip(*clip, remap), bound}).first->second;
+        binding.range.clip = &binding.clip;
+        return &binding.range;
     }
     bool select(Instance& instance, std::string_view reference, bool loop, float fade) {
         auto* clip = bind(instance, reference);
         if (!clip) { return false; }
         instance.frozenSource = instance.fadeTime < instance.fade;
-        instance.source = instance.pose;
-        instance.sourceClip = instance.clip;
-        instance.sourceTime = instance.time;
-        instance.sourceLoop = instance.loop;
-        instance.sourceSpeed = instance.graph ? instance.graph->states[instance.state].speed : 1;
-        instance.sourceCursors = instance.cursors;
+        if (fade > 0) {
+            if (!instance.clip || instance.frozenSource) {
+                instance.source = instance.pose;
+                instance.sourceAnimated = instance.animated;
+            }
+            instance.sourceClip = instance.clip;
+            instance.sourceTime = instance.time;
+            instance.sourceLoop = instance.loop;
+            instance.sourceSpeed = instance.graph ? instance.graph->states[instance.state].speed : 1;
+            if (!instance.frozenSource) { instance.sourceCursors = instance.cursors; }
+        } else {
+            instance.sourceClip = nullptr;
+        }
         instance.clip = clip;
         instance.time = 0;
         instance.loop = loop;
         instance.playing = true;
         instance.fade = fade;
         instance.fadeTime = 0;
-        std::fill(instance.cursors.begin(), instance.cursors.end(), 0);
+        instance.dirty = true;
+        instance.cursors.assign(clip->clip->tracks.size(), 0);
         return true;
     }
     Instance* ensure(EntityId id) {
+        const auto revision = scene.editRevision();
+        auto* current = find(id);
+        if (current && current->sceneRevision == revision) { return current; }
         const auto failed = failedInstances.find(id);
-        if (failed != failedInstances.end() && failed->second == scene.editRevision()) { return nullptr; }
-        auto* result = createInstance(id);
+        if (failed != failedInstances.end() && failed->second == revision) { return nullptr; }
+        auto* result = createInstance(id, current);
         if (!result) {
-            instances.erase(id);
-            failedInstances[id] = scene.editRevision();
-        } else {
-            failedInstances.erase(id);
+            remove(id);
+            failedInstances[id] = revision;
+        } else if (failed != failedInstances.end()) {
+            failedInstances.erase(failed);
         }
         return result;
     }
-    Instance* createInstance(EntityId id) {
+    Instance* createInstance(EntityId id, Instance* current) {
         const auto* entity = scene.entityById(id);
         if (!entity || !entity->hasAnimator) { return nullptr; }
-        auto found = instances.find(id);
-        const auto sceneRevision = scene.editRevision();
-        const auto path = !entity->hasMesh && found != instances.end() && found->second.sceneRevision == sceneRevision ?
-            std::string_view(found->second.meshPath) : animatorMeshPath(scene, *entity);
+        const auto path = animatorMeshPath(scene, *entity);
         if (path.empty()) {
             error = "Animator requires a glTF mesh or a hierarchy from a single glTF asset"; return nullptr;
         }
-        if (found != instances.end() && found->second.meshPath == path && found->second.settings == entity->animator) {
-            found->second.sceneRevision = sceneRevision;
-            return &found->second;
+        if (current && current->meshPath == path && current->settings == entity->animator) {
+            current->sceneRevision = scene.editRevision();
+            return current;
         }
         Instance instance;
+        instance.id = id;
         instance.meshPath = path;
-        instance.sceneRevision = sceneRevision;
-        if (found != instances.end()) { instances.erase(found); }
+        instance.sceneRevision = scene.editRevision();
         instance.settings = entity->animator;
         instance.speed = entity->animator.speed;
         instance.rig = rig(instance.meshPath);
@@ -223,17 +360,18 @@ struct AnimationSystem::Impl {
         instance.source = instance.pose;
         instance.worlds.resize(count);
         instance.animated.resize(count);
-        instance.cursors.resize(kMaxAnimationJoints * 3);
-        instance.sourceCursors.resize(kMaxAnimationJoints * 3);
+        instance.sourceAnimated.resize(count);
         if (!entity->animator.controllerPath.empty()) {
             auto graph = graphs.find(entity->animator.controllerPath);
             if (graph == graphs.end()) {
                 std::string bytes;
-                AnimationGraph candidate;
-                if (!read(entity->animator.controllerPath, bytes) || !decodeAnimationGraph(bytes, candidate, error)) { return nullptr; }
+                CachedGraph candidate;
+                if (!read(entity->animator.controllerPath, bytes) || !decodeAnimationGraph(bytes, candidate.asset, error)) { return nullptr; }
+                candidate.transitions = indexAnimationTransitions(candidate.asset);
                 graph = graphs.emplace(entity->animator.controllerPath, std::move(candidate)).first;
             }
-            instance.graph = &graph->second;
+            instance.cachedGraph = &graph->second;
+            instance.graph = &graph->second.asset;
             instance.state = instance.graph->defaultState;
             for (const auto& parameter : instance.graph->parameters) {
                 instance.parameterIndices.emplace(parameter.name, instance.parameters.size());
@@ -247,61 +385,158 @@ struct AnimationSystem::Impl {
             if (!select(instance, entity->animator.clip, entity->animator.loop, 0)) { return nullptr; }
         }
         instance.playing = mode == Mode::Runtime && instance.clip && (instance.graph || entity->animator.playOnStart);
-        return &instances.emplace(id, std::move(instance)).first->second;
+
+        if (current && current->rig == instance.rig) {
+            instance.offset = current->offset;
+            instance.initialized = current->initialized;
+            instance.bounds = current->bounds;
+            instance.boundsCenter = current->boundsCenter;
+            instance.boundsRadius = current->boundsRadius;
+            instance.poseRevision = current->poseRevision;
+            *current = std::move(instance);
+            return current;
+        }
+        remove(id);
+        const auto index = static_cast<std::uint32_t>(instances.size());
+        const auto entry = instanceIndices.emplace(id, index).first;
+        try {
+            instances.push_back(std::move(instance));
+        } catch (...) {
+            instanceIndices.erase(entry);
+            throw;
+        }
+        ++layoutRevision;
+        layoutDirty = true;
+        return &instances.back();
     }
-    void evaluate(Instance& instance) {
-        const auto& joints = instance.rig->data.joints;
-        for (std::size_t index = 0; index < joints.size(); ++index) { instance.pose[index] = joints[index].restTRS; }
-        std::fill(instance.animated.begin(), instance.animated.end(), false);
-        if (instance.clip) {
-            const auto& bound = *instance.clip;
-            const float sample = animationSampleTime(instance.time, bound.start, bound.end, instance.loop);
-            for (std::size_t index = 0; index < bound.clip->channels.size(); ++index) {
-                const auto& channel = bound.clip->channels[index];
-                const int joint = bound.joints[channel.joint];
-                if (joint < 0) { continue; }
-                sampleAnimationChannel(channel, sample, instance.cursors[index], instance.pose[joint]);
-                instance.animated[joint] = true;
+    void reconcile() {
+        const auto revision = scene.editRevision();
+        const auto destroyed = scene.destructionRevision();
+        const auto count = scene.entityCount();
+        if (!layoutDirty && revision == editRevision && destroyed == destructionRevision && count == entityCount) { return; }
+        for (std::size_t i = 0; i < instances.size();) {
+            const auto* entity = scene.entityById(instances[i].id);
+            if (!entity || !entity->hasAnimator) { remove(instances[i].id); }
+            else { ++i; }
+        }
+        if (destroyed != destructionRevision) {
+            std::erase_if(failedInstances, [&](const auto& entry) { return !scene.entityById(entry.first); });
+        }
+        const auto& entities = scene.entities();
+        for (const auto& entity : entities) {
+            if (entity.hasAnimator) { (void)ensure(entity.id()); }
+        }
+        if (layoutDirty) {
+            std::size_t size = 0;
+            for (const auto& instance : instances) { size += instance.pose.size(); }
+            std::vector<Mat4> relocated(size);
+            size = 0;
+            for (auto& instance : instances) {
+                const auto joints = instance.pose.size();
+                if (instance.initialized) {
+                    std::copy_n(palettes.data() + instance.offset, joints, relocated.data() + size);
+                }
+                instance.offset = size;
+                size += joints;
             }
+            palettes.swap(relocated);
+            ++layoutRevision;
+            ++poseRevision;
+            layoutDirty = false;
+        }
+        cameraIndex = mode == Mode::Runtime && !instances.empty() ? scene.mainCameraIndex() : -1;
+        // Descendants carry independent world transforms. Cull the rig only when every driven mesh is outside.
+        for (auto& instance : instances) { instance.meshEntities.clear(); }
+        if (cameraIndex >= 0) {
+            for (std::size_t i = 0; i < entities.size(); ++i) {
+                const auto& entity = entities[i];
+                if (!entity.hasMesh) { continue; }
+                const auto* owner = meshOwner(entity);
+                if (owner && owner->settings.cullingMode == AnimationCullingMode::Automatic) {
+                    instances[owner - instances.data()].meshEntities.push_back(i);
+                }
+            }
+        }
+        editRevision = revision;
+        destructionRevision = destroyed;
+        entityCount = count;
+    }
+    unsigned cullingInterval(const Instance& instance, const AnimationFrustum& camera) const {
+        if (!instance.bounds.valid || instance.meshEntities.empty()) { return 1; }
+        unsigned interval = 0;
+        for (const auto index : instance.meshEntities) {
+            const auto& entity = scene.entities()[index];
+            const auto& origins = instance.rig->nodeOrigins;
+            const auto pivot = entity.mesh.meshNode < origins.size() ? origins[entity.mesh.meshNode] : Vec3{};
+            const unsigned tier = evaluationInterval(camera, entity.transform, instance.boundsCenter - pivot, instance.boundsRadius);
+            if (tier == 1) { return 1; }
+            if (tier != 0 && (interval == 0 || tier < interval)) { interval = tier; }
+        }
+        return interval;
+    }
+    void sample(const Instance& instance, const BoundClip& bound, double time, bool loop,
+        std::vector<std::size_t>& cursors, std::vector<AnimationPose>& poses, std::vector<std::uint8_t>& animated) const {
+        const auto& joints = instance.rig->data.joints;
+        for (std::size_t i = 0; i < joints.size(); ++i) { poses[i] = joints[i].restTRS; }
+        std::fill(animated.begin(), animated.end(), 0);
+        const float sample = animationSampleTime(time, bound.start, bound.end, loop);
+        const auto& clip = *bound.clip;
+        for (std::size_t i = 0; i < clip.tracks.size(); ++i) {
+            const auto& track = clip.tracks[i];
+            sampleAnimationTrack(clip, track, sample, cursors[i], poses[track.joint], instance.settings.rotationBlend);
+            animated[track.joint] = 1;
+        }
+    }
+    void evaluate(Instance& instance) noexcept {
+        const auto& joints = instance.rig->data.joints;
+        if (instance.clip) {
+            sample(instance, *instance.clip, instance.time, instance.loop, instance.cursors, instance.pose, instance.animated);
         }
         if (instance.fadeTime < instance.fade) {
             if (instance.sourceClip && !instance.frozenSource) {
-                for (std::size_t index = 0; index < joints.size(); ++index) { instance.source[index] = joints[index].restTRS; }
-                const auto& source = *instance.sourceClip;
-                const auto sourceTime = animationSampleTime(instance.sourceTime, source.start, source.end, instance.sourceLoop);
-                for (std::size_t index = 0; index < source.clip->channels.size(); ++index) {
-                    const auto& channel = source.clip->channels[index]; const int joint = source.joints[channel.joint];
-                    if (joint >= 0) { sampleAnimationChannel(channel, sourceTime, instance.sourceCursors[index], instance.source[joint]); }
-                }
+                sample(instance, *instance.sourceClip, instance.sourceTime, instance.sourceLoop, instance.sourceCursors,
+                    instance.source, instance.sourceAnimated);
             }
             const float alpha = instance.fadeTime / instance.fade;
             for (std::size_t index = 0; index < joints.size(); ++index) {
-                instance.pose[index] = blendAnimationPose(instance.source[index], instance.pose[index], alpha);
-                // Matrix nodes cannot be animation targets. Preserve their matrices below.
-                if (instance.source[index].translation != joints[index].restTRS.translation ||
-                    instance.source[index].scale != joints[index].restTRS.scale ||
-                    !std::equal(std::begin(instance.source[index].rotation), std::end(instance.source[index].rotation), joints[index].restTRS.rotation)) {
-                    instance.animated[index] = true;
+                instance.animated[index] |= instance.sourceAnimated[index];
+                if (instance.animated[index]) {
+                    instance.pose[index] = blendAnimationPose(instance.source[index], instance.pose[index], alpha,
+                        instance.settings.rotationBlend);
                 }
             }
         }
-        instance.bounds = {};
-        bool changed = false;
+        bool changed = !instance.initialized;
         for (const auto index : instance.rig->order) {
             const auto& joint = joints[index];
             const auto local = instance.animated[index] ? animationMatrix(instance.pose[index]) : joint.restLocal;
-            instance.worlds[index] = joint.parent >= 0 ? instance.worlds[joint.parent] * local : local;
+            if (joint.parent < 0) { instance.worlds[index] = local; }
+            else {
+                const auto& parent = instance.worlds[joint.parent];
+                instance.worlds[index] = instance.rig->affine ? affineMultiply(parent, local) : parent * local;
+            }
             auto& previous = palettes[instance.offset + index];
-            Mat4 palette = instance.worlds[index] * joint.inverseBind;
+            Mat4 palette = instance.rig->affine ? affineMultiply(instance.worlds[index], joint.inverseBind) :
+                instance.worlds[index] * joint.inverseBind;
             palette.m[12] *= instance.rig->scale; palette.m[13] *= instance.rig->scale; palette.m[14] *= instance.rig->scale;
             changed |= std::memcmp(previous.m, palette.m, sizeof(palette.m)) != 0;
             previous = palette;
-
-            if (index < instance.rig->jointBounds.size()) {
-                includeSkinnedBounds(instance.bounds, instance.rig->jointBounds[index], palette);
+        }
+        if (changed) {
+            instance.bounds = {};
+            const auto& bounds = instance.rig->jointBounds;
+            for (std::size_t index = 0; index < bounds.size(); ++index) {
+                includeSkinnedBounds(instance.bounds, bounds[index], palettes[instance.offset + index]);
+            }
+            if (instance.bounds.valid) {
+                instance.boundsCenter = (instance.bounds.minimum + instance.bounds.maximum) * 0.5f;
+                instance.boundsRadius = length(instance.bounds.maximum - instance.boundsCenter);
             }
         }
-        poseRevision += changed;
+        instance.changed = changed;
+        instance.poseRevision += instance.changed;
+        instance.initialized = true;
+        instance.dirty = false;
     }
     bool parameter(EntityId id, std::string_view name, AnimationParameterType type, double value) {
         auto* instance = ensure(id);
@@ -333,36 +568,38 @@ void AnimationSystem::setAssetRevision(std::uint64_t revision) {
 bool AnimationSystem::start() { m_impl->running = true; m_impl->error.clear(); update(0); return m_impl->error.empty(); }
 void AnimationSystem::stop() {
     ++m_impl->poseRevision;
+    ++m_impl->layoutRevision;
+    m_impl->layoutDirty = true;
+    m_impl->instanceIndices.clear();
     m_impl->running = false; m_impl->instances.clear(); m_impl->failedInstances.clear(); m_impl->palettes.clear();
     m_impl->rigs.clear(); m_impl->clips.clear(); m_impl->graphs.clear();
 }
 void AnimationSystem::update(float deltaSeconds, float timeScale) {
     auto& impl = *m_impl;
-    if (!impl.running || !std::isfinite(deltaSeconds) || deltaSeconds < 0 || !std::isfinite(timeScale) || timeScale < 0) { return; }
-    std::erase_if(impl.instances, [&](const auto& entry) {
-        const auto* entity = impl.scene.entityById(entry.first);
-        return !entity || !entity->hasAnimator;
-    });
-    std::size_t count = 0;
-    for (const auto& entity : impl.scene.entities()) {
-        if (!entity.hasAnimator) { continue; }
-        auto* instance = impl.ensure(entity.id());
-        if (!instance) { continue; }
-        instance->offset = count; count += instance->pose.size();
-    }
-    impl.poseRevision += impl.palettes.size() != count;
-    impl.palettes.resize(count);
-    for (auto& [id, instance] : impl.instances) {
-        const double dt = double(deltaSeconds) * timeScale;
+    if (!impl.running || !std::isfinite(deltaSeconds) || deltaSeconds < 0 ||
+        !std::isfinite(timeScale) || timeScale < 0) { return; }
+    impl.reconcile();
+    ++impl.frame;
+    const double dt = double(deltaSeconds) * timeScale;
+    const auto* camera = impl.cameraIndex >= 0 ? impl.scene.entity(static_cast<std::size_t>(impl.cameraIndex)) : nullptr;
+    const auto frustum = camera ? animationFrustum(*camera) : AnimationFrustum{};
+    impl.evaluation.clear();
+    for (std::uint32_t index = 0; index < impl.instances.size(); ++index) {
+        auto& instance = impl.instances[index];
         if (instance.playing && instance.clip) {
             const float stateSpeed = instance.graph ? instance.graph->states[instance.state].speed : 1;
+            const double previousTime = instance.time;
+            const float previousFadeTime = instance.fadeTime;
             instance.time += dt * instance.speed * instance.clip->speed * stateSpeed;
-            if (instance.sourceClip && !instance.frozenSource) { instance.sourceTime += dt * instance.speed * instance.sourceClip->speed * instance.sourceSpeed; }
+            if (instance.fadeTime < instance.fade && instance.sourceClip && !instance.frozenSource) {
+                instance.sourceTime += dt * instance.speed * instance.sourceClip->speed * instance.sourceSpeed;
+                instance.dirty |= dt != 0;
+            }
             instance.fadeTime = static_cast<float>(std::min(double(instance.fade), instance.fadeTime + dt));
             if (instance.graph) {
                 const double duration = instance.clip->end - instance.clip->start;
-                const int transition = animationTransition(*instance.graph, instance.state, duration > 0 ? instance.time / duration : 1,
-                    instance.parameters, instance.fadeTime < instance.fade);
+                const int transition = animationTransition(*instance.graph, instance.cachedGraph->transitions, instance.state,
+                    duration > 0 ? instance.time / duration : 1, instance.parameters, instance.fadeTime < instance.fade);
                 if (transition >= 0) {
                     const auto& edge = instance.graph->transitions[transition];
                     const auto& target = instance.graph->states[edge.target];
@@ -376,9 +613,29 @@ void AnimationSystem::update(float deltaSeconds, float timeScale) {
                 instance.time = instance.clip->end - instance.clip->start;
                 if (!instance.graph) { instance.playing = false; }
             }
+            instance.dirty |= instance.time != previousTime || instance.fadeTime != previousFadeTime;
         }
-        impl.evaluate(instance);
+        if (instance.initialized && !instance.dirty) { continue; }
+        const unsigned interval = camera ? impl.cullingInterval(instance, frustum) : 1;
+        const bool becameVisible = interval != 0 && !instance.visible;
+        instance.visible = interval != 0;
+        if (!instance.initialized || (interval != 0 && (becameVisible || (impl.frame + index) % interval == 0))) {
+            impl.evaluation.push_back(index);
+        }
     }
+    const auto evaluate = [](void* context, std::size_t job) noexcept {
+        auto& impl = *static_cast<Impl*>(context);
+        impl.evaluate(impl.instances[impl.evaluation[job]]);
+    };
+    constexpr std::size_t kParallelThreshold = 8;
+    if (impl.evaluation.size() >= kParallelThreshold) {
+        impl.workers.parallelFor(impl.evaluation.size(), &impl, evaluate);
+    } else {
+        for (std::size_t i = 0; i < impl.evaluation.size(); ++i) { evaluate(&impl, i); }
+    }
+    bool changed = false;
+    for (const auto index : impl.evaluation) { changed |= impl.instances[index].changed; }
+    impl.poseRevision += changed;
 }
 bool AnimationSystem::play(EntityId id, std::string_view reference, bool loop, float fade) {
     m_impl->running = true;
@@ -395,19 +652,20 @@ bool AnimationSystem::resume(EntityId id) {
     instance->playing = true;
     return true;
 }
-void AnimationSystem::stop(EntityId id) { if (auto found = m_impl->instances.find(id); found != m_impl->instances.end()) { found->second.playing = false; } }
+void AnimationSystem::stop(EntityId id) { if (auto* instance = m_impl->find(id)) { instance->playing = false; } }
 bool AnimationSystem::setSpeed(EntityId id, float speed) {
     auto* instance = m_impl->ensure(id); if (!instance || !std::isfinite(speed)) { return false; } instance->speed = speed; return true;
 }
 bool AnimationSystem::setTime(EntityId id, float time) {
     auto* instance = m_impl->ensure(id);
     if (!instance || !std::isfinite(time)) { return false; }
+    instance->dirty |= instance->time != time;
     instance->time = time;
     if (m_impl->mode == Mode::Preview) { m_impl->running = true; }
     return true;
 }
-float AnimationSystem::time(EntityId id) const { const auto found = m_impl->instances.find(id); return found == m_impl->instances.end() ? 0 : static_cast<float>(found->second.time); }
-bool AnimationSystem::isPlaying(EntityId id) const { const auto found = m_impl->instances.find(id); return found != m_impl->instances.end() && found->second.playing; }
+float AnimationSystem::time(EntityId id) const { const auto* instance = m_impl->find(id); return instance ? static_cast<float>(instance->time) : 0; }
+bool AnimationSystem::isPlaying(EntityId id) const { const auto* instance = m_impl->find(id); return instance && instance->playing; }
 std::vector<std::string> AnimationSystem::clipNames(std::string_view path) {
     std::vector<std::string> names;
     if (path.empty()) { return names; }
@@ -415,9 +673,9 @@ std::vector<std::string> AnimationSystem::clipNames(std::string_view path) {
     return names;
 }
 std::span<const Mat4> AnimationSystem::palette(EntityId id) const {
-    const auto found = m_impl->instances.find(id);
-    if (found == m_impl->instances.end()) { return {}; }
-    const auto& instance = found->second;
+    const auto* found = m_impl->find(id);
+    if (!found || !found->initialized) { return {}; }
+    const auto& instance = *found;
     const auto size = m_impl->palettes.size();
     if (instance.offset > size || instance.pose.size() > size - instance.offset) { return {}; }
     return {m_impl->palettes.data() + instance.offset, instance.pose.size()};
@@ -426,30 +684,32 @@ std::span<const Mat4> AnimationSystem::meshPalette(const Entity& meshEntity) con
     return meshPose(meshEntity).palette;
 }
 std::uint64_t AnimationSystem::poseRevision() const { return m_impl->poseRevision; }
+std::span<const Mat4> AnimationSystem::palettes() const { return m_impl->palettes; }
+std::uint64_t AnimationSystem::layoutRevision() const { return m_impl->layoutRevision; }
+AnimationBounds AnimationSystem::bounds(AnimationInstanceHandle handle) const {
+    if (handle.layoutRevision != m_impl->layoutRevision || handle.index >= m_impl->instances.size()) { return {}; }
+    return m_impl->instances[handle.index].bounds;
+}
+std::uint64_t AnimationSystem::poseRevision(AnimationInstanceHandle handle) const {
+    if (handle.layoutRevision != m_impl->layoutRevision || handle.index >= m_impl->instances.size()) { return 0; }
+    return m_impl->instances[handle.index].poseRevision;
+}
 AnimationMeshPose AnimationSystem::meshPose(const Entity& meshEntity) const {
-    if (meshEntity.hasAnimator) {
-        const auto found = m_impl->instances.find(meshEntity.id());
-        return found == m_impl->instances.end() ? AnimationMeshPose{} :
-            AnimationMeshPose{palette(meshEntity.id()), found->second.bounds};
-    }
-    if (meshEntity.mesh.meshNode == 0 || m_impl->instances.empty()) { return {}; }
-    const auto& path = meshEntity.mesh.meshPath;
-    const auto& scene = m_impl->scene;
-    for (const auto* parent = scene.entityById(meshEntity.parentId()); parent && isPartOfRig(*parent, path);
-        parent = scene.entityById(parent->parentId())) {
-        if (!parent->hasAnimator) { continue; }
-        const auto found = m_impl->instances.find(parent->id());
-        if (found != m_impl->instances.end() && found->second.meshPath == path) { return {palette(parent->id()), found->second.bounds}; }
-    }
-    return {};
+    const auto* instance = m_impl->meshOwner(meshEntity);
+    if (!instance || !instance->initialized) { return {}; }
+    const auto size = m_impl->palettes.size();
+    if (instance->offset > size || instance->pose.size() > size - instance->offset) { return {}; }
+    const auto index = static_cast<std::uint32_t>(instance - m_impl->instances.data());
+    return {{m_impl->palettes.data() + instance->offset, instance->pose.size()}, instance->bounds,
+        static_cast<std::uint32_t>(instance->offset), {m_impl->layoutRevision, index}};
 }
 bool AnimationSystem::setBool(EntityId id, std::string_view name, bool value) { return m_impl->parameter(id, name, AnimationParameterType::Bool, value); }
 bool AnimationSystem::setFloat(EntityId id, std::string_view name, float value) { return m_impl->parameter(id, name, AnimationParameterType::Float, value); }
 bool AnimationSystem::setInt(EntityId id, std::string_view name, std::int32_t value) { return m_impl->parameter(id, name, AnimationParameterType::Int, value); }
 bool AnimationSystem::setTrigger(EntityId id, std::string_view name) { return m_impl->parameter(id, name, AnimationParameterType::Trigger, 1); }
 std::string_view AnimationSystem::currentState(EntityId id) const {
-    const auto found = m_impl->instances.find(id);
-    return found != m_impl->instances.end() && found->second.graph ? found->second.graph->states[found->second.state].name : std::string_view{};
+    const auto* instance = m_impl->find(id);
+    return instance && instance->graph ? instance->graph->states[instance->state].name : std::string_view{};
 }
 bool AnimationSystem::crossfadeTo(EntityId id, std::string_view name, float seconds) {
     auto* instance = m_impl->ensure(id);
@@ -463,9 +723,9 @@ bool AnimationSystem::crossfadeTo(EntityId id, std::string_view name, float seco
     return false;
 }
 AnimationDebugView AnimationSystem::debugView(EntityId id) const {
-    const auto found = m_impl->instances.find(id);
-    if (found == m_impl->instances.end()) { return {}; }
-    const auto& instance = found->second;
+    const auto* found = m_impl->find(id);
+    if (!found) { return {}; }
+    const auto& instance = *found;
     return {currentState(id), instance.fade > 0 ? std::min(instance.fadeTime / instance.fade, 1.0f) : 1, instance.parameters};
 }
 const std::string& AnimationSystem::error() const { return m_impl->error; }

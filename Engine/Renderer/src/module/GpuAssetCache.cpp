@@ -130,6 +130,7 @@ struct MeshResource {
     ComPtr<ID3D11Buffer> vertices;
     ComPtr<ID3D11Buffer> skin;
     ComPtr<ID3D11Buffer> indices;
+    ComPtr<ID3D11ShaderResourceView> skinVertices, skinWeights;
     GpuMesh view;
     Textures embeddedTextures;
     std::vector<MaterialData> sourceMaterials;
@@ -137,6 +138,15 @@ struct MeshResource {
     std::vector<MaterialResource> materials;
     bool materialsReady = false;
 };
+HRESULT createRawView(ID3D11Device& device, ID3D11Buffer* buffer, UINT bytes, ID3D11ShaderResourceView** view) {
+    D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
+    desc.Format = DXGI_FORMAT_R32_TYPELESS;
+    desc.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+    desc.BufferEx.NumElements = bytes / 4;
+    desc.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
+    return device.CreateShaderResourceView(buffer, &desc, view);
+}
+
 bool createMesh(ID3D11Device* device, ID3D11DeviceContext* context, GeometryPool& vertexPool,
     GeometryPool& indexPool, const MeshData& data, MeshResource& resource, std::string& error) {
     std::vector<std::uint32_t> combined;
@@ -153,6 +163,7 @@ bool createMesh(ID3D11Device* device, ID3D11DeviceContext* context, GeometryPool
         return false;
     }
     const auto vertexCount = static_cast<UINT>(data.vertices.size());
+    const auto vertexBytes = static_cast<UINT>(data.vertices.size() * sizeof(MeshVertex));
     const auto indexCount = static_cast<UINT>(indices.size());
     if (context && data.skinVertices.empty()) {
         resource.pooledVertices = vertexPool.upload(*device, *context, data.vertices.data(), vertexCount,
@@ -174,11 +185,16 @@ bool createMesh(ID3D11Device* device, ID3D11DeviceContext* context, GeometryPool
     } else {
         resource.pooledVertices = {};
         desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-        desc.ByteWidth = vertexCount * sizeof(MeshVertex);
+        if (!data.skinVertices.empty()) {
+            desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+            desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+        }
+        desc.ByteWidth = vertexBytes;
         initial.pSysMem = data.vertices.data();
         HRESULT hr = device->CreateBuffer(&desc, &initial, resource.vertices.GetAddressOf());
         if (SUCCEEDED(hr)) {
             desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+            desc.MiscFlags = 0;
             desc.ByteWidth = indexCount * sizeof(std::uint32_t);
             initial.pSysMem = indices.data();
             hr = device->CreateBuffer(&desc, &initial, resource.indices.GetAddressOf());
@@ -189,11 +205,18 @@ bool createMesh(ID3D11Device* device, ID3D11DeviceContext* context, GeometryPool
     }
     if (!data.skinVertices.empty()) {
         if (data.skinVertices.size() != data.vertices.size()) { error = "Skin vertex count mismatch"; return false; }
-        desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
         desc.ByteWidth = static_cast<UINT>(data.skinVertices.size() * sizeof(MeshSkinVertex));
         initial.pSysMem = data.skinVertices.data();
-        if (FAILED(device->CreateBuffer(&desc, &initial, resource.skin.GetAddressOf()))) { error = "Cannot create skin vertex buffer"; return false; }
-        resource.view.skinBuffer = resource.skin.Get();
+        if (FAILED(device->CreateBuffer(&desc, &initial, resource.skin.GetAddressOf())) ||
+            FAILED(createRawView(*device, resource.skin.Get(), desc.ByteWidth, resource.skinWeights.GetAddressOf())) ||
+            FAILED(createRawView(*device, resource.vertices.Get(), vertexBytes,
+                resource.skinVertices.GetAddressOf()))) {
+            error = "Cannot create raw skinning buffers"; return false;
+        }
+        resource.view.skinVertices = resource.skinVertices.Get();
+        resource.view.skinWeights = resource.skinWeights.Get();
         for (std::size_t joint = 0; joint < std::min(data.restPalette.size(), data.jointBounds.size()); ++joint) {
             includeSkinnedBounds(resource.view.restBounds, data.jointBounds[joint], data.restPalette[joint]);
         }

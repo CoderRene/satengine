@@ -94,6 +94,9 @@ struct ScriptComponent {
     bool operator==(const ScriptComponent&) const = default;
 };
 
+enum class AnimationRotationBlend : std::uint8_t { Slerp, Nlerp };
+enum class AnimationCullingMode : std::uint8_t { AlwaysAnimate, Automatic };
+
 struct AnimatorComponent {
     std::string clip;
     std::string controllerPath;
@@ -101,6 +104,8 @@ struct AnimatorComponent {
     bool loop = true;
     float speed = 1;
     float crossfadeSeconds = 0.2f;
+    AnimationRotationBlend rotationBlend = AnimationRotationBlend::Slerp;
+    AnimationCullingMode cullingMode = AnimationCullingMode::Automatic;
     bool operator==(const AnimatorComponent&) const = default;
 };
 

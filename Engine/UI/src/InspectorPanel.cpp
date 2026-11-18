@@ -490,6 +490,16 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             changed |= ImGui::Checkbox("Loop Animation", &animator.loop);
         }
         changed |= ImGui::InputFloat("Playback Speed", &animator.speed);
+        auto rotationBlend = static_cast<int>(animator.rotationBlend);
+        if (ImGui::Combo("Rotation Interpolation", &rotationBlend, "Slerp\0Nlerp\0")) {
+            animator.rotationBlend = static_cast<AnimationRotationBlend>(rotationBlend);
+            changed = true;
+        }
+        auto cullingMode = static_cast<int>(animator.cullingMode);
+        if (ImGui::Combo("Culling Mode", &cullingMode, "Always Animate\0Automatic\0")) {
+            animator.cullingMode = static_cast<AnimationCullingMode>(cullingMode);
+            changed = true;
+        }
         if (!m_impl->controllerMode) {
             changed |= ImGui::DragFloat("Crossfade Seconds", &animator.crossfadeSeconds, 0.01f, 0, 60);
         } else if (const float defaultCrossfade = AnimatorComponent{}.crossfadeSeconds;

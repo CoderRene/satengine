@@ -1,5 +1,7 @@
 #include "LuaRuntime.hpp"
 
+#include "module/RenderBenchmark.hpp"
+
 #include "module/LuaRuntimeModules/LuaFieldBindings.hpp"
 #include "module/LuaRuntimeModules/LuaInputBindings.hpp"
 #include "module/LuaRuntimeModules/LuaPackageConfig.hpp"
@@ -526,7 +528,12 @@ bool LuaRuntime::update(float deltaSeconds) {
             else { return impl.fail(error); }
         }
     }
-    if (impl.m_animation) { impl.m_animation->update(deltaSeconds, time.m_timeScale); }
+    if (impl.m_animation) {
+        const bool benchmark = RenderBenchmark::enabled();
+        const auto start = benchmark ? RenderBenchmark::Clock::now() : RenderBenchmark::Clock::time_point{};
+        impl.m_animation->update(deltaSeconds, time.m_timeScale);
+        if (benchmark) { RenderBenchmark::recordAnimation(start); }
+    }
     if (impl.m_audio) { impl.m_audio->update(deltaSeconds, impl.m_physics, time.m_timeScale); }
     return true;
 }

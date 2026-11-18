@@ -92,12 +92,40 @@ def generate(destination, count, away):
     print(project.resolve())
 
 
+def generate_animation(destination):
+    name = "AnimationStress200"
+    project = destination / name
+    project.mkdir(parents=True)
+    assets = project / "Assets"
+    assets.mkdir()
+    example = ROOT / "Examples" / "GltfAnimation"
+    for file in ("Beacon.gltf", "Beacon.gltf.satimport"):
+        shutil.copyfile(example / "Assets" / file, assets / file)
+    (project / "SatEngineProject.sat").write_text(f"name={name}\n", encoding="utf-8")
+    # Use the shipped v17 scene settings for identical pre- and post-change captures.
+    header = (example / "Scene.sat").read_text(encoding="utf-8").splitlines()[:7]
+    header[1] = "202"
+    with (project / "Scene.sat").open("w", encoding="utf-8", newline="\n") as scene:
+        scene.write("\n".join(header) + "\n")
+        scene.write(entity("Camera", "0 8 -4 -5 0 0 1 1 1",
+                           camera="1 1 65 0.1 150 0.07 0.10 0.16 1"))
+        scene.write(entity("Sun", "0 0 0 50 -25 0 1 1 1", light="1 0 1 0.95 0.85 3 10 20 35"))
+        for group, start in (("Near", 6), ("Middle", 30), ("Far", 64), ("Offscreen", -35)):
+            for index in range(50):
+                x = (index % 10 - 4.5) * 1.6
+                z = start + index // 10 * 1.5
+                scene.write(entity(f"{group} Beacon {index + 1}", f"{x:g} 0 {z:g} 0 {index * 13 % 360} 0 1 1 1",
+                                   mesh='1 0 "Assets/Beacon.gltf" "" 0 0', animator='1 "Signal" "" 1 1 1 0'))
+        scene.write("0\n" * 202)
+    print(project.resolve())
+
+
 def summarize(captures):
     for path in captures:
         with path.open(encoding="utf-8-sig", newline="") as stream:
             rows = list(csv.DictReader(stream))
         print(path)
-        for metric in ("frame_ms", "gpu_frame_ms"):
+        for metric in ("frame_ms", "gpu_frame_ms", "cpu_animation_ms", "cpu_scene_sync_ms"):
             samples = sorted(float(row[metric]) for row in rows if row.get(metric))
             if not samples:
                 continue
@@ -114,12 +142,16 @@ def main():
     generation.add_argument("destination", type=Path)
     generation.add_argument("--count", type=int, choices=SIZES)
     generation.add_argument("--away", action="store_true", help="Point the camera away from the meshes")
+    animation = commands.add_parser("animation", help="Write the 200-rig animation project")
+    animation.add_argument("destination", type=Path)
     summary = commands.add_parser("summarize", help="Report median, p99 and worst 1%%")
     summary.add_argument("captures", type=Path, nargs="+")
     args = parser.parse_args()
     if args.command == "generate":
         for count in (args.count,) if args.count else SIZES:
             generate(args.destination, count, args.away)
+    elif args.command == "animation":
+        generate_animation(args.destination)
     else:
         summarize(args.captures)
 

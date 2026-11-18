@@ -52,7 +52,8 @@ inline Mat4 meshWorld(const Mat4& world, const GpuMeshNode* node) {
 // Non-owning view of GPU mesh buffers used by mesh / outline passes.
 struct GpuMesh {
     ID3D11Buffer* vertexBuffer = nullptr;
-    ID3D11Buffer* skinBuffer = nullptr;
+    ID3D11ShaderResourceView* skinVertices = nullptr;
+    ID3D11ShaderResourceView* skinWeights = nullptr;
     AnimationBounds restBounds;
     std::vector<Mat4> restPalette;
     ID3D11Buffer* indexBuffer = nullptr;

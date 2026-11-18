@@ -4,6 +4,7 @@
 #include "Renderer.hpp"
 #include "SceneRenderData.hpp"
 #include "Window.hpp"
+#include "module/RenderBenchmark.hpp"
 
 #include <GLFW/glfw3.h>
 
@@ -61,6 +62,7 @@ int Application::run() {
     constexpr unsigned kWarmupFrames = 120;
     constexpr unsigned kSampleFrames = 600;
     const auto capturePath = benchmarkPath();
+    const RenderBenchmark benchmark(!capturePath.empty());
     std::ofstream capture;
     unsigned captured = 0;
     if (!capturePath.empty()) {
@@ -70,7 +72,7 @@ int Application::run() {
             onStop();
             return 1;
         }
-        capture << "frame_ms,gpu_frame_ms,draw_calls,set_pass_calls\n";
+        capture << "frame_ms,gpu_frame_ms,draw_calls,set_pass_calls,cpu_animation_ms,cpu_scene_sync_ms\n";
     }
     SceneRenderData renderData;
     std::size_t reportedAssetErrors = 0;
@@ -98,6 +100,7 @@ int Application::run() {
             visible ? static_cast<float>(width) / static_cast<float>(clientWidth) : 1.0f,
             visible ? static_cast<float>(height) / static_cast<float>(clientHeight) : 1.0f,
             focused, focused);
+        if (capture.is_open()) { RenderBenchmark::beginFrame(); }
         onUpdate(deltaSeconds);
         if (m_stopRequested) { break; }
         ui.update();
@@ -122,7 +125,8 @@ int Application::run() {
             const auto stats = renderer.gameViewStats();
             capture << static_cast<double>(deltaSeconds) * 1000.0 << ',';
             if (stats.gpuFrameTimeMs) { capture << *stats.gpuFrameTimeMs; }
-            capture << ',' << stats.drawCalls << ',' << stats.setPassCalls << '\n';
+            capture << ',' << stats.drawCalls << ',' << stats.setPassCalls << ','
+                << RenderBenchmark::animationMilliseconds() << ',' << stats.cpuSceneSyncMs << '\n';
             if (captured == kWarmupFrames + kSampleFrames) { break; }
         }
     }

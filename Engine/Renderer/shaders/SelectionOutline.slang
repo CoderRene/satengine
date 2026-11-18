@@ -1,5 +1,6 @@
 #ifdef SAT_SKINNED
 #include "Skinning.slang"
+cbuffer Skin : register(b5) { uint vertexBase; uint3 skinPadding; };
 #endif
 cbuffer Frame : register(b0)
 {
@@ -12,15 +13,6 @@ cbuffer Object : register(b1)
     float4 color;
 };
 
-struct VSIn
-{
-    float3 position : POSITION;
-#ifdef SAT_SKINNED
-    uint4 joints : BLENDINDICES;
-    float4 weights : BLENDWEIGHT;
-#endif
-};
-
 struct VSOut
 {
     float4 position : SV_Position;
@@ -28,13 +20,19 @@ struct VSOut
 };
 
 [shader("vertex")]
-VSOut vsMain(VSIn input)
+VSOut vsMain(
+#ifdef SAT_SKINNED
+    uint vertexId : SV_VertexID
+#else
+    float3 position : POSITION
+#endif
+)
 {
 #ifdef SAT_SKINNED
-    input.position = mul(float4(input.position, 1), skinColumns(input.joints, input.weights)).xyz;
+    float3 position = skinnedVertices[vertexBase + vertexId].position;
 #endif
     VSOut output;
-    float4 worldPos = mul(world, float4(input.position, 1.0f));
+    float4 worldPos = mul(world, float4(position, 1.0f));
     output.position = mul(viewProj, worldPos);
     output.color = color;
     return output;

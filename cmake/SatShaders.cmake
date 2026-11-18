@@ -33,7 +33,7 @@ foreach(pass Mesh SelectionOutline CameraFrustum TransformGizmo Grid PostProcess
         list(APPEND shader_outputs "${output}")
     endforeach()
 endforeach()
-foreach(pass ScatterInstances CullInstances DepthPyramid)
+foreach(pass ScatterInstances CullInstances DepthPyramid SkinVertices)
     set(output "${shader_dir}/${pass}.cs.dxbc")
     add_custom_command(OUTPUT "${output}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${shader_dir}"

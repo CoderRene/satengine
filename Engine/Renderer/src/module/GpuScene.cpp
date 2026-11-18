@@ -1,7 +1,5 @@
 #include "GpuScene.hpp"
 
-#include "AnimationSystem.hpp"
-
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -65,7 +63,7 @@ unsigned passesFor(const GpuMaterial& material) {
 }
 
 auto batchKey(const GpuScene::DrawRange& draw) {
-    return std::tuple{draw.passes, draw.mesh->skinBuffer != nullptr, draw.shaderKey,
+    return std::tuple{draw.passes, draw.mesh->skinVertices != nullptr, draw.shaderKey,
         reinterpret_cast<std::uintptr_t>(draw.material), reinterpret_cast<std::uintptr_t>(draw.mesh->vertexBuffer),
         reinterpret_cast<std::uintptr_t>(draw.mesh->indexBuffer), reinterpret_cast<std::uintptr_t>(draw.mesh),
         draw.firstIndex, draw.indexCount};
@@ -83,6 +81,7 @@ void splitOrigin(DVec3 origin, float* high, float* low) {
 
 bool GpuScene::Structured::ensure(ID3D11Device& device, std::size_t count, UINT stride, bool writable) {
     if (capacity >= count) { return true; }
+    if (count > std::numeric_limits<UINT>::max() / stride) { return false; }
     const auto size = std::bit_ceil(count);
     if (size > std::numeric_limits<UINT>::max() / stride) { return false; }
     D3D11_BUFFER_DESC desc{};
@@ -108,8 +107,8 @@ bool GpuScene::Structured::ensure(ID3D11Device& device, std::size_t count, UINT 
     return true;
 }
 
-void GpuScene::Structured::upload(ID3D11DeviceContext& context, const void* data, UINT bytes) const {
-    const D3D11_BOX box{0, 0, 0, bytes, 1, 1};
+void GpuScene::Structured::upload(ID3D11DeviceContext& context, const void* data, UINT bytes, UINT offset) const {
+    const D3D11_BOX box{offset, 0, 0, offset + bytes, 1, 1};
     context.UpdateSubresource(buffer.Get(), 0, &box, data, 0, 0);
 }
 
@@ -122,8 +121,8 @@ void GpuScene::rebuild(const GpuAssetCache& assets, const GpuMesh& cube, const S
     m_staticSources.clear();
     m_combined.clear();
     m_staticBatches = {};
-    m_animation = nullptr;
-    m_poseRevision = ~std::uint64_t{};
+    m_skinLayoutDirty = m_skinBindingsDirty = true;
+    m_skinnedVertexCount = 0;
     m_objects.reserve(list.scene ? m_sources.size() : static_cast<std::size_t>(list.meshCount));
     std::unordered_map<const GpuMaterial*, std::uint64_t> shaderKeys;
     const bool prepareStatic = list.scene || list.meshCount > 1;
@@ -136,7 +135,11 @@ void GpuScene::rebuild(const GpuAssetCache& assets, const GpuMesh& cube, const S
         auto& stored = m_objects.emplace_back(Object{{}, instance, mesh, node, sourceIndex,
             static_cast<unsigned>(m_thicknessScales.size())});
         stored.firstStaticSource = static_cast<unsigned>(m_staticSources.size());
-        if (mesh->skinBuffer) { m_skinnedObjects.push_back(object); }
+        if (mesh->skinVertices) {
+            stored.skinnedVertexBase = static_cast<unsigned>(m_skinnedVertexCount);
+            m_skinnedVertexCount += mesh->vertexCount;
+            m_skinnedObjects.push_back(object);
+        }
         if (id != kInvalidEntityId) { m_objectIndices.emplace(id, object); }
 
         const auto* material = assets.material(instance.materialPath);
@@ -157,7 +160,7 @@ void GpuScene::rebuild(const GpuAssetCache& assets, const GpuMesh& cube, const S
             const auto rangeIndex = m_ranges.size();
             m_ranges.push_back({{mesh, sectionMaterial, first, count, vertices, passes, key->second},
                 gpuIndex, center});
-            if (prepareStatic && (passes & meshQueueMask(MeshQueue::Opaque)) != 0 && !mesh->skinBuffer &&
+            if (prepareStatic && (passes & meshQueueMask(MeshQueue::Opaque)) != 0 && !mesh->skinVertices &&
                 !instance.meshPath.empty() && (node ? mesh->mergeNodeDraws : instance.combineStatic)) {
                 ++stored.staticSourceCount;
                 m_staticSources.push_back({&stored.meshInstance, mesh, sectionMaterial, first, count, rangeIndex, node});
@@ -344,42 +347,121 @@ bool GpuScene::uploadInstances(ID3D11DeviceContext& context, ID3D11Device& devic
     return true;
 }
 
-bool GpuScene::uploadPalettes(ID3D11DeviceContext& context, ID3D11Device& device, const SceneDrawList& list) {
-    const auto revision = list.animation ? list.animation->poseRevision() : 0;
-    if (list.scene && m_animation == list.animation && m_poseRevision == revision &&
-        m_editRevision == list.scene->editRevision()) { return true; }
-    m_palettes.clear();
-    m_paletteOffsets.clear();
+bool GpuScene::resolvePalettes(const SceneDrawList& list, std::size_t animatedCount) {
+    m_fallbackPalettes.clear();
+    bool changed = false;
+    std::unordered_map<const GpuMesh*, unsigned> restOffsets;
     for (const auto index : m_skinnedObjects) {
         auto& object = m_objects[index];
-        const Entity* entity = list.scene ? list.scene->entity(m_sources[object.sourceIndex].entityIndex) : nullptr;
-        const auto pose = entity && list.animation ? list.animation->meshPose(*entity) : AnimationMeshPose{};
-        const auto transient = list.scene ? std::span<const Mat4>{} :
-            std::span<const Mat4>{object.meshInstance.palette, object.meshInstance.paletteCount};
-        const auto animated = list.scene ? pose.palette : transient;
         const auto rest = std::span<const Mat4>(object.mesh->restPalette);
-        const bool useRest = animated.empty() || animated.size() < rest.size();
-        const auto palette = useRest ? rest : animated;
-        object.animatedBounds = useRest ? object.mesh->restBounds : pose.bounds;
-        const auto [entry, inserted] = m_paletteOffsets.try_emplace(palette.data(), static_cast<unsigned>(m_palettes.size()));
-        if (inserted) { m_palettes.insert(m_palettes.end(), palette.begin(), palette.end()); }
-        object.paletteOffset = entry->second;
+        const auto* entity = list.scene ? list.scene->entity(m_sources[object.sourceIndex].entityIndex) : nullptr;
+        const auto pose = entity && list.animation ? list.animation->meshPose(*entity) : AnimationMeshPose{};
+        const bool wasAnimated = object.animated;
+        const auto oldHandle = object.animationHandle;
+        const auto oldOffset = object.paletteOffset;
+        object.animated = !pose.palette.empty() && pose.palette.size() >= rest.size();
+        object.animationHandle = object.animated ? pose.handle : AnimationInstanceHandle{};
+        if (object.animated) {
+            object.paletteOffset = pose.paletteOffset;
+            object.animatedBounds = pose.bounds;
+        } else if (!list.scene && object.meshInstance.palette && object.meshInstance.paletteCount &&
+            object.meshInstance.paletteCount >= rest.size()) {
+            object.paletteOffset = static_cast<unsigned>(animatedCount + m_fallbackPalettes.size());
+            m_fallbackPalettes.insert(m_fallbackPalettes.end(), object.meshInstance.palette,
+                object.meshInstance.palette + object.meshInstance.paletteCount);
+            object.animatedBounds = {};
+        } else {
+            const auto [entry, inserted] = restOffsets.try_emplace(object.mesh,
+                static_cast<unsigned>(animatedCount + m_fallbackPalettes.size()));
+            if (inserted) { m_fallbackPalettes.insert(m_fallbackPalettes.end(), rest.begin(), rest.end()); }
+            object.paletteOffset = entry->second;
+            object.animatedBounds = object.mesh->restBounds;
+        }
+        const bool bindingChanged = wasAnimated != object.animated || oldHandle != object.animationHandle ||
+            oldOffset != object.paletteOffset;
+        object.boundsDirty |= bindingChanged;
+        changed |= bindingChanged;
     }
-    if (m_palettes.empty()) {
-        m_uploadedPalettes.clear();
-        m_animation = list.animation;
-        m_poseRevision = revision;
-        return true;
+    return changed;
+}
+
+bool GpuScene::skinVertices(ID3D11DeviceContext& context, ID3D11Device& device, ShaderLibrary& shaders,
+    const SceneDrawList& list) {
+    if (m_skinnedObjects.empty()) { return true; }
+    const auto* animation = list.scene ? list.animation : nullptr;
+    const auto layout = animation ? animation->layoutRevision() : 0;
+    const auto pose = animation ? animation->poseRevision() : 0;
+    m_skinLayoutDirty |= m_animation != animation || m_layoutRevision != layout;
+    const auto animated = animation ? animation->palettes() : std::span<const Mat4>{};
+    if (m_skinLayoutDirty || m_skinBindingsDirty) {
+        m_skinLayoutDirty |= resolvePalettes(list, animated.size());
+        m_skinBindingsDirty = false;
     }
-    if (!m_paletteBuffer.ensure(device, m_palettes.size(), sizeof(Mat4))) { return false; }
-    const auto bytes = m_palettes.size() * sizeof(Mat4);
-    if (m_uploadedPalettes.size() != m_palettes.size() ||
-        std::memcmp(m_uploadedPalettes.data(), m_palettes.data(), bytes) != 0) {
-        m_paletteBuffer.upload(context, m_palettes.data(), static_cast<UINT>(bytes));
-        m_palettes.swap(m_uploadedPalettes);
+    const bool layoutChanged = m_skinLayoutDirty;
+    const bool shaderChanged = m_skinShaderRevision != shaders.revision();
+    const bool poseChanged = m_poseRevision != pose;
+    if (!layoutChanged && !poseChanged && !shaderChanged) { return true; }
+
+    auto* shader = shaders.compute(ComputeShaderId::SkinVertices);
+    if (!shader) { return false; }
+    if (!m_skinDispatchCb) {
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = sizeof(SkinDispatchCb);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        if (FAILED(device.CreateBuffer(&desc, nullptr, m_skinDispatchCb.GetAddressOf()))) { return false; }
     }
-    m_animation = list.animation;
-    m_poseRevision = revision;
+    if (layoutChanged) {
+        if (animated.size() + m_fallbackPalettes.size() == 0 ||
+            !m_paletteBuffer.ensure(device, animated.size() + m_fallbackPalettes.size(), sizeof(Mat4)) ||
+            !m_skinnedVertices.ensure(device, m_skinnedVertexCount, sizeof(SkinnedVertex), true)) { return false; }
+        if (!m_fallbackPalettes.empty()) {
+            m_paletteBuffer.upload(context, m_fallbackPalettes.data(), static_cast<UINT>(m_fallbackPalettes.size() * sizeof(Mat4)),
+                static_cast<UINT>(animated.size_bytes()));
+        }
+    }
+    if ((layoutChanged || poseChanged) && !animated.empty()) {
+        m_paletteBuffer.upload(context, animated.data(), static_cast<UINT>(animated.size_bytes()));
+    }
+
+    // The vertex SRV was unbound before sync. Unbind the UAV before the draw passes pull from it.
+    context.CSSetShader(shader, nullptr, 0);
+    context.CSSetConstantBuffers(0, 1, m_skinDispatchCb.GetAddressOf());
+    context.CSSetUnorderedAccessViews(0, 1, m_skinnedVertices.output.GetAddressOf(), nullptr);
+    context.CSSetShaderResources(2, 1, m_paletteBuffer.view.GetAddressOf());
+    for (const auto index : m_skinnedObjects) {
+        auto& object = m_objects[index];
+        const auto version = object.animated ? animation->poseRevision(object.animationHandle) : 0;
+        const bool updated = object.animated && version != object.skinnedPoseRevision;
+        if (!layoutChanged && !shaderChanged && !updated) { continue; }
+        if (updated) {
+            object.animatedBounds = animation->bounds(object.animationHandle);
+            object.boundsDirty = true;
+        }
+        const auto& mesh = *object.mesh;
+        ID3D11ShaderResourceView* inputs[] = {mesh.skinVertices, mesh.skinWeights};
+        context.CSSetShaderResources(0, 2, inputs);
+        for (unsigned first = 0; first < mesh.vertexCount;) {
+            const auto count = std::min(kDispatchLimit, mesh.vertexCount - first);
+            const SkinDispatchCb constants{first, count, object.paletteOffset, object.skinnedVertexBase};
+            context.UpdateSubresource(m_skinDispatchCb.Get(), 0, nullptr, &constants, 0, 0);
+            context.Dispatch((count + kThreads - 1) / kThreads, 1, 1);
+            first += count;
+        }
+        object.skinnedPoseRevision = version;
+    }
+    ID3D11UnorderedAccessView* nullOutput = nullptr;
+    ID3D11ShaderResourceView* nullInputs[3]{};
+    ID3D11Buffer* nullBuffer = nullptr;
+    context.CSSetUnorderedAccessViews(0, 1, &nullOutput, nullptr);
+    context.CSSetShaderResources(0, 3, nullInputs);
+    context.CSSetConstantBuffers(0, 1, &nullBuffer);
+    context.CSSetShader(nullptr, nullptr, 0);
+    m_animation = animation;
+    m_poseRevision = pose;
+    m_layoutRevision = layout;
+    m_skinShaderRevision = shaders.revision();
+    m_skinLayoutDirty = false;
     return true;
 }
 
@@ -420,7 +502,7 @@ bool GpuScene::sync(ID3D11DeviceContext& context, ShaderLibrary& shaders, GpuAss
                 }
             }
         }
-        m_poseRevision = ~std::uint64_t{};
+        m_skinBindingsDirty = true;
         m_entities = entities.data();
         m_entityCount = entities.size();
         m_editRevision = list.scene->editRevision();
@@ -445,9 +527,7 @@ bool GpuScene::sync(ID3D11DeviceContext& context, ShaderLibrary& shaders, GpuAss
         }
         m_shaderRevision = shaders.revision();
     }
-    const bool posesChanged = m_poseRevision != (list.animation ? list.animation->poseRevision() : 0) ||
-        m_animation != list.animation;
-    if (!uploadPalettes(context, *device.Get(), list)) { return false; }
+    if (!skinVertices(context, *device.Get(), shaders, list)) { return false; }
 
     m_dirtyInstances.clear();
     m_dirtyStaticSources.clear();
@@ -455,7 +535,8 @@ bool GpuScene::sync(ID3D11DeviceContext& context, ShaderLibrary& shaders, GpuAss
     for (auto& object : m_objects) {
         const bool moved = !object.initialized || (list.scene &&
             !sameTransform(list.scene->entities()[m_sources[object.sourceIndex].entityIndex].transform, object.transform));
-        if (!moved && !m_allDirty && !(posesChanged && object.mesh->skinBuffer)) { continue; }
+        if (!moved && !m_allDirty && !object.boundsDirty) { continue; }
+        object.boundsDirty = false;
         if (list.scene && moved) {
             object.transform = list.scene->entities()[m_sources[object.sourceIndex].entityIndex].transform;
             object.meshInstance.world = matrixFromTRS({}, object.transform.rotation, object.transform.scale);
@@ -483,13 +564,13 @@ bool GpuScene::sync(ID3D11DeviceContext& context, ShaderLibrary& shaders, GpuAss
         if (object.animatedBounds.valid) {
             center = (object.animatedBounds.minimum + object.animatedBounds.maximum) * 0.5f;
             radius = length(object.animatedBounds.maximum - center);
-        } else if (mesh.skinBuffer) {
+        } else if (mesh.skinVertices) {
             // Keep a skinned object visible if its active pose has no conservative bound.
             radius = -1;
         }
         for (unsigned offset = 0; offset < object.instanceCount; ++offset) {
             const unsigned index = object.firstInstance + offset;
-            writeInstance(index, encodeInstance(world, position, center, radius, object.paletteOffset,
+            writeInstance(index, encodeInstance(world, position, center, radius, object.skinnedVertexBase,
                 m_thicknessScales[index]));
         }
         object.initialized = true;
@@ -500,7 +581,7 @@ bool GpuScene::sync(ID3D11DeviceContext& context, ShaderLibrary& shaders, GpuAss
         staticChanged = m_staticBatches.update(context, assets, m_staticSources, m_dirtyStaticSources, budgetAvailable, m_combined);
         m_staticFrame = frame;
     }
-    if (topology || staticChanged) {
+    if (m_tableDirty || staticChanged) {
         const auto& staticBatches = m_staticBatches.batches();
         const auto first = m_thicknessScales.size();
         m_instances.resize(first + staticBatches.size());
@@ -559,9 +640,10 @@ ID3D11PixelShader* GpuScene::customPixel(const GpuMaterial* material) const {
     return found == m_pixels.end() ? nullptr : found->second;
 }
 
-unsigned GpuScene::paletteOffset(EntityId id) const {
+std::optional<unsigned> GpuScene::skinnedVertexBase(EntityId id) const {
     const auto found = m_objectIndices.find(id);
-    return found == m_objectIndices.end() ? 0 : m_objects[found->second].paletteOffset;
+    if (found == m_objectIndices.end() || !m_objects[found->second].mesh->skinVertices) { return std::nullopt; }
+    return m_objects[found->second].skinnedVertexBase;
 }
 
 } // namespace sat

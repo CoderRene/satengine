@@ -3,7 +3,7 @@ public struct GpuInstance
     public float4 basisX, basisY, basisZ;
     public float4 normalX, normalY, normalZ;
     public float3 translationHigh;
-    public uint paletteOffset;
+    public uint paletteOffset; // Base of the computed skinned vertex range.
     public float3 translationLow;
     public uint flags;
     public float4 bounds;

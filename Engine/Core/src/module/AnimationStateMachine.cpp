@@ -1,5 +1,7 @@
 #include "AnimationStateMachine.hpp"
 
+#include <initializer_list>
+
 namespace sat {
 namespace {
 bool passes(const AnimationCondition& condition, double value) {
@@ -14,13 +16,22 @@ bool passes(const AnimationCondition& condition, double value) {
     return false;
 }
 }
-int animationTransition(const AnimationGraph& graph, std::uint32_t state, double normalizedTime,
-    std::span<const double> parameters, bool transitioning) {
-    for (int priority = 0; priority < 2; ++priority) {
-        for (std::size_t index = 0; index < graph.transitions.size(); ++index) {
+AnimationTransitionLists indexAnimationTransitions(const AnimationGraph& graph) {
+    AnimationTransitionLists lists;
+    lists.byState.resize(graph.states.size());
+    for (std::uint32_t i = 0; i < graph.transitions.size(); ++i) {
+        const auto source = graph.transitions[i].source;
+        auto& indices = source == kAnimationAnyState ? lists.anyState : lists.byState[source];
+        indices.push_back(i);
+    }
+    return lists;
+}
+int animationTransition(const AnimationGraph& graph, const AnimationTransitionLists& lists, std::uint32_t state,
+    double normalizedTime, std::span<const double> parameters, bool transitioning) {
+    for (const auto* transitions : {&lists.anyState, &lists.byState[state]}) {
+        for (const auto index : *transitions) {
             const auto& transition = graph.transitions[index];
-            if (transition.source != (priority == 0 ? kAnimationAnyState : static_cast<int>(state)) ||
-                ((transition.target == state || transitioning) && !transition.canInterruptSelf) ||
+            if (((transition.target == state || transitioning) && !transition.canInterruptSelf) ||
                 (transition.hasExitTime && normalizedTime < transition.exitTime)) { continue; }
             bool valid = true;
             for (const auto& condition : transition.conditions) {

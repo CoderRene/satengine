@@ -21,6 +21,7 @@ add_library(SatScene STATIC
     Core/src/AnimationSystem.cpp
     Core/src/module/AnimationSampler.cpp
     Core/src/module/AnimationStateMachine.cpp
+    Core/src/module/WorkerPool.cpp
     Core/src/SceneFile.cpp
     Core/src/module/ScenePhysicsFile.cpp
     Core/src/module/SceneAudioFile.cpp
@@ -35,7 +36,8 @@ target_include_directories(SatScene PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/include"
 )
 target_compile_features(SatScene PUBLIC cxx_std_20)
-target_link_libraries(SatScene PUBLIC SatAssets)
+find_package(Threads REQUIRED)
+target_link_libraries(SatScene PUBLIC SatAssets PRIVATE Threads::Threads)
 
 add_library(SatPak STATIC Core/src/PakArchive.cpp Core/src/module/Pak/PakCrypto.cpp)
 if(WIN32)
@@ -146,7 +148,6 @@ if(BUILD_TESTING)
     add_test(NAME AssetCache COMMAND AssetCacheTests)
     set_tests_properties(AssetCache PROPERTIES TIMEOUT 20)
 
-    find_package(Threads REQUIRED)
     add_executable(TextureThumbnailTests
         Core/tests/TextureThumbnailTests.cpp
         Renderer/src/module/AssetThumbnailLoader.cpp

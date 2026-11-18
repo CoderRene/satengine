@@ -11,9 +11,10 @@ namespace sat {
 void writeAnimationComponent(std::ostream& out, const Entity& entity) {
     const auto& animator = entity.animator;
     out << entity.hasAnimator << ' ' << std::quoted(animator.clip) << ' ' << std::quoted(animator.controllerPath)
-        << ' ' << animator.playOnStart << ' ' << animator.loop << ' ' << animator.speed << ' ' << animator.crossfadeSeconds << '\n';
+        << ' ' << animator.playOnStart << ' ' << animator.loop << ' ' << animator.speed << ' ' << animator.crossfadeSeconds
+        << ' ' << static_cast<int>(animator.rotationBlend) << ' ' << static_cast<int>(animator.cullingMode) << '\n';
 }
-bool readAnimationComponent(std::istream& in, Entity& entity, std::string& error) {
+bool readAnimationComponent(std::istream& in, Entity& entity, bool hasModes, std::string& error) {
     auto& animator = entity.animator;
     if (!(in >> entity.hasAnimator >> std::quoted(animator.clip) >> std::quoted(animator.controllerPath)
         >> animator.playOnStart >> animator.loop >> animator.speed >> animator.crossfadeSeconds) ||
@@ -21,6 +22,16 @@ bool readAnimationComponent(std::istream& in, Entity& entity, std::string& error
         (!animator.controllerPath.empty() && !isAnimationGraphAssetPath(animator.controllerPath)) ||
         (entity.hasAnimator && entity.hasMesh && !isGltfAssetPath(entity.mesh.meshPath))) {
         error = "Invalid Animator component or mesh"; return false;
+    }
+    if (hasModes) {
+        int rotationBlend = 0, cullingMode = 0;
+        if (!(in >> rotationBlend >> cullingMode) ||
+            rotationBlend < 0 || rotationBlend > static_cast<int>(AnimationRotationBlend::Nlerp) ||
+            cullingMode < 0 || cullingMode > static_cast<int>(AnimationCullingMode::Automatic)) {
+            error = "Invalid Animator interpolation or culling mode"; return false;
+        }
+        animator.rotationBlend = static_cast<AnimationRotationBlend>(rotationBlend);
+        animator.cullingMode = static_cast<AnimationCullingMode>(cullingMode);
     }
     return true;
 }

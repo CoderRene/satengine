@@ -1,7 +1,5 @@
 import GpuInstance;
-#ifdef SAT_SKINNED
 #include "Skinning.slang"
-#endif
 import Common;
 import Brdf;
 import Lighting;
@@ -106,48 +104,48 @@ float shadowVisibility(float3 position, float3 normal, float3 l, float viewDepth
 
 struct VertexInput
 {
+#ifndef SAT_SKINNED
     float3 position : POSITION;
-#ifdef SAT_SKINNED
-    uint4 joints : BLENDINDICES;
-    float4 weights : BLENDWEIGHT;
-#endif
     float3 normal : NORMAL;
+    float4 tangent : TANGENT;
+#endif
     float2 uv : TEXCOORD0;
     float2 uv1 : TEXCOORD1;
     float4 color : COLOR0;
-    float4 tangent : TANGENT;
     uint instanceIndex : INSTANCE0;
 };
 
 StructuredBuffer<GpuInstance> instances : register(t13);
 
 [shader("vertex")]
-MeshFragment vsMain(VertexInput input)
+MeshFragment vsMain(VertexInput input
+#ifdef SAT_SKINNED
+    , uint vertexId : SV_VertexID
+#endif
+)
 {
     GpuInstance instance = instances[input.instanceIndex];
 #ifdef SAT_SKINNED
-    float4x4 skin = skinColumns(input.joints, input.weights, instance.paletteOffset);
-    input.position = mul(float4(input.position, 1), skin).xyz;
-    float3 sx = skin[0].xyz;
-    float3 sy = skin[1].xyz;
-    float3 sz = skin[2].xyz;
-    float determinant = dot(sx, cross(sy, sz));
-    input.normal = (cross(sy, sz) * input.normal.x + cross(sz, sx) * input.normal.y + cross(sx, sy) * input.normal.z) * (determinant < 0 ? -1.0 : 1.0);
-    input.tangent.xyz = mul(float4(input.tangent.xyz, 0), skin).xyz;
-    input.tangent.w *= determinant < 0 ? -1.0 : 1.0;
+    // Skinned meshes have dedicated buffers, with an indexed draw base vertex of zero.
+    SkinnedVertex vertex = skinnedVertices[instance.paletteOffset + vertexId];
+#else
+    SkinnedVertex vertex;
+    vertex.position = input.position;
+    vertex.normal = input.normal;
+    vertex.tangent = input.tangent;
 #endif
     MeshFragment output;
     float3 translation = relativeTranslation(instance, originHigh.xyz, originLow.xyz);
-    float3 position = instance.basisX.xyz * input.position.x + instance.basisY.xyz * input.position.y +
-        instance.basisZ.xyz * input.position.z + translation;
+    float3 position = instance.basisX.xyz * vertex.position.x + instance.basisY.xyz * vertex.position.y +
+        instance.basisZ.xyz * vertex.position.z + translation;
     output.position = mul(viewProj, float4(position, 1));
     output.worldPosition = position;
     output.clipW = output.position.w;
-    output.normal = instance.normalX.xyz * input.normal.x + instance.normalY.xyz * input.normal.y +
-        instance.normalZ.xyz * input.normal.z;
-    float3 tangent = instance.basisX.xyz * input.tangent.x + instance.basisY.xyz * input.tangent.y +
-        instance.basisZ.xyz * input.tangent.z;
-    output.tangent = float4(tangent, input.tangent.w * instance.normalX.w);
+    output.normal = instance.normalX.xyz * vertex.normal.x + instance.normalY.xyz * vertex.normal.y +
+        instance.normalZ.xyz * vertex.normal.z;
+    float3 tangent = instance.basisX.xyz * vertex.tangent.x + instance.basisY.xyz * vertex.tangent.y +
+        instance.basisZ.xyz * vertex.tangent.z;
+    output.tangent = float4(tangent, vertex.tangent.w * instance.normalX.w);
     output.uv = input.uv;
     output.uv1 = input.uv1;
     output.color = input.color;

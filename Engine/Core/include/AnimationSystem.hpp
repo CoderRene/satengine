@@ -1,6 +1,7 @@
 #pragma once
 #include "AssetData.hpp"
 #include "Scene.hpp"
+#include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
@@ -11,9 +12,19 @@ namespace sat {
 // Resolves a mesh directly or a single glTF asset represented by descendant mesh nodes.
 [[nodiscard]] std::string_view animatorMeshPath(const Scene& scene, const Entity& entity);
 
+// A dense lookup token valid for the layout that issued it.
+struct AnimationInstanceHandle {
+    std::uint64_t layoutRevision = 0;
+    std::uint32_t index = ~std::uint32_t{};
+
+    bool operator==(const AnimationInstanceHandle&) const = default;
+};
+
 struct AnimationMeshPose {
     std::span<const Mat4> palette;
     AnimationBounds bounds;
+    std::uint32_t paletteOffset = 0;
+    AnimationInstanceHandle handle;
 };
 
 struct AnimationDebugView {
@@ -48,6 +59,10 @@ public:
     [[nodiscard]] std::span<const Mat4> palette(EntityId entity) const;
     [[nodiscard]] std::span<const Mat4> meshPalette(const Entity& meshEntity) const;
     [[nodiscard]] AnimationMeshPose meshPose(const Entity& meshEntity) const;
+    [[nodiscard]] std::span<const Mat4> palettes() const;
+    [[nodiscard]] std::uint64_t layoutRevision() const;
+    [[nodiscard]] AnimationBounds bounds(AnimationInstanceHandle handle) const;
+    [[nodiscard]] std::uint64_t poseRevision(AnimationInstanceHandle handle) const;
     [[nodiscard]] std::uint64_t poseRevision() const;
     [[nodiscard]] bool setBool(EntityId entity, std::string_view name, bool value);
     [[nodiscard]] bool setFloat(EntityId entity, std::string_view name, float value);
