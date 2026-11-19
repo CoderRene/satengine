@@ -17,7 +17,7 @@ matter for a real game.
 | ------------------------ | --------------------------------- | ------------------------------------------------------ |
 | Done                     | **Working baseline**              | Edit, play, script, physics, audio, UI, package a game |
 | Done                     | **Better art import**             | Drop in modern mesh files (glTF) instead of OBJ-only   |
-| **Next**                 | **Animation**                     | Moving parts, crew, hatches, turrets, simple cutscenes |
+| **Ongoing**              | **Animation**                     | Moving parts, crew, hatches, turrets, simple cutscenes |
 | Soon                     | **Editor comfort**                | Undo, snapping, easier multi-object layout             |
 | Later                    | **Richer space physics**          | Docking joints, hinged parts, better station collision |
 | Later                    | **Bigger projects**               | Faster iteration as scenes and asset folders grow      |

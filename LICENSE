@@ -1,0 +1,128 @@
+SatEngine Proprietary Source-Available License
+Copyright (c) 2026 Rene Tajos Jr. All rights reserved.
+
+================================================================================
+NOTICE — THIS IS NOT AN OPEN SOURCE LICENSE
+================================================================================
+
+This software is source-available proprietary software. Access to the source
+code does not grant open-source rights. This license is not approved by the
+Open Source Initiative (OSI) and does not meet the definition of “open source”
+or “free software.”
+
+Except for the limited rights expressly granted below, all rights are reserved
+by the copyright holder.
+
+================================================================================
+1. DEFINITIONS
+================================================================================
+
+“Software” means SatEngine, including its source code, object code, binaries,
+documentation, assets, examples, tools, and any accompanying materials, in
+whole or in part.
+
+“You” means the individual or legal entity exercising rights under this
+license.
+
+“Licensor” means Rene Tajos Jr.
+
+================================================================================
+2. LICENSE GRANT
+================================================================================
+
+Subject to the terms of this license, Licensor grants You a personal,
+non-exclusive, non-transferable, non-sublicensable, revocable license to:
+
+  (a) view, read, and study the source code of the Software;
+  (b) compile and run the Software on devices You own or control, solely for
+      personal evaluation, education, or non-commercial experimentation; and
+  (c) make private modifications to the Software solely for the uses in (b),
+      provided such modifications are not distributed.
+
+No other rights are granted, whether by implication, estoppel, or otherwise.
+
+================================================================================
+3. RESTRICTIONS
+================================================================================
+
+You may NOT, without prior written permission from Licensor:
+
+  (a) use the Software, or any modified version of it, for any commercial
+      purpose, including but not limited to selling, licensing, hosting,
+      consulting, training, advertising, or providing paid services that
+      depend on the Software;
+  (b) distribute, publish, share, upload, sell, lease, rent, or otherwise
+      make available the Software, or any portion or derivative of it, in
+      source or binary form;
+  (c) sublicense, assign, or transfer any rights under this license;
+  (d) remove, obscure, or alter any copyright, trademark, or proprietary
+      notices;
+  (e) use the Software to develop a competing game engine or middleware
+      product that is distributed or offered to third parties; or
+  (f) claim that the Software is open source, free software, or licensed
+      under any OSI-approved or FSF-approved license.
+
+Third-party components included with the Software remain under their own
+licenses. Those licenses control only those components and do not expand Your
+rights in SatEngine itself.
+
+================================================================================
+4. OWNERSHIP
+================================================================================
+
+The Software is licensed, not sold. Licensor retains all title, ownership,
+and intellectual property rights in and to the Software and all copies.
+Any feedback You provide may be used by Licensor without obligation or
+attribution.
+
+================================================================================
+5. NO TRADEMARK LICENSE
+================================================================================
+
+This license does not grant permission to use the names “SatEngine”,
+“Licensor”, or any related logos or trademarks, except as required for
+reasonable and customary use in describing the origin of the Software.
+
+================================================================================
+6. TERMINATION
+================================================================================
+
+This license terminates automatically if You breach any of its terms.
+Upon termination, You must cease all use of the Software and destroy all
+copies in Your possession or control. Sections 4, 5, 7, 8, and 9 survive
+termination.
+
+================================================================================
+7. DISCLAIMER OF WARRANTY
+================================================================================
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. YOU ASSUME
+ALL RISK ARISING FROM USE OF THE SOFTWARE.
+
+================================================================================
+8. LIMITATION OF LIABILITY
+================================================================================
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, LICENSOR SHALL NOT BE LIABLE FOR
+ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE
+DAMAGES, OR ANY LOSS OF PROFITS, DATA, OR GOODWILL, ARISING OUT OF OR
+RELATED TO THIS LICENSE OR THE SOFTWARE, WHETHER IN CONTRACT, TORT
+(INCLUDING NEGLIGENCE), OR OTHERWISE, EVEN IF ADVISED OF THE POSSIBILITY
+OF SUCH DAMAGES. LICENSOR’S TOTAL LIABILITY SHALL NOT EXCEED THE AMOUNT
+YOU PAID (IF ANY) FOR THE SOFTWARE, OR ZERO IF YOU RECEIVED IT AT NO COST.
+
+================================================================================
+9. GENERAL
+================================================================================
+
+This license is the entire agreement between You and Licensor concerning
+the Software and supersedes prior or contemporaneous communications on
+this subject. If any provision is held unenforceable, the remaining
+provisions remain in effect. Failure to enforce any provision is not a
+waiver. This license is governed by the laws of the jurisdiction in which
+Licensor resides, excluding conflict-of-law rules.
+
+For commercial licensing, redistribution rights, or other permissions,
+contact: rene.tajosjr@gmail.com

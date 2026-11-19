@@ -22,20 +22,6 @@ Forward PBR [lighting and materials](docs/Lighting.md) with [Slang shaders](docs
 
 Prioritized next work: [docs/Roadmap.md](docs/Roadmap.md) (content pipeline → animation → editor undo → physics depth).
 
-## Try an example
-
-Open any folder under `Examples/` as a project in the editor, then press **Play**.
-
-| Example | Try this if you want… |
-| --- | --- |
-| [LuaCube](Examples/LuaCube) | A minimal Lua-driven scene |
-| [AssetLoading](Examples/AssetLoading) | Imported meshes and textured materials |
-| [GltfAnimation](Examples/GltfAnimation) | A rigged signal beacon driven by an embedded glTF clip |
-| [LightingDemo](Examples/LightingDemo) | Directional, point, and spot lights with metallic-roughness materials |
-| [SpacePhysics](Examples/SpacePhysics) | Rigid bodies, gravity, triggers |
-| [AudioDemo](Examples/AudioDemo) | Spatial audio, buses, time scale |
-| [GameUiDemo](Examples/GameUiDemo) | An interactive RmlUi HUD driven by Lua |
-
 ## Requirements
 
 - Windows
@@ -71,8 +57,7 @@ cmake --build --preset windows-gameplayer-release
 From the editor, **Build > Build Standalone** writes
 `<project>/Build/<project-folder-name>.exe` plus its `.pak` files.
 
-<details>
-<summary>More build options</summary>
+More build options
 
 - `SAT_BUILD_EDITOR=OFF` skips ImGui and the editor target.
 - Default `windows` preset can build either `--target Editor` or `--target GamePlayer`.
@@ -85,8 +70,6 @@ cmake --install build-gameplayer --config Release --prefix dist/SatGame
 ```
 
 Ship the exe together with its `.pak` parts. An MSVC runtime is required on the target machine.
-
-</details>
 
 ## Docs
 
@@ -112,8 +95,6 @@ Ship the exe together with its `.pak` parts. An MSVC runtime is required on the 
 | `docs/` | Feature guides |
 | `scripts/` | Build and run helpers |
 
-Library split (for contributors): `SatScene` → `SatScripting` (+ physics/audio) → `SatRuntime` → `SatEditor`.
-
 ## Tests
 
 ```powershell
@@ -131,4 +112,12 @@ ctest --test-dir /tmp/sat-scene-tests --output-on-failure
 
 ## License
 
-**TBD** — not decided yet while the project is still in flux.
+**SatEngine is not open source.**
+
+It is proprietary **source-available** software under the [SatEngine Proprietary Source-Available License](LICENSE). That means:
+
+- You **may** view the source and use it for personal evaluation, education, or non-commercial experimentation.
+- You **may not** redistribute it, use it commercially, or claim it is open source / free software.
+- Third-party components under `Engine/ThirdParty/` (and similar) keep their own licenses; those do not make SatEngine open source.
+
+Commercial use, redistribution, or other rights require prior written permission — see [LICENSE](LICENSE).
