@@ -8,13 +8,15 @@
 #include <ostream>
 
 namespace sat {
-void writeAnimationComponent(std::ostream& out, const Entity& entity) {
+void writeAnimationComponent(std::ostream& out, const Entity& entity, bool hasOcclusionRadius) {
     const auto& animator = entity.animator;
     out << entity.hasAnimator << ' ' << std::quoted(animator.clip) << ' ' << std::quoted(animator.controllerPath)
         << ' ' << animator.playOnStart << ' ' << animator.loop << ' ' << animator.speed << ' ' << animator.crossfadeSeconds
-        << ' ' << static_cast<int>(animator.rotationBlend) << ' ' << static_cast<int>(animator.cullingMode) << '\n';
+        << ' ' << static_cast<int>(animator.rotationBlend) << ' ' << static_cast<int>(animator.cullingMode);
+    if (hasOcclusionRadius) { out << ' ' << animator.occlusionRadius; }
+    out << '\n';
 }
-bool readAnimationComponent(std::istream& in, Entity& entity, bool hasModes, std::string& error) {
+bool readAnimationComponent(std::istream& in, Entity& entity, bool hasModes, bool hasOcclusionRadius, std::string& error) {
     auto& animator = entity.animator;
     if (!(in >> entity.hasAnimator >> std::quoted(animator.clip) >> std::quoted(animator.controllerPath)
         >> animator.playOnStart >> animator.loop >> animator.speed >> animator.crossfadeSeconds) ||
@@ -32,6 +34,10 @@ bool readAnimationComponent(std::istream& in, Entity& entity, bool hasModes, std
         }
         animator.rotationBlend = static_cast<AnimationRotationBlend>(rotationBlend);
         animator.cullingMode = static_cast<AnimationCullingMode>(cullingMode);
+    }
+    if (hasOcclusionRadius && (!(in >> animator.occlusionRadius) ||
+            !std::isfinite(animator.occlusionRadius) || animator.occlusionRadius < 0)) {
+        error = "Invalid Animator occlusion radius"; return false;
     }
     return true;
 }

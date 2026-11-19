@@ -262,4 +262,105 @@ bool GpuCulling::buildDepth(ID3D11Device& device, ID3D11DeviceContext& context, 
     return true;
 }
 
+void GpuCulling::sampleAnimationOcclusion(ID3D11Device& device, ID3D11DeviceContext& context,
+    ShaderLibrary& shaders, AnimationSystem& animation) {
+    using Microsoft::WRL::ComPtr;
+    if (!m_depth.valid) { return; }
+    if (m_animationOwner != &animation) {
+        m_animationReadbacks = {};
+        m_animationReadbackIndex = 0;
+        m_animationOwner = &animation;
+    }
+    for (unsigned offset = 0; offset < m_animationReadbacks.size(); ++offset) {
+        auto& pending = m_animationReadbacks[(m_animationReadbackIndex + offset) % m_animationReadbacks.size()];
+        if (!pending.pending) { continue; }
+        D3D11_MAPPED_SUBRESOURCE mapped{};
+        const HRESULT status = context.Map(pending.staging.Get(), 0, D3D11_MAP_READ,
+            D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+        if (status == DXGI_ERROR_WAS_STILL_DRAWING) { break; }
+        pending.pending = false;
+        if (SUCCEEDED(status)) {
+            const auto* results = static_cast<const std::uint32_t*>(mapped.pData);
+            animation.submitOcclusion(pending.stamp, pending.probes, {results, pending.probes.size()});
+            context.Unmap(pending.staging.Get(), 0);
+        }
+    }
+    auto& slot = m_animationReadbacks[m_animationReadbackIndex];
+    if (slot.pending) { return; } // Never wait for readback slots to become available.
+    slot.stamp = animation.collectOcclusionProbes(slot.probes);
+    if (slot.probes.empty()) { return; }
+    const auto count = static_cast<UINT>(slot.probes.size());
+    const UINT bytes = count * static_cast<UINT>(sizeof(std::uint32_t));
+    if (count > m_animationProbeCapacity) {
+        const UINT capacity = std::bit_ceil(count);
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = capacity * 16;
+        desc.Usage = D3D11_USAGE_DYNAMIC;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        D3D11_SHADER_RESOURCE_VIEW_DESC input{};
+        input.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        input.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        input.Buffer.NumElements = capacity;
+        ComPtr<ID3D11Buffer> buffer;
+        ComPtr<ID3D11ShaderResourceView> view;
+        if (FAILED(device.CreateBuffer(&desc, nullptr, buffer.GetAddressOf())) ||
+            FAILED(device.CreateShaderResourceView(buffer.Get(), &input, view.GetAddressOf()))) { return; }
+        m_animationProbes = std::move(buffer);
+        m_animationProbeView = std::move(view);
+        m_animationProbeCapacity = capacity;
+    }
+    if (!m_animationResults.ensure(device, bytes, 0, 0)) { return; }
+    if (slot.bytes < bytes) {
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = std::bit_ceil(bytes);
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Buffer> staging;
+        if (FAILED(device.CreateBuffer(&desc, nullptr, staging.GetAddressOf()))) { return; }
+        slot.staging = std::move(staging);
+        slot.bytes = desc.ByteWidth;
+    }
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(context.Map(m_animationProbes.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) { return; }
+    auto* values = static_cast<float*>(mapped.pData);
+    for (const auto& probe : slot.probes) {
+        const auto position = toVec3(probe.transform.position - m_depth.origin);
+        *values++ = position.x;
+        *values++ = position.y;
+        *values++ = position.z;
+        *values++ = probe.radius;
+    }
+    context.Unmap(m_animationProbes.Get(), 0);
+
+    CullCb constants{};
+    constants.phase = 3;
+    constants.itemCount = count;
+    constants.hiZViewProj = m_depth.viewProj;
+    constants.hiZLevels = static_cast<unsigned>(m_depth.levels.size());
+    constants.width = m_depth.width;
+    constants.height = m_depth.height;
+    constants.paddedWidth = m_depth.paddedWidth;
+    constants.paddedHeight = m_depth.paddedHeight;
+    context.UpdateSubresource(m_cullCb.Get(), 0, nullptr, &constants, 0, 0);
+    context.CSSetShaderResources(2, 1, m_depth.allLevels.GetAddressOf());
+    context.CSSetShaderResources(4, 1, m_animationProbeView.GetAddressOf());
+    context.CSSetUnorderedAccessViews(4, 1, m_animationResults.view.GetAddressOf(), nullptr);
+    context.CSSetConstantBuffers(0, 1, m_cullCb.GetAddressOf());
+    context.CSSetShader(shaders.compute(ComputeShaderId::CullInstances), nullptr, 0);
+    context.Dispatch((count + kCullThreads - 1) / kCullThreads, 1, 1);
+    ID3D11ShaderResourceView* nullInput = nullptr;
+    ID3D11UnorderedAccessView* nullOutput = nullptr;
+    context.CSSetShaderResources(2, 1, &nullInput);
+    context.CSSetShaderResources(4, 1, &nullInput);
+    context.CSSetUnorderedAccessViews(4, 1, &nullOutput, nullptr);
+    context.CSSetShader(nullptr, nullptr, 0);
+
+    const D3D11_BOX source{0, 0, 0, bytes, 1, 1};
+    context.CopySubresourceRegion(slot.staging.Get(), 0, 0, 0, 0, m_animationResults.buffer.Get(), 0, &source);
+    slot.pending = true;
+    m_animationReadbackIndex = (m_animationReadbackIndex + 1) % static_cast<unsigned>(m_animationReadbacks.size());
+}
+
 } // namespace sat

@@ -500,6 +500,17 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             animator.cullingMode = static_cast<AnimationCullingMode>(cullingMode);
             changed = true;
         }
+        if (animator.cullingMode == AnimationCullingMode::Automatic) {
+            float radius = animator.occlusionRadius;
+            if (ImGui::InputFloat("Occlusion Radius", &radius) && std::isfinite(radius) && radius >= 0) {
+                animator.occlusionRadius = radius;
+                changed = true;
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Standalone decorative meshes only. Enclose every pose in a local sphere "
+                    "centered on the entity pivot. Set to 0 to disable. Directional shadows must be off.");
+            }
+        }
         if (!m_impl->controllerMode) {
             changed |= ImGui::DragFloat("Crossfade Seconds", &animator.crossfadeSeconds, 0.01f, 0, 60);
         } else if (const float defaultCrossfade = AnimatorComponent{}.crossfadeSeconds;

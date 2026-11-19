@@ -5,10 +5,12 @@ StructuredBuffer<GpuInstance> instances : register(t0);
 StructuredBuffer<DrawItem> items : register(t1);
 Texture2D<float> hiZ : register(t2);
 ByteAddressBuffer retestCount : register(t3);
+Buffer<float4> animationProbes : register(t4);
 RWByteAddressBuffer args : register(u0);
 RWByteAddressBuffer visible : register(u1);
 RWByteAddressBuffer rejected : register(u2);
 RWByteAddressBuffer retestDispatch : register(u3);
+RWByteAddressBuffer animationOcclusion : register(u4);
 
 cbuffer Cull : register(b0)
 {
@@ -65,6 +67,16 @@ bool occluded(float3 center, float radius)
 [numthreads(64, 1, 1)]
 void csMain(uint3 thread : SV_DispatchThreadID)
 {
+    if (phase == 3)
+    {
+        if (thread.x < itemCount)
+        {
+            float4 sphere = animationProbes[thread.x];
+            bool hidden = all(isfinite(sphere)) && occluded(sphere.xyz, sphere.w);
+            animationOcclusion.Store(thread.x * 4, hidden ? 1u : 0u);
+        }
+        return;
+    }
     uint count = phase == 2 ? retestCount.Load(12) : itemCount;
     if (thread.x >= count) { return; }
     uint index = phase == 2 ? rejected.Load(thread.x * 4) : firstItem + thread.x;

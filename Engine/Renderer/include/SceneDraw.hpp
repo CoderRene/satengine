@@ -93,6 +93,8 @@ struct SceneDrawList {
     // Borrowed scene inputs are valid through submission. Meshes are for previews.
     const Scene* scene = nullptr;
     const AnimationSystem* animation = nullptr;
+    // Optional feedback sink supplied by the standalone player for its only view.
+    AnimationSystem* animationOcclusion = nullptr;
     EntityId selected = kInvalidEntityId;
     const MeshInstance* meshes = nullptr;
     int meshCount = 0;

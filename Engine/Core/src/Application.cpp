@@ -1,5 +1,7 @@
 #include "Application.hpp"
 
+#include "AnimationSystem.hpp"
+
 #include "GameUi.hpp"
 #include "Renderer.hpp"
 #include "SceneRenderData.hpp"
@@ -53,6 +55,7 @@ int Application::run() {
     m_input = window.input();
     m_stopRequested = false;
     onStart();
+    if (m_animation) { m_animation->enableOcclusionFeedback(); }
     renderer.setAssetReader(m_assetReader);
     renderer.setShaderReader(m_shaderReader);
     if (!m_stopRequested && !renderer.initializeShaders()) {
@@ -75,6 +78,7 @@ int Application::run() {
         capture << "frame_ms,gpu_frame_ms,draw_calls,set_pass_calls,cpu_animation_ms,cpu_scene_sync_ms\n";
     }
     SceneRenderData renderData;
+    int previousWidth = 0, previousHeight = 0;
     std::size_t reportedAssetErrors = 0;
     auto previous = std::chrono::steady_clock::now();
     while (!m_stopRequested && !window.shouldClose()) {
@@ -90,6 +94,11 @@ int Application::run() {
         int height = 0;
         auto* nativeWindow = static_cast<GLFWwindow*>(window.nativeHandle());
         glfwGetFramebufferSize(nativeWindow, &width, &height);
+        if (width != previousWidth || height != previousHeight) {
+            if (m_animation) { m_animation->invalidateOcclusion(); }
+            previousWidth = width;
+            previousHeight = height;
+        }
         int clientWidth = 0;
         int clientHeight = 0;
         glfwGetWindowSize(nativeWindow, &clientWidth, &clientHeight);
@@ -111,7 +120,9 @@ int Application::run() {
         }
         renderer.newFrame();
         renderData.update(m_scene, width, height, m_animation);
-        if (!renderer.renderWindow(renderData.camera(), renderData.drawList())) {
+        auto drawList = renderData.drawList();
+        drawList.animationOcclusion = renderData.hasCamera() ? m_animation : nullptr;
+        if (!renderer.renderWindow(renderData.camera(), drawList)) {
             onStop();
             return 1;
         }

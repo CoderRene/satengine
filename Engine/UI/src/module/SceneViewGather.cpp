@@ -1,5 +1,6 @@
 #include "EditorState.hpp"
 
+#include "AnimationSystem.hpp"
 #include "ColliderLines.hpp"
 #include "SceneDraw.hpp"
 #include <imgui.h>
@@ -7,9 +8,33 @@
 #include <cmath>
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 namespace sat {
 namespace {
+
+void appendAnimationOcclusionSphere(const Entity& entity, DVec3 renderOrigin, std::vector<DebugLine>& lines) {
+    if (!entity.hasAnimator || entity.animator.cullingMode != AnimationCullingMode::Automatic) { return; }
+    const float radius = animationOcclusionWorldRadius(entity);
+    const auto center = toVec3(entity.transform.position - renderOrigin);
+    if (!(radius > 0) || !std::isfinite(radius) ||
+        !std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(center.z)) { return; }
+
+    constexpr int kSegments = 48;
+    constexpr float kTurn = 6.28318530718f;
+    constexpr Vec3 kColor{0.2f, 0.85f, 1.0f};
+    float a = radius, b = 0;
+    for (int i = 1; i <= kSegments; ++i) {
+        const float angle = static_cast<float>(i) * kTurn / kSegments;
+        const float nextA = i == kSegments ? radius : std::cos(angle) * radius;
+        const float nextB = i == kSegments ? 0.0f : std::sin(angle) * radius;
+        lines.push_back({center + Vec3{a, b, 0}, center + Vec3{nextA, nextB, 0}, kColor});
+        lines.push_back({center + Vec3{a, 0, b}, center + Vec3{nextA, 0, nextB}, kColor});
+        lines.push_back({center + Vec3{0, a, b}, center + Vec3{0, nextA, nextB}, kColor});
+        a = nextA;
+        b = nextB;
+    }
+}
 
 void mixViewBytes(std::uint64_t& hash, const void* data, std::size_t size) {
     const auto* bytes = static_cast<const unsigned char*>(data);
@@ -172,6 +197,11 @@ void EditorSession::renderViews() {
         }
     }
 
+    const Entity* gizmoEntity = showLiveScene ? visibleScene.entityById(selectedId) : selected;
+    if (gizmoEntity) {
+        appendAnimationOcclusionSphere(*gizmoEntity, sceneCamera.renderOrigin, colliderLines);
+    }
+
     SceneDrawList sceneDraw{};
     sceneDraw.debugLines = colliderLines.data();
     sceneDraw.debugLineCount = static_cast<int>(colliderLines.size());
@@ -195,7 +225,6 @@ void EditorSession::renderViews() {
     sceneDraw.frustumCount = static_cast<int>(frustumInstances.size());
     sceneDraw.drawGrid = true;
     sceneDraw.drawEditorOverlay = true;
-    const Entity* gizmoEntity = showLiveScene ? visibleScene.entityById(selectedId) : selected;
     if (state.viewport && gizmoEntity) {
         sceneDraw.showTransformGizmo = true;
         sceneDraw.gizmo = state.viewport->gizmo(*gizmoEntity);

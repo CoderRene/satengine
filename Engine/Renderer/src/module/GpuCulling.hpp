@@ -26,6 +26,8 @@ public:
         ID3D11ShaderResourceView* depth, UINT width, UINT height, const Mat4& viewProj, DVec3 origin);
     [[nodiscard]] bool hasDepth(ID3D11ShaderResourceView* source, UINT width, UINT height) const;
     void invalidateDepth() { m_depth.valid = false; }
+    void sampleAnimationOcclusion(ID3D11Device& device, ID3D11DeviceContext& context, ShaderLibrary& shaders,
+        AnimationSystem& animation);
 private:
     struct RawBuffer {
         Microsoft::WRL::ComPtr<ID3D11Buffer> buffer;
@@ -56,6 +58,20 @@ private:
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_retestView;
     Depth m_depth;
     bool m_depthAllocationFailed = false;
+    struct AnimationReadback {
+        Microsoft::WRL::ComPtr<ID3D11Buffer> staging;
+        std::vector<AnimationOcclusionProbe> probes;
+        AnimationOcclusionStamp stamp;
+        UINT bytes = 0;
+        bool pending = false;
+    };
+    std::array<AnimationReadback, 3> m_animationReadbacks;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> m_animationProbes;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_animationProbeView;
+    RawBuffer m_animationResults;
+    UINT m_animationProbeCapacity = 0;
+    unsigned m_animationReadbackIndex = 0;
+    const AnimationSystem* m_animationOwner = nullptr;
 };
 
 } // namespace sat

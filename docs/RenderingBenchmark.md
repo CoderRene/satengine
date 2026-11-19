@@ -118,3 +118,11 @@ previews. With **Automatic**, turn the camera away and back to check that
 the pose catches up on the first visible frame. Open the shipped v17
 GltfAnimation scene and save a copy as v18 to check the two inspector
 settings after reopening.
+
+## Decorative animation occlusion
+
+Choose **Automatic** and set **Occlusion Radius** in the Animator inspector for a decorative character with one skinned mesh on the Animator entity. This local-space radius is centered on the entity pivot and must enclose the mesh across all clips and transitions. Zero disables the option. A positive radius is saved in scene format 19.
+
+In the standalone player, turn **Directional Shadows** off and use an opaque wall that fully covers the sphere. After two completed hidden samples, the engine evaluates the pose once every four updates while playback time and animation state advance normally. Camera and mesh transform changes invalidate the earlier evidence. Blockers that move through their own bone animation can take a few frames to register in GPU feedback.
+
+Compare `cpu_animation_ms` with the wall covering the characters and with it moved aside. Repeat at radius zero for a control. Editor views retain their existing behavior. Rigs with colliders, rigid bodies, or separately placed driven meshes are ineligible.

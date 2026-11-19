@@ -420,9 +420,19 @@ void MeshPass::draw(
     ID3D11ShaderResourceView* nullView = nullptr;
     context->VSSetShaderResources(kSkinnedVertexSlot, 1, &nullView);
     context->VSSetShaderResources(13, 1, &nullView);
-    if (!scene.sync(*context, shaders, m_assets, m_impl->cubeMesh, drawList,
-            m_assetRevision, renderOrigin, prepareAssets, frameNumber) ||
-        !culling.ensure(*device.Get(), static_cast<UINT>(scene.batches().size()), scene.itemCount())) {
+    const auto sync = [&] {
+        return scene.sync(*context, shaders, m_assets, m_impl->cubeMesh, drawList,
+            m_assetRevision, renderOrigin, prepareAssets, frameNumber);
+    };
+    const auto syncScene = [&] {
+        if (!sync()) { return false; }
+        if (drawList.animationOcclusion && drawList.animationOcclusion == drawList.animation &&
+            drawList.animationOcclusion->refreshOcclusionPoses(scene.geometryMoved())) {
+            return sync();
+        }
+        return true;
+    };
+    if (!syncScene() || !culling.ensure(*device.Get(), static_cast<UINT>(scene.batches().size()), scene.itemCount())) {
         if (!m_impl->failed) { std::cerr << "Cannot synchronize GPU mesh scene or allocate culling buffers\n"; }
         m_impl->failed = true;
         scene.retryNextFrame();
@@ -742,6 +752,9 @@ void MeshPass::draw(
                 if (built) {
                     (void)culling.buildDepth(*device.Get(), *context, shaders, depth, width, height, viewProj, renderOrigin);
                 }
+            }
+            if (drawList.animationOcclusion && drawList.animationOcclusion == drawList.animation && built) {
+                culling.sampleAnimationOcclusion(*device.Get(), *context, shaders, *drawList.animationOcclusion);
             }
         }
     } else {

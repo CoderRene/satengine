@@ -106,6 +106,9 @@ struct AnimatorComponent {
     float crossfadeSeconds = 0.2f;
     AnimationRotationBlend rotationBlend = AnimationRotationBlend::Slerp;
     AnimationCullingMode cullingMode = AnimationCullingMode::Automatic;
+    // Decorative runtime meshes only. Local sphere centered on the entity pivot,
+    // enclosing the mesh throughout every clip and transition. Zero disables it.
+    float occlusionRadius = 0;
     bool operator==(const AnimatorComponent&) const = default;
 };
 

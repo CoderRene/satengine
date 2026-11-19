@@ -23,6 +23,19 @@ bool isPartOfRig(const Entity& entity, std::string_view path) {
     return !entity.hasMesh || (entity.mesh.meshNode != 0 && entity.mesh.meshPath == path);
 }
 
+constexpr unsigned kOcclusionInterval = 4;
+constexpr std::uint64_t kMaxOcclusionAge = 4;
+
+bool sameTransform(const Transform& a, const Transform& b) {
+    return a.position == b.position && a.rotation == b.rotation && a.scale == b.scale;
+}
+
+bool matchesCamera(const AnimationOcclusionStamp& stamp, const Entity& camera) {
+    return camera.id() == stamp.camera && sameTransform(stamp.cameraTransform, camera.transform) &&
+        stamp.fieldOfView == camera.camera.fieldOfView && stamp.nearClip == camera.camera.nearClip &&
+        stamp.farClip == camera.camera.farClip;
+}
+
 bool isAffine(const Mat4& matrix) {
     return matrix.m[3] == 0 && matrix.m[7] == 0 && matrix.m[11] == 0;
 }
@@ -95,6 +108,12 @@ std::string_view animatorMeshPath(const Scene& scene, const Entity& entity) {
     return isGltfAssetPath(path) ? path : std::string_view{};
 }
 
+float animationOcclusionWorldRadius(const Entity& entity) {
+    const auto scale = entity.transform.scale;
+    return entity.animator.occlusionRadius *
+        std::max({std::abs(scale.x), std::abs(scale.y), std::abs(scale.z)});
+}
+
 struct AnimationSystem::Impl {
     struct BoundClip {
         const CompiledClip* clip = nullptr;
@@ -152,6 +171,10 @@ struct AnimationSystem::Impl {
         float speed = 1, fade = 0, fadeTime = 0;
         bool playing = false, loop = true;
         bool dirty = true, initialized = false, visible = true, changed = false;
+        Transform occlusionTransform;
+        std::uint64_t occlusionFrame = 0;
+        unsigned occlusionStreak = 0;
+        bool poseThrottled = false;
     };
     explicit Impl(Scene& value, Mode modeIn) : scene(value), mode(modeIn) {}
     Scene& scene;
@@ -163,6 +186,10 @@ struct AnimationSystem::Impl {
     std::vector<Instance> instances;
     std::unordered_map<EntityId, std::uint32_t> instanceIndices;
     std::vector<std::uint32_t> evaluation;
+    std::vector<std::uint32_t> occlusionCandidates;
+    AnimationOcclusionStamp feedback;
+    std::uint64_t occlusionGeneration = 0;
+    bool occlusionEnabled = false;
     std::unordered_map<EntityId, std::uint64_t> failedInstances;
     std::vector<Mat4> palettes;
     std::string error;
@@ -296,6 +323,7 @@ struct AnimationSystem::Impl {
     bool select(Instance& instance, std::string_view reference, bool loop, float fade) {
         auto* clip = bind(instance, reference);
         if (!clip) { return false; }
+        instance.occlusionStreak = 0;
         instance.frozenSource = instance.fadeTime < instance.fade;
         if (fade > 0) {
             if (!instance.clip || instance.frozenSource) {
@@ -457,9 +485,39 @@ struct AnimationSystem::Impl {
                 }
             }
         }
+        occlusionCandidates.clear();
+        for (std::uint32_t i = 0; i < instances.size(); ++i) {
+            const auto& instance = instances[i];
+            // An independently placed child mesh would need a separate bound.
+            if (instance.settings.occlusionRadius > 0 && instance.meshEntities.size() == 1 &&
+                entities[instance.meshEntities.front()].id() == instance.id) {
+                occlusionCandidates.push_back(i);
+            }
+        }
         editRevision = revision;
         destructionRevision = destroyed;
         entityCount = count;
+    }
+    bool matchesFeedback(const AnimationOcclusionStamp& stamp, const Entity& camera) const {
+        return stamp.generation == occlusionGeneration && stamp.layout == layoutRevision &&
+            stamp.edit == scene.editRevision() && stamp.destruction == scene.destructionRevision() &&
+            stamp.frame <= frame && frame - stamp.frame <= kMaxOcclusionAge && matchesCamera(stamp, camera);
+    }
+    bool boundsFitOcclusionSphere(const Instance& instance) const {
+        if (!instance.bounds.valid) { return false; }
+        const auto& a = instance.bounds.minimum;
+        const auto& b = instance.bounds.maximum;
+        const double x = std::max(std::abs(a.x), std::abs(b.x));
+        const double y = std::max(std::abs(a.y), std::abs(b.y));
+        const double z = std::max(std::abs(a.z), std::abs(b.z));
+        const double radius = instance.settings.occlusionRadius;
+        return x*x + y*y + z*z <= radius*radius;
+    }
+    bool occlusionEligible(const Entity& entity) const {
+        return entity.hasAnimator && entity.hasMesh && entity.mesh.meshNode == 0 &&
+            entity.animator.cullingMode == AnimationCullingMode::Automatic &&
+            entity.animator.occlusionRadius > 0 && std::isfinite(entity.animator.occlusionRadius) &&
+            !entity.hasCollider && !entity.hasRigidBody;
     }
     unsigned cullingInterval(const Instance& instance, const AnimationFrustum& camera) const {
         if (!instance.bounds.valid || instance.meshEntities.empty()) { return 1; }
@@ -570,6 +628,8 @@ void AnimationSystem::stop() {
     ++m_impl->poseRevision;
     ++m_impl->layoutRevision;
     m_impl->layoutDirty = true;
+    m_impl->occlusionCandidates.clear();
+    invalidateOcclusion();
     m_impl->instanceIndices.clear();
     m_impl->running = false; m_impl->instances.clear(); m_impl->failedInstances.clear(); m_impl->palettes.clear();
     m_impl->rigs.clear(); m_impl->clips.clear(); m_impl->graphs.clear();
@@ -583,6 +643,8 @@ void AnimationSystem::update(float deltaSeconds, float timeScale) {
     const double dt = double(deltaSeconds) * timeScale;
     const auto* camera = impl.cameraIndex >= 0 ? impl.scene.entity(static_cast<std::size_t>(impl.cameraIndex)) : nullptr;
     const auto frustum = camera ? animationFrustum(*camera) : AnimationFrustum{};
+    const bool validFeedback = impl.occlusionEnabled && camera && !impl.scene.lightingSettings.directionalShadows &&
+        impl.feedback.camera != kInvalidEntityId && impl.matchesFeedback(impl.feedback, *camera);
     impl.evaluation.clear();
     for (std::uint32_t index = 0; index < impl.instances.size(); ++index) {
         auto& instance = impl.instances[index];
@@ -616,10 +678,27 @@ void AnimationSystem::update(float deltaSeconds, float timeScale) {
             instance.dirty |= instance.time != previousTime || instance.fadeTime != previousFadeTime;
         }
         if (instance.initialized && !instance.dirty) { continue; }
-        const unsigned interval = camera ? impl.cullingInterval(instance, frustum) : 1;
+        unsigned interval = camera ? impl.cullingInterval(instance, frustum) : 1;
+        bool throttled = false;
+        if (impl.occlusionEnabled && instance.settings.occlusionRadius > 0 &&
+            instance.settings.cullingMode == AnimationCullingMode::Automatic) {
+            // For opted-in rigs, a fresh opaque-depth proof is the only reason
+            // to delay the pose. Missing feedback restores full evaluation.
+            interval = 1;
+            if (validFeedback && instance.occlusionFrame == impl.feedback.frame &&
+                instance.occlusionStreak >= 2 && instance.fadeTime >= instance.fade) {
+                const auto* entity = impl.scene.entityById(instance.id);
+                throttled = entity && impl.occlusionEligible(*entity) &&
+                    sameTransform(instance.occlusionTransform, entity->transform) &&
+                    impl.boundsFitOcclusionSphere(instance);
+                if (throttled) { interval = kOcclusionInterval; }
+            }
+        }
         const bool becameVisible = interval != 0 && !instance.visible;
+        const bool resumed = instance.poseThrottled && !throttled;
         instance.visible = interval != 0;
-        if (!instance.initialized || (interval != 0 && (becameVisible || (impl.frame + index) % interval == 0))) {
+        instance.poseThrottled = throttled;
+        if (!instance.initialized || (interval != 0 && (resumed || becameVisible || (impl.frame + index) % interval == 0))) {
             impl.evaluation.push_back(index);
         }
     }
@@ -650,6 +729,7 @@ bool AnimationSystem::resume(EntityId id) {
     if (!instance || !instance->clip) { return false; }
     m_impl->running = true;
     instance->playing = true;
+    instance->occlusionStreak = 0;
     return true;
 }
 void AnimationSystem::stop(EntityId id) { if (auto* instance = m_impl->find(id)) { instance->playing = false; } }
@@ -659,6 +739,7 @@ bool AnimationSystem::setSpeed(EntityId id, float speed) {
 bool AnimationSystem::setTime(EntityId id, float time) {
     auto* instance = m_impl->ensure(id);
     if (!instance || !std::isfinite(time)) { return false; }
+    instance->occlusionStreak = 0;
     instance->dirty |= instance->time != time;
     instance->time = time;
     if (m_impl->mode == Mode::Preview) { m_impl->running = true; }
@@ -684,6 +765,82 @@ std::span<const Mat4> AnimationSystem::meshPalette(const Entity& meshEntity) con
     return meshPose(meshEntity).palette;
 }
 std::uint64_t AnimationSystem::poseRevision() const { return m_impl->poseRevision; }
+void AnimationSystem::enableOcclusionFeedback() {
+    m_impl->occlusionEnabled = m_impl->mode == Mode::Runtime;
+}
+
+AnimationOcclusionStamp AnimationSystem::collectOcclusionProbes(std::vector<AnimationOcclusionProbe>& probes) const {
+    const auto& impl = *m_impl;
+    probes.clear();
+    if (!impl.occlusionEnabled || !impl.running || impl.occlusionCandidates.empty() ||
+        impl.scene.lightingSettings.directionalShadows || impl.editRevision != impl.scene.editRevision() ||
+        impl.destructionRevision != impl.scene.destructionRevision() || impl.cameraIndex < 0) { return {}; }
+    const auto* camera = impl.scene.entity(static_cast<std::size_t>(impl.cameraIndex));
+    if (!camera || !camera->hasCamera) { return {}; }
+    for (const auto index : impl.occlusionCandidates) {
+        const auto& instance = impl.instances[index];
+        const auto* entity = impl.scene.entityById(instance.id);
+        if (!entity || !impl.occlusionEligible(*entity) || !instance.playing ||
+            !impl.boundsFitOcclusionSphere(instance)) { continue; }
+        const auto radius = animationOcclusionWorldRadius(*entity);
+        if (radius > 0 && std::isfinite(radius)) { probes.push_back({entity->id(), entity->transform, radius}); }
+    }
+    return {impl.frame, impl.occlusionGeneration, impl.layoutRevision, impl.editRevision, impl.destructionRevision,
+        camera->id(), camera->transform, camera->camera.fieldOfView, camera->camera.nearClip, camera->camera.farClip};
+}
+
+void AnimationSystem::submitOcclusion(const AnimationOcclusionStamp& stamp,
+    std::span<const AnimationOcclusionProbe> probes, std::span<const std::uint32_t> occluded) {
+    auto& impl = *m_impl;
+    if (!impl.occlusionEnabled || probes.size() != occluded.size() || stamp.frame <= impl.feedback.frame ||
+        impl.scene.lightingSettings.directionalShadows || impl.cameraIndex < 0) { return; }
+    const auto* camera = impl.scene.entity(static_cast<std::size_t>(impl.cameraIndex));
+    if (!camera || !camera->hasCamera || !impl.matchesFeedback(stamp, *camera)) { return; }
+    const bool consecutive = impl.feedback.camera != kInvalidEntityId && impl.matchesFeedback(impl.feedback, *camera);
+    for (std::size_t i = 0; i < probes.size(); ++i) {
+        const auto& probe = probes[i];
+        if (auto* instance = impl.find(probe.entity)) {
+            const bool same = consecutive && instance->occlusionFrame == impl.feedback.frame &&
+                sameTransform(instance->occlusionTransform, probe.transform);
+            instance->occlusionFrame = stamp.frame;
+            instance->occlusionTransform = probe.transform;
+            instance->occlusionStreak = occluded[i] ? (same ? std::min(instance->occlusionStreak + 1, 2u) : 1) : 0;
+        }
+    }
+    impl.feedback = stamp;
+}
+
+void AnimationSystem::invalidateOcclusion() {
+    ++m_impl->occlusionGeneration;
+    m_impl->feedback = {};
+}
+
+bool AnimationSystem::refreshOcclusionPoses(bool geometryMoved) {
+    auto& impl = *m_impl;
+    if (!impl.occlusionEnabled || impl.occlusionCandidates.empty()) { return false; }
+    if (impl.feedback.camera == kInvalidEntityId) {
+        if (geometryMoved) { invalidateOcclusion(); }
+        return false;
+    }
+    const auto* camera = impl.cameraIndex >= 0 ? impl.scene.entity(static_cast<std::size_t>(impl.cameraIndex)) : nullptr;
+    if (!geometryMoved && !impl.scene.lightingSettings.directionalShadows && camera && camera->hasCamera &&
+        impl.matchesFeedback(impl.feedback, *camera)) { return false; }
+    invalidateOcclusion();
+    if (impl.layoutDirty) { return false; }
+    bool changed = false;
+    for (const auto index : impl.occlusionCandidates) {
+        auto& instance = impl.instances[index];
+        if (!instance.poseThrottled) { continue; }
+        instance.poseThrottled = false;
+        if (instance.dirty) {
+            impl.evaluate(instance);
+            changed |= instance.changed;
+        }
+    }
+    impl.poseRevision += changed;
+    return changed;
+}
+
 std::span<const Mat4> AnimationSystem::palettes() const { return m_impl->palettes; }
 std::uint64_t AnimationSystem::layoutRevision() const { return m_impl->layoutRevision; }
 AnimationBounds AnimationSystem::bounds(AnimationInstanceHandle handle) const {

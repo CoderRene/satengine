@@ -27,6 +27,22 @@ struct AnimationMeshPose {
     AnimationInstanceHandle handle;
 };
 
+// Radius of the conservative world-space sphere used by the renderer.
+[[nodiscard]] float animationOcclusionWorldRadius(const Entity& entity);
+
+struct AnimationOcclusionProbe {
+    EntityId entity;
+    Transform transform;
+    float radius;
+};
+
+struct AnimationOcclusionStamp {
+    std::uint64_t frame = 0, generation = 0, layout = 0, edit = 0, destruction = 0;
+    EntityId camera = kInvalidEntityId;
+    Transform cameraTransform;
+    float fieldOfView = 0, nearClip = 0, farClip = 0;
+};
+
 struct AnimationDebugView {
     std::string_view activeState;
     float transitionProgress = 1;
@@ -59,6 +75,15 @@ public:
     [[nodiscard]] std::span<const Mat4> palette(EntityId entity) const;
     [[nodiscard]] std::span<const Mat4> meshPalette(const Entity& meshEntity) const;
     [[nodiscard]] AnimationMeshPose meshPose(const Entity& meshEntity) const;
+    // Enable only when the runtime has a single view supplying opaque-depth feedback.
+    void enableOcclusionFeedback();
+    // Runtime renderer feedback. Readbacks are delayed and must carry their original snapshot.
+    [[nodiscard]] AnimationOcclusionStamp collectOcclusionProbes(std::vector<AnimationOcclusionProbe>& probes) const;
+    void submitOcclusion(const AnimationOcclusionStamp& stamp, std::span<const AnimationOcclusionProbe> probes,
+        std::span<const std::uint32_t> occluded);
+    void invalidateOcclusion();
+    // Restore a skipped pose before rendering when a possible blocker has moved.
+    [[nodiscard]] bool refreshOcclusionPoses(bool geometryMoved = true);
     [[nodiscard]] std::span<const Mat4> palettes() const;
     [[nodiscard]] std::uint64_t layoutRevision() const;
     [[nodiscard]] AnimationBounds bounds(AnimationInstanceHandle handle) const;

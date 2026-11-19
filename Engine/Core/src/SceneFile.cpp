@@ -24,6 +24,7 @@
 
 namespace sat {
 namespace {
+constexpr int kSceneVersionWithOcclusionRadius = 19;
 constexpr int kSceneVersionWithAnimatorBlend = 18;
 constexpr int kSceneVersionWithAnimator = 17;
 constexpr int kSceneVersionWithMeshNodes = 16;
@@ -144,6 +145,9 @@ std::string serializeScene(const Scene& scene) {
         version = kSceneVersionWithMeshNodes;
     }
     for (const auto& entity : scene.entities()) { if (entity.hasAnimator) { version = kSceneVersionWithAnimatorBlend; break; } }
+    if (std::any_of(scene.entities().begin(), scene.entities().end(), [](const Entity& entity) {
+            return entity.hasAnimator && entity.animator.occlusionRadius > 0;
+        })) { version = kSceneVersionWithOcclusionRadius; }
     out << "SatScene " << version << '\n' << scene.entityCount() << '\n';
     writePhysicsSettings(out, scene.physicsSettings);
     writeAudioSettings(out, scene.audioSettings);
@@ -186,7 +190,7 @@ std::string serializeScene(const Scene& scene) {
         }
         writePhysicsComponents(out, entity);
         writeAudioComponents(out, entity);
-        if (version >= kSceneVersionWithAnimator) { writeAnimationComponent(out, entity); }
+        if (version >= kSceneVersionWithAnimator) { writeAnimationComponent(out, entity, version >= kSceneVersionWithOcclusionRadius); }
         const auto& light = entity.light;
         out << entity.hasLight << ' ' << static_cast<int>(light.type) << ' '
             << light.color[0] << ' ' << light.color[1] << ' ' << light.color[2] << ' '
@@ -220,7 +224,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
     std::string magic;
     int version = 0;
     std::size_t count = 0;
-    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > kSceneVersionWithAnimatorBlend) || count > kMaxSceneEntities) {
+    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > kSceneVersionWithOcclusionRadius) || count > kMaxSceneEntities) {
         return fail("Invalid scene header, version or entity count.");
     }
     Scene candidate;
@@ -351,7 +355,8 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
         }
         if (version >= 3 && !readPhysicsComponents(in, e, error)) { return false; }
         if (version >= 4 && !readAudioComponents(in, e, error, version >= 5)) { return false; }
-        if (version >= kSceneVersionWithAnimator && !readAnimationComponent(in, e, version >= kSceneVersionWithAnimatorBlend, error)) { return false; }
+        if (version >= kSceneVersionWithAnimator && !readAnimationComponent(in, e, version >= kSceneVersionWithAnimatorBlend,
+                version >= kSceneVersionWithOcclusionRadius, error)) { return false; }
         if (!legacyTexture.empty()) { ++droppedTextures; }
         if (version >= 6) {
             int type = 0;

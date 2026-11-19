@@ -515,6 +515,7 @@ bool GpuScene::sync(ID3D11DeviceContext& context, ShaderLibrary& shaders, GpuAss
     m_scene = list.scene;
     m_assetRevision = assetRevision;
     if (topology) { rebuild(assets, cube, list); }
+    m_geometryMoved = topology || m_shaderRevision != shaders.revision();
     if (m_shaderRevision != shaders.revision()) {
         m_pixels.clear();
         for (const auto& item : m_ranges) {
@@ -536,6 +537,7 @@ bool GpuScene::sync(ID3D11DeviceContext& context, ShaderLibrary& shaders, GpuAss
         const bool moved = !object.initialized || (list.scene &&
             !sameTransform(list.scene->entities()[m_sources[object.sourceIndex].entityIndex].transform, object.transform));
         if (!moved && !m_allDirty && !object.boundsDirty) { continue; }
+        m_geometryMoved |= moved;
         object.boundsDirty = false;
         if (list.scene && moved) {
             object.transform = list.scene->entities()[m_sources[object.sourceIndex].entityIndex].transform;
@@ -581,6 +583,7 @@ bool GpuScene::sync(ID3D11DeviceContext& context, ShaderLibrary& shaders, GpuAss
         staticChanged = m_staticBatches.update(context, assets, m_staticSources, m_dirtyStaticSources, budgetAvailable, m_combined);
         m_staticFrame = frame;
     }
+    m_geometryMoved |= staticChanged;
     if (m_tableDirty || staticChanged) {
         const auto& staticBatches = m_staticBatches.batches();
         const auto first = m_thicknessScales.size();

@@ -39,6 +39,7 @@ public:
     [[nodiscard]] bool sync(ID3D11DeviceContext& context, ShaderLibrary& shaders, GpuAssetCache& assets,
         const GpuMesh& cube, const SceneDrawList& list, std::uint64_t assetRevision, DVec3 origin, bool prepareAssets, std::uint64_t frame);
     [[nodiscard]] const Scene* source() const { return m_scene; }
+    [[nodiscard]] bool geometryMoved() const { return m_geometryMoved; }
     [[nodiscard]] const std::vector<DrawRange>& batches() const { return m_batches; }
     [[nodiscard]] const std::vector<DrawItem>& transparent() const { return m_transparent; }
     [[nodiscard]] const GpuInstance& instance(unsigned index) const { return m_instances[index]; }
@@ -100,6 +101,7 @@ private:
     std::uint64_t m_editRevision = 0, m_destructionRevision = 0, m_assetRevision = 0;
     std::uint64_t m_shaderRevision = ~std::uint64_t{};
     bool m_tableDirty = true;
+    bool m_geometryMoved = false;
     bool m_allDirty = true;
     std::string m_environment;
     std::vector<Source> m_sources;
