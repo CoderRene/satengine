@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -262,6 +263,7 @@ struct ViewportPanel::Impl {
     GLFWwindow* window = nullptr;
     bool selectionActivated = false;
     bool sceneInteracting = false;
+    bool deleteRequested = false;
     bool showColliders = false;
     bool showLiveScene = true;
     bool liveSceneVisible = false;
@@ -339,7 +341,22 @@ struct ViewportPanel::Impl {
     }
 
     TransformGizmoDrag gizmoDrag;
-    Transform authoredDragStart;
+    struct DragTarget {
+        EntityId id;
+        Transform authored;
+        Transform visible;
+        Vec3 previousRotation;
+        bool explicitSelection;
+        bool visibleAtStart;
+    };
+    std::vector<DragTarget> dragTargets;
+    std::vector<EntityId> dragTargetIds;
+    const std::unordered_set<EntityId>* selection = nullptr;
+    std::unordered_set<EntityId> dragSelection;
+    bool toggleSelection = false;
+    bool gridSnap = false, angleSnap = false;
+    double gridStep = 1, angleStep = 15;
+    Transform dragPivot;
     Transform gizmoTransform;
     TransformSpace moveSpace = TransformSpace::Global;
     TransformSpace rotateSpace = TransformSpace::Local;
@@ -349,44 +366,136 @@ struct ViewportPanel::Impl {
     TransformSpace space() const {
         return tool == TransformTool::Move ? moveSpace : tool == TransformTool::Rotate ? rotateSpace : TransformSpace::Local;
     }
-    TransformGizmoInstance gizmo(const Entity& entity) const {
+    Transform pivot(const Entity& entity, const Scene& visibleScene) const {
+        Transform result = entity.transform;
+        if (!selection || selection->size() < 2) { return result; }
+        DVec3 offsets{};
+        std::size_t count = 0;
+        for (EntityId id : *selection) {
+            if (const auto* item = visibleScene.entityById(id)) {
+                offsets = offsets + (item->transform.position - entity.transform.position);
+                ++count;
+            }
+        }
+        if (count > 0) { result.position = result.position + offsets * (1.0 / count); }
+        result.scale = {1, 1, 1};
+        return result;
+    }
+
+    TransformGizmoInstance gizmo(const Entity& entity, const Scene& visibleScene) const {
         TransformGizmoInstance result;
         result.tool = tool;
-        result.origin = toVec3(entity.transform.position - editorCamera.position);
-        result.basis = transformGizmoBasis(tool, space(), entity.transform.rotation);
+        const Transform pose = gizmoDrag.active() ? gizmoTransform : pivot(entity, visibleScene);
+        result.origin = toVec3(pose.position - editorCamera.position);
+        result.basis = transformGizmoBasis(tool, space(), gizmoDrag.active() ? dragPivot.rotation : pose.rotation);
+        result.uniformScaleOnly = selection && selection->size() > 1;
         if (gizmoDrag.active() && gizmoDrag.owner() == entity.id()) {
             result.highlightedHandle = gizmoDrag.handle(); result.dragging = true;
         } else if (hoveredOwner == entity.id()) { result.highlightedHandle = hoveredHandle.handle; }
         return result;
     }
-    void setAuthoredTransform(const Transform& transform) {
-        Entity* entity = scene->entityById(gizmoDrag.owner());
-        if (!entity) { return; }
-        switch (tool) {
-        case TransformTool::Move:
-            scene->moveEntity(entity->id(), transform.position);
-            return;
-        case TransformTool::Rotate:
-            if (entity->transform.rotation == transform.rotation) { return; }
-            entity->transform.rotation = transform.rotation;
-            break;
-        case TransformTool::Scale:
-            if (entity->transform.scale == transform.scale) { return; }
-            entity->transform.scale = transform.scale;
-            break;
+    bool captureTargets(const Scene& visibleScene) {
+        dragTargets.clear();
+        dragTargetIds.clear();
+        dragSelection = *selection;
+        bool hasDescendants = false;
+        for (EntityId id : dragSelection) {
+            const auto* authored = scene->entityById(id);
+            if (!authored || !visibleScene.entityById(id)) { return false; }
+            hasDescendants |= authored->hasChildren();
         }
-        scene->markEdited();
+        const auto capture = [&](const Entity& item, bool explicitSelection) {
+            const auto* visible = visibleScene.entityById(item.id());
+            const Transform& start = explicitSelection && visible ? visible->transform : item.transform;
+            dragTargets.push_back({item.id(), item.transform, start, start.rotation, explicitSelection, visible != nullptr});
+            dragTargetIds.push_back(item.id());
+        };
+        if (hasDescendants) {
+            for (const Entity& item : scene->entities()) {
+                const bool selected = dragSelection.contains(item.id());
+                EntityId parent = item.parentId();
+                while (!selected && parent != kInvalidEntityId && !dragSelection.contains(parent)) {
+                    const auto* ancestor = scene->entityById(parent);
+                    parent = ancestor ? ancestor->parentId() : kInvalidEntityId;
+                }
+                if (selected || parent != kInvalidEntityId) { capture(item, selected); }
+            }
+        } else {
+            for (EntityId id : dragSelection) {
+                if (const auto* item = scene->entityById(id)) { capture(*item, true); }
+            }
+        }
+        return !dragTargets.empty();
     }
 
-    void cancelDrag() {
-        if (gizmoDrag.active()) {
-            setAuthoredTransform(authoredDragStart);
-            gizmoDrag.finish();
+    void applyDrag() {
+        const bool group = dragSelection.size() > 1;
+        const auto displacement = gizmoTransform.position - dragPivot.position;
+        const auto rotation = gizmoDrag.worldRotationDelta();
+        double factor = gizmoDrag.scaleFactor();
+        if (group && tool == TransformTool::Scale && factor != 1) {
+            double minimum = 0;
+            double maximum = std::numeric_limits<double>::max();
+            for (const auto& target : dragTargets) {
+                const auto& scale = target.visible.scale;
+                for (float value : {scale.x, scale.y, scale.z}) {
+                    const double magnitude = std::max(static_cast<double>(std::abs(value)), static_cast<double>(kGizmoMinimumScale));
+                    minimum = std::max(minimum, kGizmoMinimumScale / magnitude);
+                    maximum = std::min(maximum, std::numeric_limits<float>::max() / magnitude);
+                }
+            }
+            factor = std::clamp(factor, minimum, maximum);
         }
+        Transform parentTransform = sceneDragStart;
+        if (tool == TransformTool::Move) { parentTransform.position = gizmoTransform.position; }
+        else if (tool == TransformTool::Rotate) { parentTransform.rotation = gizmoTransform.rotation; }
+        else { parentTransform.scale = gizmoTransform.scale; }
+        const TransformDelta parentDelta(sceneDragStart, parentTransform);
+        bool changed = false;
+        for (auto& target : dragTargets) {
+            auto* entity = scene->entityById(target.id);
+            Transform next = target.authored;
+            if (!group && !target.explicitSelection) {
+                next = parentDelta.apply(target.authored);
+            } else if (tool == TransformTool::Move) {
+                next.position = target.visible.position + displacement;
+            } else {
+                if (group) {
+                    const auto result = transformGizmoGroupMember(target.visible, dragPivot.position, tool,
+                        rotation, factor, target.previousRotation);
+                    next.position = result.position;
+                    if (tool == TransformTool::Rotate) {
+                        next.rotation = result.rotation;
+                        target.previousRotation = result.rotation;
+                    } else { next.scale = result.scale; }
+                } else if (tool == TransformTool::Rotate) { next.rotation = gizmoTransform.rotation; }
+                else { next.scale = gizmoTransform.scale; }
+            }
+            if (!sameTransform(entity->transform, next)) {
+                entity->transform = next;
+                changed = true;
+            }
+        }
+        if (changed) { scene->markEdited(); }
+    }
+
+    Transform sceneDragStart;
+    void cancelDrag() {
+        if (!gizmoDrag.active()) { return; }
+        bool restored = false;
+        for (const auto& target : dragTargets) {
+            if (auto* entity = scene->entityById(target.id); entity && !sameTransform(entity->transform, target.authored)) {
+                entity->transform = target.authored;
+                restored = true;
+            }
+        }
+        if (restored) { scene->markEdited(); }
+        gizmoDrag.finish();
     }
 
     void drawScenePanel(int& selectedIndex, const Scene& gameScene, bool readOnly) {
         sceneInteracting = false;
+        deleteRequested = false;
         const bool playing = &gameScene != scene;
         if (ImGui::Begin(
                 "Scene",
@@ -406,6 +515,10 @@ struct ViewportPanel::Impl {
             if (!focused) { editorCamera.looking = false; editorCamera.draggingPan = false; }
             const Entity* selected = selectedIndex >= 0 ? scene->entity(static_cast<std::size_t>(selectedIndex)) : nullptr;
             const EntityId selectedId = selected ? selected->id() : kInvalidEntityId;
+            if (selected && focused && !readOnly && !gizmoDrag.active() && !editorCamera.looking &&
+                !editorCamera.draggingPan && !ImGui::GetIO().WantTextInput && !ImGui::IsAnyItemActive()) {
+                deleteRequested = ImGui::Shortcut(ImGuiKey_Delete);
+            }
             const auto visibleIndex = visibleScene.entityIndex(selectedId);
             const Entity* visibleSelection = visibleIndex ? visibleScene.entity(*visibleIndex) : nullptr;
             if (gizmoDrag.active() && (!canUseGizmo || !visibleSelection || visibleSelection->id() != gizmoDrag.owner() ||
@@ -432,6 +545,20 @@ struct ViewportPanel::Impl {
             if (tool == TransformTool::Scale && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                 ImGui::SetTooltip("Scale uses local axes; the center handle scales uniformly.");
             }
+            ImGui::Checkbox("Grid Snap", &gridSnap);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(85);
+            const double minimumStep = 0.0001, maximumGrid = 1e12, maximumAngle = 360;
+            ImGui::DragScalar("##GridStep", ImGuiDataType_Double, &gridStep, 0.1f, &minimumStep, &maximumGrid,
+                "%.4g units", ImGuiSliderFlags_AlwaysClamp);
+            if (!std::isfinite(gridStep) || gridStep <= 0) { gridStep = 1; }
+            ImGui::SameLine();
+            ImGui::Checkbox("Angle Snap", &angleSnap);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(85);
+            ImGui::DragScalar("##AngleStep", ImGuiDataType_Double, &angleStep, 0.25f, &minimumStep, &maximumAngle,
+                "%.4g deg", ImGuiSliderFlags_AlwaysClamp);
+            if (!std::isfinite(angleStep) || angleStep <= 0) { angleStep = 15; }
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::Checkbox("Show Colliders", &showColliders);
@@ -558,11 +685,13 @@ struct ViewportPanel::Impl {
                     const bool sceneFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !io.AppFocusLost;
                     if (gizmoDrag.active()) {
                         if (!canUseGizmo || !sceneFocused || !visibleSelection || visibleSelection->id() != gizmoDrag.owner() ||
-                            !gizmoDrag.viewportMatches(viewW, viewH) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                            *selection != dragSelection || std::any_of(dragTargets.begin(), dragTargets.end(), [&](const DragTarget& target) {
+                                return !scene->entityById(target.id) || (target.visibleAtStart && !visibleScene.entityById(target.id));
+                            }) || !gizmoDrag.viewportMatches(viewW, viewH) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
                             cancelDrag();
                         } else {
                             if (gizmoDrag.update(gizmoTransform, mouseX, mouseY)) {
-                                setAuthoredTransform(gizmoTransform);
+                                applyDrag();
                             }
                             if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) { gizmoDrag.finish(); }
                         }
@@ -570,14 +699,16 @@ struct ViewportPanel::Impl {
                     if (!readOnly && !cameraBusy && sceneFocused) {
                         if (canUseGizmo && visibleSelection && hovered) {
                             hoveredOwner = visibleSelection->id();
-                            hoveredHandle = pickTransformGizmo(gizmo(*visibleSelection), view, projection, viewW, viewH, mouseX, mouseY);
+                            hoveredHandle = pickTransformGizmo(gizmo(*visibleSelection, visibleScene), view, projection, viewW, viewH, mouseX, mouseY);
                         }
                         if (!gizmoDrag.active() && leftClicked) {
                             if (selected && visibleSelection && hoveredHandle.handle >= 0) {
-                                if (gizmoDrag.begin(selected->id(), visibleSelection->transform, tool, space(), hoveredHandle,
-                                        view, projection, viewW, viewH, mouseX, mouseY, cam.position)) {
-                                    authoredDragStart = selected->transform;
-                                    gizmoTransform = visibleSelection->transform;
+                                dragPivot = pivot(*visibleSelection, visibleScene);
+                                if (captureTargets(visibleScene) && gizmoDrag.begin(selected->id(), dragPivot, tool, space(), hoveredHandle,
+                                        view, projection, viewW, viewH, mouseX, mouseY, cam.position,
+                                        {gridSnap ? gridStep : 0, angleSnap ? angleStep : 0})) {
+                                    sceneDragStart = selected->transform;
+                                    gizmoTransform = dragPivot;
                                 }
                             } else {
                                 EntityId bestEntity = clickedLight;
@@ -607,6 +738,7 @@ struct ViewportPanel::Impl {
                                     }
                                 }
                                 selectionActivated = true;
+                                toggleSelection = io.KeyCtrl;
                                 const auto authoredIndex = scene->entityIndex(scene->rootEntityId(bestEntity));
                                 selectedIndex = authoredIndex ? static_cast<int>(*authoredIndex) : -1;
                             }
@@ -724,10 +856,11 @@ ViewportPanel::~ViewportPanel() {
     }
 }
 
-void ViewportPanel::onImGuiRender(int& selectedIndex, const Scene& gameScene, bool sceneReadOnly, bool focusGameView,
+void ViewportPanel::onImGuiRender(int& selectedIndex, const std::unordered_set<EntityId>& selection, const Scene& gameScene, bool sceneReadOnly, bool focusGameView,
     GameUi* ui, const Input* input) {
     m_impl->selectionActivated = false;
     m_impl->liveSceneVisible = false;
+    m_impl->selection = &selection;
     m_impl->drawScenePanel(selectedIndex, gameScene, sceneReadOnly);
     m_impl->drawGamePanel(gameScene, focusGameView, ui, input);
 }
@@ -774,11 +907,18 @@ void ViewportPanel::drawGameStats() {
     draw->PopClipRect();
 }
 
-TransformGizmoInstance ViewportPanel::gizmo(const Entity& entity) const { return m_impl->gizmo(entity); }
+TransformGizmoInstance ViewportPanel::gizmo(const Entity& entity, const Scene& visibleScene) const {
+    return m_impl->gizmo(entity, visibleScene);
+}
+std::span<const EntityId> ViewportPanel::transformTargets() const { return m_impl->dragTargetIds; }
+bool ViewportPanel::transformActive() const { return m_impl->gizmoDrag.active(); }
+bool ViewportPanel::selectionToggle() const { return m_impl->toggleSelection; }
 
 bool ViewportPanel::showingLiveScene() const { return m_impl->liveSceneVisible; }
 
 bool ViewportPanel::selectionActivated() const { return m_impl->selectionActivated; }
+
+bool ViewportPanel::deleteRequested() const { return m_impl->deleteRequested; }
 
 bool ViewportPanel::sceneViewInteracting() const { return m_impl->sceneInteracting; }
 

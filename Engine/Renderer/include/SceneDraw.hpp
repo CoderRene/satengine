@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string_view>
+#include <unordered_set>
 
 namespace sat {
 
@@ -18,6 +19,7 @@ struct TransformGizmoInstance {
     Mat4 basis{}; // Rotation only, never includes entity scale or translation.
     int highlightedHandle = -1; // X/Y/Z = 0/1/2; uniform scale = 3.
     bool dragging = false;
+    bool uniformScaleOnly = false;
 };
 
 inline constexpr float kTranslateGizmoAxisLength = 1.25f;
@@ -96,6 +98,7 @@ struct SceneDrawList {
     // Optional feedback sink supplied by the standalone player for its only view.
     AnimationSystem* animationOcclusion = nullptr;
     EntityId selected = kInvalidEntityId;
+    const std::unordered_set<EntityId>* selection = nullptr; // Borrowed through submission.
     const MeshInstance* meshes = nullptr;
     int meshCount = 0;
     const CameraFrustumInstance* frustums = nullptr;

@@ -17,9 +17,9 @@ matter for a real game.
 | ------------------------ | --------------------------------- | ------------------------------------------------------ |
 | Done                     | **Working baseline**              | Edit, play, script, physics, audio, UI, package a game |
 | Done                     | **Better art import**             | Drop in modern mesh files (glTF) instead of OBJ-only   |
-| **Ongoing**              | **Animation**                     | Moving parts, crew, hatches, turrets, simple cutscenes |
-| Soon                     | **Editor comfort**                | Undo, snapping, easier multi-object layout             |
-| Later                    | **Richer space physics**          | Docking joints, hinged parts, better station collision |
+| **Done**                 | **Animation**                     | Moving parts, crew, hatches, turrets, simple cutscenes |
+| Next                     | **Editor comfort**                | Undo, snapping, easier multi-object layout             |
+| Soon                     | **Richer space physics**          | Docking joints, hinged parts, better station collision |
 | Later                    | **Bigger projects**               | Faster iteration as scenes and asset folders grow      |
 | Later                    | **Visual polish**                 | Better local lights, shadows, and sky                  |
 | Other platforms is Maybe | **Other platforms & stable APIs** | macOS / Linux, APIs that won’t keep shifting           |
@@ -66,7 +66,7 @@ FBX is only on the table if glTF turns out not to be enough.
 
 ---
 
-## Next — animation
+## Done — animation
 
 **Goal:** things in the scene can move with authored animation — not only rigid
 physics.
@@ -77,7 +77,7 @@ retargeting, and facial systems are out of scope for this pass.
 
 ---
 
-## Soon — editor comfort
+## Next — editor comfort
 
 **Goal:** layout and tweak scenes without fear of irreversible mistakes.
 
@@ -91,7 +91,7 @@ day-to-day authoring ([details](SceneTransforms.md)):
 
 ---
 
-## Later — richer space physics
+## Soon — richer space physics
 
 **Goal:** gameplay pieces that attach and articulate, not only free-floating
 bodies.

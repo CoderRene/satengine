@@ -6,7 +6,7 @@ its image.
 
 | Key | Tool | Handles |
 | --- | --- | --- |
-| W | Move | Red X, green Y, and blue Z arrows |
+| W | Move | Red X, green Y, and blue Z arrows, plus XY, XZ, and YZ plane handles |
 | R | Rotate | Red X, green Y, and blue Z rotation rings |
 | T | Scale | Axis shafts with cube tips; a center cube scales all axes together |
 
@@ -21,7 +21,7 @@ hit takes priority over selecting an entity behind it. Entity selection retains
 its existing bounding-box picking; this feature changes only gizmo picking.
 
 - Move arrows constrain movement to one axis, preserving double-precision world
-  positions.
+  positions. Square handles move along both axes of their plane.
 - Rotation rings constrain rotation about one axis. Angles use the engine's
   Euler degrees (`Rz * Ry * Rx`); matrix composition implements Local/Global
   rotation. Crossing 180 degrees or making multiple turns does not wrap the drag.
@@ -48,8 +48,28 @@ navigation, and active gizmo drags. Hold **right mouse** to look around and use
 **WASD** to fly the camera. Middle mouse pans; the wheel moves the camera forward
 or backward. Camera navigation is suppressed while dragging a transform handle.
 
-There are no plane-move handles, snapping, multi-selection, shear transforms, or
-undo-history integration in this version.
+**Grid Snap** aligns the pivot along the dragged axes on a grid anchored at world
+zero. Local Move uses the gizmo's starting axes. **Angle Snap** rounds rotation
+relative to the starting orientation. Both are off by default. Their defaults are
+1 world unit and 15 degrees, and the Scene toolbar remembers changes for the
+session.
+
+Ctrl-click toggles selection in both the Scene and Hierarchy. Shift-click selects
+a range in the Hierarchy. The Inspector follows the primary entity. Multiple
+selected entities share a pivot at the mean of their world positions and use
+the primary entity's orientation in Local space. Move translates selected
+entities and their descendants once. Rotate and Scale update descendants as well.
+With multiple selected entities, rotation and uniform scaling use the shared
+pivot and affect each selected entity and descendant once. Inspector edits also
+apply to descendants.
+
+Press **Delete** while the Scene view is focused to delete the selected entities
+and their descendants.
+
+Use **Edit → Undo** or **Ctrl+Z** to reverse an authored scene edit. **Ctrl+Y**
+and **Ctrl+Shift+Z** redo it. Each completed gesture takes one step. Undo and Redo
+are unavailable during Play. Saving changes at the Stop prompt records one
+history entry for those authored edits.
 
 ## Native implementation and validation
 

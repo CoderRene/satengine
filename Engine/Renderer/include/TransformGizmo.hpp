@@ -10,6 +10,14 @@ inline constexpr float kGizmoScaleTipHalfExtent = 0.07f;
 inline constexpr float kGizmoCenterHalfExtent = 0.09f;
 inline constexpr float kGizmoMinimumScale = 0.0001f;
 
+// Move handles 3–5 are planes with local normal X, Y, Z respectively.
+[[nodiscard]] Vec3 transformGizmoPlaneCorner(int normal, int corner);
+
+struct GizmoSnap {
+    double gridStep = 0;
+    double angleDegrees = 0;
+};
+
 struct GizmoHit {
     int handle = -1;
     float ringAngle = 0.0f; // Radians on the handle's local circle.
@@ -25,6 +33,10 @@ struct GizmoHit {
     const Mat4& view, const Mat4& projection, float width, float height, float mouseX, float mouseY);
 [[nodiscard]] Vec3 gizmoEulerDegrees(const Mat4& rotation, const Vec3& referenceDegrees);
 [[nodiscard]] Mat4 gizmoAxisRotation(int axis, double radians);
+// Apply group rotation or uniform scale around a world-space pivot. The caller
+// clamps the factor across the formation and supplies the previous Euler angles.
+[[nodiscard]] Transform transformGizmoGroupMember(const Transform& start, DVec3 pivot, TransformTool tool,
+    const Mat4& worldRotation, double scaleFactor, Vec3 previousRotation);
 [[nodiscard]] bool sameTransform(const Transform& a, const Transform& b);
 
 // Window-thread only. Owns a drag snapshot and frozen camera/basis; no borrowed
@@ -32,7 +44,7 @@ struct GizmoHit {
 class TransformGizmoDrag {
 public:
     [[nodiscard]] bool begin(EntityId owner, const Transform& transform, TransformTool tool, TransformSpace space,
-        GizmoHit hit, const Mat4& view, const Mat4& projection, float width, float height, float mouseX, float mouseY, DVec3 renderOrigin = {});
+        GizmoHit hit, const Mat4& view, const Mat4& projection, float width, float height, float mouseX, float mouseY, DVec3 renderOrigin = {}, GizmoSnap snap = {});
     [[nodiscard]] bool update(Scene& scene, float mouseX, float mouseY);
     [[nodiscard]] bool update(Transform& transform, float mouseX, float mouseY);
     [[nodiscard]] bool cancel(Scene& scene);
@@ -40,6 +52,8 @@ public:
     [[nodiscard]] bool active() const { return m_active; }
     [[nodiscard]] bool viewportMatches(float width, float height) const { return width == m_width && height == m_height; }
     [[nodiscard]] EntityId owner() const { return m_owner; }
+    [[nodiscard]] double scaleFactor() const { return m_scaleFactor; }
+    [[nodiscard]] Mat4 worldRotationDelta() const { return m_worldRotationDelta; }
     [[nodiscard]] int handle() const { return m_handle; }
     [[nodiscard]] const Transform& startTransform() const { return m_start; }
 private:
@@ -58,6 +72,10 @@ private:
     Vec3 m_axis;
     Vec3 m_planeNormal;
     Vec3 m_radial;
+    Vec3 m_planeStart;
+    GizmoSnap m_snap;
+    double m_scaleFactor = 1;
+    Mat4 m_worldRotationDelta;
     float m_width = 0;
     float m_height = 0;
     float m_startX = 0;

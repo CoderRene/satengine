@@ -4,6 +4,7 @@
 
 #include "module/AssetImportPanel.hpp"
 #include "module/PlaySession.hpp"
+#include "module/SceneEditHistory.hpp"
 #include "module/AnimationGraphPanel.hpp"
 #include "module/ProjectOpen.hpp"
 
@@ -65,7 +66,16 @@ struct EditorSession::State {
     std::unique_ptr<LuaLogPanel> luaLog;
 
     std::string sceneError;
-    std::uint64_t savedSceneRevision = 0;
+    SceneEditHistory history;
+    SceneEditHistory::Selection prePlaySelection;
+    std::vector<EntityId> inspectorEditIds;
+    [[nodiscard]] SceneEditHistory::Selection sceneSelection() const {
+        const int index = hierarchy ? hierarchy->selectedIndex() : -1;
+        const auto* entity = index >= 0 ? scene.entity(static_cast<std::size_t>(index)) : nullptr;
+        return {hierarchy ? hierarchy->selectedIds() : std::unordered_set<EntityId>{},
+            entity ? entity->id() : kInvalidEntityId};
+    }
+    [[nodiscard]] bool recordsSceneHistory() const { return !play.active() && !play.decisionPending(); }
     bool hasSavedScene = false;
 
     GameBuilder builder{std::filesystem::path(SAT_ENGINE_SOURCE_DIR)};

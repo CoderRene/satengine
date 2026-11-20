@@ -41,6 +41,7 @@ public:
     [[nodiscard]] bool canSaveScene() const;
     [[nodiscard]] bool projectOpening() const;
     bool saveScene();
+    void resetViewportInteraction();
     void tickScripts(float deltaSeconds);
     void drawInterface(bool canSaveScene);
     [[nodiscard]] bool requestClose();
@@ -66,7 +67,7 @@ private:
     void finishProjectOpen();
     void drawProjectProgress();
     void reloadAssets();
-    void selectEntity(EntityId id, bool keepHierarchySelection = false);
+    void selectEntity(EntityId id, bool keepHierarchySelection = false, bool toggle = false);
     void syncLuaTooling() const;
     [[nodiscard]] bool createProjectFromDialog();
     static bool createProjectThunk(void* context);

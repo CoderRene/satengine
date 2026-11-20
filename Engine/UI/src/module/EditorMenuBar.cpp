@@ -73,6 +73,29 @@ void EditorSession::drawMenuBar(bool canSaveScene) {
         ImGui::EndMenu();
     }
 
+    const auto& io = ImGui::GetIO();
+    const bool historyEnabled = state.recordsSceneHistory() && !state.openClosePrompt &&
+        !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) &&
+        (!state.viewport || !state.viewport->transformActive()) && !io.WantTextInput && !ImGui::IsAnyItemActive();
+    if (historyEnabled) { state.history.finishGesture(); }
+    bool undo = historyEnabled && io.KeyCtrl && !io.KeyAlt && !io.KeySuper && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z, false);
+    bool redo = historyEnabled && io.KeyCtrl && !io.KeyAlt && !io.KeySuper &&
+        (io.KeyShift ? ImGui::IsKeyPressed(ImGuiKey_Z, false) : ImGui::IsKeyPressed(ImGuiKey_Y, false));
+    if (ImGui::BeginMenu("Edit")) {
+        const char* undoLabel = state.history.undoLabel();
+        const char* redoLabel = state.history.redoLabel();
+        const auto undoText = undoLabel ? std::string("Undo ") + undoLabel : std::string("Undo");
+        const auto redoText = redoLabel ? std::string("Redo ") + redoLabel : std::string("Redo");
+        const bool canStep = state.recordsSceneHistory() && (!state.viewport || !state.viewport->transformActive());
+        undo |= ImGui::MenuItem(undoText.c_str(), "Ctrl+Z", false, canStep && undoLabel);
+        redo |= ImGui::MenuItem(redoText.c_str(), "Ctrl+Y", false, canStep && redoLabel);
+        ImGui::EndMenu();
+    }
+    if ((undo || redo) && !state.history.needsCapture(state.scene)) {
+        const auto selection = state.history.step(state.scene, undo);
+        if (state.hierarchy && selection) { state.hierarchy->restoreSelection(selection->ids, selection->primary); }
+    }
+
     if (ImGui::BeginMenu("Scene")) {
         ImGui::MenuItem("Audio Settings", nullptr, &state.showAudioSettings);
         ImGui::MenuItem("Lighting Settings", nullptr, &state.showLightingSettings);

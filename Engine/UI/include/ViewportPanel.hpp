@@ -3,6 +3,8 @@
 #include "SceneDraw.hpp"
 
 #include <memory>
+#include <span>
+#include <unordered_set>
 
 struct GLFWwindow;
 
@@ -25,7 +27,7 @@ public:
 
     // selectedIndex refers to the authored scene, including when picking a live entity.
     // When focusGameView is true, the Game window is focused this frame.
-    void onImGuiRender(int& selectedIndex, const Scene& gameScene, bool sceneReadOnly, bool focusGameView,
+    void onImGuiRender(int& selectedIndex, const std::unordered_set<EntityId>& selection, const Scene& gameScene, bool sceneReadOnly, bool focusGameView,
         GameUi* ui = nullptr, const Input* input = nullptr);
 
     // Append the overlay after the game target is rendered, before ImGui::Render().
@@ -34,8 +36,12 @@ public:
     void resetInteraction();
     [[nodiscard]] bool showColliders() const;
     [[nodiscard]] bool showingLiveScene() const;
-    [[nodiscard]] TransformGizmoInstance gizmo(const Entity& entity) const;
+    [[nodiscard]] TransformGizmoInstance gizmo(const Entity& entity, const Scene& visibleScene) const;
+    [[nodiscard]] bool transformActive() const;
+    [[nodiscard]] std::span<const EntityId> transformTargets() const;
+    [[nodiscard]] bool selectionToggle() const;
     [[nodiscard]] bool selectionActivated() const;
+    [[nodiscard]] bool deleteRequested() const;
     // Camera look, pan, gizmo drag, or pointer motion over the scene image this frame.
     [[nodiscard]] bool sceneViewInteracting() const;
 

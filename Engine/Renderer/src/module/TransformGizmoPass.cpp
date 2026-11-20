@@ -57,7 +57,7 @@ struct GizmoRange {
 };
 struct GizmoGeometry {
     std::vector<GizmoVertex> vertices;
-    std::array<GizmoRange, 3> ranges;
+    std::array<GizmoRange, 4> ranges;
 };
 void appendTri(std::vector<GizmoVertex>& vertices, const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& color, int handle) {
     for (const auto& point : {a, b, c}) {
@@ -128,8 +128,22 @@ GizmoGeometry buildGizmoMesh() {
             else { appendAxis(geometry.vertices, axis, colors[axis], tool == static_cast<int>(TransformTool::Scale)); }
         }
         if (tool == static_cast<int>(TransformTool::Scale)) { appendCube(geometry.vertices, {}, kGizmoCenterHalfExtent, {0.9f,0.9f,0.9f}, 3); }
+        if (tool == static_cast<int>(TransformTool::Move)) {
+            for (int normal = 0; normal < 3; ++normal) {
+                const auto a = transformGizmoPlaneCorner(normal, 0);
+                const auto b = transformGizmoPlaneCorner(normal, 1);
+                const auto c = transformGizmoPlaneCorner(normal, 2);
+                const auto d = transformGizmoPlaneCorner(normal, 3);
+                appendTri(geometry.vertices, a, b, c, colors[normal], normal + 3);
+                appendTri(geometry.vertices, a, c, d, colors[normal], normal + 3);
+            }
+        }
         range.count = static_cast<UINT>(geometry.vertices.size()) - range.first;
     }
+    auto& uniform = geometry.ranges[3];
+    uniform.first = static_cast<UINT>(geometry.vertices.size());
+    appendCube(geometry.vertices, {}, kGizmoCenterHalfExtent, {0.9f,0.9f,0.9f}, 3);
+    uniform.count = static_cast<UINT>(geometry.vertices.size()) - uniform.first;
     return geometry;
 }
 
@@ -140,7 +154,7 @@ struct TransformGizmoPass::Impl {
     ID3D11Buffer* frameCb = nullptr;
     ID3D11RasterizerState* rasterizer = nullptr;
     ID3D11DepthStencilState* depthState = nullptr;
-    std::array<GizmoRange, 3> ranges;
+    std::array<GizmoRange, 4> ranges;
     bool ready = false;
     bool failed = false;
 };
@@ -241,8 +255,8 @@ void TransformGizmoPass::draw(
         return;
     }
 
-    const int mode = static_cast<int>(gizmo.tool);
-    if (mode < 0 || mode >= 3) { return; }
+    const int mode = gizmo.tool == TransformTool::Scale && gizmo.uniformScaleOnly ? 3 : static_cast<int>(gizmo.tool);
+    if (mode < 0 || mode >= 4) { return; }
     Mat4 translated = viewProj * translationMatrix(gizmo.origin) * gizmo.basis;
     // Post-multiply uniform scale without rebuilding geometry or moving origin.
     for (int column = 0; column < 3; ++column) {

@@ -7,6 +7,9 @@
 #include "SceneSettingsWindows.hpp"
 
 #include <imgui.h>
+#include <imgui_internal.h>
+
+#include <span>
 
 namespace sat {
 
@@ -36,8 +39,15 @@ void EditorSession::drawInterface(bool canSaveScene) {
     if (!openingProject) {
         const std::size_t physicsWorlds = state.showPhysicsSettings && state.play.active()
             ? state.play.physicsWorldCount() : 0;
+        const auto settingsRevision = state.scene.editRevision();
         drawSceneSettingsWindows(state.showLightingSettings, state.showAudioSettings, state.showPhysicsSettings,
-            state.scene, state.project, state.play.decisionPending(), state.play.active(), physicsWorlds);
+            state.scene, state.project, state.play.decisionPending() || (state.viewport && state.viewport->transformActive()),
+            state.play.active(), physicsWorlds);
+        if (state.recordsSceneHistory() && state.scene.editRevision() != settingsRevision) {
+            const auto active = ImGui::GetActiveID();
+            const auto gesture = active != 0 ? active : ImGui::GetCurrentContext()->DeactivatedItemData.ID;
+            state.history.capture(state.scene, "Scene Settings", gesture, std::span<const EntityId>{});
+        }
         drawBuildStatusWindow(state.showBuildStatus, state.builder);
         if (drawEditorDiagnostics(state.renderer->assetErrors(), state.play.active(), state.sceneError)) {
             reloadAssets();

@@ -70,6 +70,8 @@ struct PhysicsSettings {
     double maxRelativeSpeed = 1000.0;
     std::uint32_t maxBodies = 65536;
     std::uint32_t maxContactEvents = 262144;
+    bool operator==(const PhysicsSettings&) const = default;
+
 };
 
 } // namespace sat

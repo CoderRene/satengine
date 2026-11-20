@@ -32,36 +32,36 @@ void EditorSession::initialize() {
     state.assetImports = std::make_unique<AssetImportPanel>(state.project, renderer);
     state.content = std::make_unique<ContentPanel>(state.project, renderer);
     state.content->setMoveHandler([this](std::string_view oldPath, std::string_view newPath, bool directory) {
-        auto& scene = m_state->scene;
-        bool changed = false;
-        const auto replace = [&changed, directory](std::string& path, std::string_view from, std::string_view to) {
-            if (path == from || (directory && path.starts_with(from) &&
-                    path.size() > from.size() && path[from.size()] == '/')) {
-                path.replace(0, from.size(), to);
-                changed = true;
-            }
+        resetViewportInteraction();
+        const auto replace = [directory](std::string& path, std::string_view from, std::string_view to) {
+            if (path != from && !(directory && path.starts_with(from) &&
+                    path.size() > from.size() && path[from.size()] == '/')) { return false; }
+            path.replace(0, from.size(), to);
+            return true;
         };
-        replace(scene.lightingSettings.environmentPath, oldPath, newPath);
-        for (std::size_t i = 0; i < scene.entityCount(); ++i) {
-            auto& entity = *scene.entity(i);
-            replace(entity.mesh.meshPath, oldPath, newPath);
-            replace(entity.mesh.materialPath, oldPath, newPath);
-            replace(entity.animator.controllerPath, oldPath, newPath);
+        const auto updateEntity = [&](Entity& entity) {
+            bool changed = replace(entity.mesh.meshPath, oldPath, newPath);
+            changed |= replace(entity.mesh.materialPath, oldPath, newPath);
+            changed |= replace(entity.animator.controllerPath, oldPath, newPath);
             if (isAnimationClipAssetPath(entity.animator.clip)) {
-                replace(entity.animator.clip, oldPath, newPath);
+                changed |= replace(entity.animator.clip, oldPath, newPath);
             }
-            replace(entity.audioSource.clipPath, oldPath, newPath);
+            changed |= replace(entity.audioSource.clipPath, oldPath, newPath);
             if (entity.gameUi) {
-                replace(entity.gameUi->documentPath, oldPath, newPath);
-                replace(entity.gameUi->fontPath, oldPath, newPath);
+                changed |= replace(entity.gameUi->documentPath, oldPath, newPath);
+                changed |= replace(entity.gameUi->fontPath, oldPath, newPath);
             }
             if (oldPath.starts_with("Scripts/") && newPath.starts_with("Scripts/")) {
                 for (auto& script : entity.scripts) {
-                    replace(script.path, oldPath.substr(8), newPath.substr(8));
+                    changed |= replace(script.path, oldPath.substr(8), newPath.substr(8));
                 }
             }
-        }
-        if (changed) { scene.markEdited(); }
+            return changed;
+        };
+        const auto updateLighting = [&](LightingSettings& settings) {
+            return replace(settings.environmentPath, oldPath, newPath);
+        };
+        m_state->history.relocateReferences(m_state->scene, updateEntity, updateLighting);
         auto error = m_state->assetImports->updateMaterialReferences(oldPath, newPath, directory);
         m_state->animationGraph->relocate(oldPath, newPath, directory);
         if (isShaderAssetPath(oldPath) || (directory && oldPath.starts_with("Assets/"))) {
@@ -79,7 +79,7 @@ void EditorSession::initialize() {
     state.content->setSelectionHandler([this](std::string path) {
         if (m_state->assetImports->active() && m_state->assetImports->path() == path) { return; }
         m_state->assetImports->request([this, path = std::move(path)] {
-            m_state->viewport->resetInteraction();
+            resetViewportInteraction();
             m_state->hierarchy->setSelectedIndex(-1);
             if (isAnimationGraphAssetPath(path)) {
                 m_state->animationGraph->open(path);

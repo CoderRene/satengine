@@ -333,6 +333,7 @@ add_library(SatEditor STATIC
     UI/src/module/CursorWrap.hpp
     UI/src/module/EditorDiagnostics.cpp
     UI/src/module/EditorDock.cpp
+    UI/src/module/SceneEditHistory.cpp
     UI/src/module/EditorFrame.cpp
     UI/src/module/EditorMenuBar.cpp
     UI/src/module/EditorPanels.cpp

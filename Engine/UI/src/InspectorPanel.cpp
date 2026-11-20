@@ -306,7 +306,8 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-        Transform& visible = liveEntity ? liveEntity->transform : entity->transform;
+        Transform authoredTransform = entity->transform;
+        Transform visible = liveEntity ? liveEntity->transform : authoredTransform;
         const auto editAxis = [&](const char* label, ImGuiDataType type, auto& authored, auto& live, float speed) {
             if (!dragScalar(label, type, &live, speed)) { return; }
             authored = live;
@@ -329,15 +330,13 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             ImGui::TextUnformatted(label);
             ImGui::EndGroup();
         };
-        DVec3 position = entity->transform.position;
-        DVec3 visiblePosition = visible.position;
-        editVector("Position", ImGuiDataType_Double, position, visiblePosition, 0.05f);
+        editVector("Position", ImGuiDataType_Double, authoredTransform.position, visible.position, 0.05f);
+        editVector("Rotation", ImGuiDataType_Float, authoredTransform.rotation, visible.rotation, 0.5f);
+        editVector("Scale", ImGuiDataType_Float, authoredTransform.scale, visible.scale, 0.05f);
         if (changed) {
-            m_impl->scene->moveEntity(entity->id(), position);
-            if (liveEntity) { visible.position = visiblePosition; }
+            m_impl->scene->setTransform(entity->id(), authoredTransform);
+            if (liveEntity) { liveEntity->transform = visible; }
         }
-        editVector("Rotation", ImGuiDataType_Float, entity->transform.rotation, visible.rotation, 0.5f);
-        editVector("Scale", ImGuiDataType_Float, entity->transform.scale, visible.scale, 0.05f);
     }
 
     const auto componentHeader = [content, &changed](const char* label, auto&& remove,

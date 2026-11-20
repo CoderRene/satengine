@@ -50,19 +50,6 @@ float component(const Vec3& v, int index) { return index == 0 ? v.x : index == 1
 void setComponent(Vec3& v, int index, float value) {
     if (index == 0) { v.x = value; } else if (index == 1) { v.y = value; } else { v.z = value; }
 }
-Vec3 closestDegrees(Vec3 value, const Vec3& reference) {
-    for (int i = 0; i < 3; ++i) {
-        const double angle = component(value, i);
-        setComponent(value, i, static_cast<float>(angle + 360.0 * std::round((component(reference, i) - angle) / 360.0)));
-    }
-    return value;
-}
-double eulerDistance(const Vec3& a, const Vec3& b) {
-    const double x = static_cast<double>(a.x) - b.x;
-    const double y = static_cast<double>(a.y) - b.y;
-    const double z = static_cast<double>(a.z) - b.z;
-    return x * x + y * y + z * z;
-}
 bool cubeHit(float mouseX, float mouseY, const Vec3& center, float extent, const TransformGizmoInstance& gizmo,
     float scale, const Mat4& viewProjection, float width, float height) {
     float minimumX = std::numeric_limits<float>::max(), minimumY = minimumX;
@@ -87,6 +74,12 @@ Mat4 transformGizmoBasis(TransformTool tool, TransformSpace space, const Vec3& r
 Vec3 transformGizmoAxis(const Mat4& basis, int axis) {
     assert(axis >= 0 && axis < 3);
     return {basis.m[axis * 4], basis.m[axis * 4 + 1], basis.m[axis * 4 + 2]};
+}
+Vec3 transformGizmoPlaneCorner(int normal, int corner) {
+    constexpr float kInner = 0.29f;
+    constexpr float kOuter = 0.58f;
+    return transformGizmoAxis(Mat4{}, (normal + 1) % 3) * (corner == 1 || corner == 2 ? kOuter : kInner) +
+        transformGizmoAxis(Mat4{}, (normal + 2) % 3) * (corner >= 2 ? kOuter : kInner);
 }
 Vec3 transformGizmoRingPoint(int axis, float angleRadians) {
     assert(axis >= 0 && axis < 3);
@@ -120,6 +113,7 @@ GizmoHit pickTransformGizmo(const TransformGizmoInstance& gizmo, const Mat4& vie
     if (gizmo.tool == TransformTool::Scale && cubeHit(mouseX, mouseY, {}, kGizmoCenterHalfExtent, gizmo, scale, viewProjection, width, height)) {
         result.handle = 3; return result;
     }
+    if (gizmo.tool == TransformTool::Scale && gizmo.uniformScaleOnly) { return result; }
     float best = kHitPixels;
     for (int axis = 0; axis < 3; ++axis) {
         if (gizmo.tool == TransformTool::Rotate) {
@@ -147,13 +141,55 @@ GizmoHit pickTransformGizmo(const TransformGizmoInstance& gizmo, const Mat4& vie
             if (distance < best) { best = distance; result.handle = axis; }
         }
     }
+    if (gizmo.tool == TransformTool::Move && result.handle < 0) {
+        for (int normal = 0; normal < 3; ++normal) {
+            float x[4]{}, y[4]{};
+            bool visible = true;
+            for (int corner = 0; corner < 4; ++corner) {
+                const auto point = gizmo.origin + transformDirection(gizmo.basis, transformGizmoPlaneCorner(normal, corner)) * scale;
+                visible &= project(point, viewProjection, width, height, x[corner], y[corner]);
+            }
+            if (!visible) { continue; }
+            bool positive = true, negative = true;
+            float area = 0;
+            for (int i = 0; i < 4; ++i) {
+                const int j = (i + 1) % 4;
+                const float side = (x[j] - x[i]) * (mouseY - y[i]) - (y[j] - y[i]) * (mouseX - x[i]);
+                positive &= side >= 0;
+                negative &= side <= 0;
+                area += (x[i] - x[0]) * (y[j] - y[0]) - (y[i] - y[0]) * (x[j] - x[0]);
+            }
+            if ((positive || negative) && std::abs(area) >= 48) { return {normal + 3, 0}; }
+        }
+    }
     return result;
 }
-bool sameTransform(const Transform& a, const Transform& b) {
-    return a.position.x == b.position.x && a.position.y == b.position.y && a.position.z == b.position.z &&
-        a.rotation.x == b.rotation.x && a.rotation.y == b.rotation.y && a.rotation.z == b.rotation.z &&
-        a.scale.x == b.scale.x && a.scale.y == b.scale.y && a.scale.z == b.scale.z;
+Transform transformGizmoGroupMember(const Transform& start, DVec3 pivot, TransformTool tool,
+    const Mat4& worldRotation, double scaleFactor, Vec3 previousRotation) {
+    Transform result = start;
+    const DVec3 offset = start.position - pivot;
+    if (tool == TransformTool::Rotate) {
+        const auto& m = worldRotation.m;
+        result.position = pivot + DVec3{
+            m[0] * offset.x + m[4] * offset.y + m[8] * offset.z,
+            m[1] * offset.x + m[5] * offset.y + m[9] * offset.z,
+            m[2] * offset.x + m[6] * offset.y + m[10] * offset.z};
+        result.rotation = gizmoEulerDegrees(worldRotation * rotationMatrixEuler(start.rotation), previousRotation);
+    } else if (tool == TransformTool::Scale && scaleFactor != 1) {
+        result.position = pivot + offset * scaleFactor;
+        for (int axis = 0; axis < 3; ++axis) {
+            const float value = component(start.scale, axis);
+            const double minimum = kGizmoMinimumScale;
+            const double magnitude = std::max(static_cast<double>(std::abs(value)), minimum);
+            const auto scaled = static_cast<float>(std::clamp(magnitude * scaleFactor,
+                minimum, static_cast<double>(std::numeric_limits<float>::max())));
+            setComponent(result.scale, axis, value < 0 ? -scaled : scaled);
+        }
+    }
+    return result;
 }
+
+bool sameTransform(const Transform& a, const Transform& b) { return a == b; }
 Mat4 gizmoAxisRotation(int axis, double radians) {
     assert(axis >= 0 && axis < 3);
     const float cosine = static_cast<float>(std::cos(std::remainder(radians, 2 * kPi)));
@@ -165,25 +201,12 @@ Mat4 gizmoAxisRotation(int axis, double radians) {
     return result;
 }
 Vec3 gizmoEulerDegrees(const Mat4& rotation, const Vec3& referenceDegrees) {
-    const double cy = std::hypot(static_cast<double>(rotation.m[0]), static_cast<double>(rotation.m[1]));
-    const double yaw = std::atan2(-static_cast<double>(rotation.m[2]), cy);
-    constexpr double kRadiansToDegrees = 180.0 / kPi;
-    if (cy < 0.000001) {
-        const double roll = referenceDegrees.z / kRadiansToDegrees;
-        const double pitch = yaw > 0 ? std::atan2(rotation.m[4], rotation.m[5]) + roll :
-            std::atan2(-rotation.m[4], rotation.m[5]) - roll;
-        return closestDegrees({static_cast<float>(pitch * kRadiansToDegrees), yaw > 0 ? 90.0f : -90.0f, referenceDegrees.z}, referenceDegrees);
-    }
-    const Vec3 first{static_cast<float>(std::atan2(rotation.m[6], rotation.m[10]) * kRadiansToDegrees),
-        static_cast<float>(yaw * kRadiansToDegrees), static_cast<float>(std::atan2(rotation.m[1], rotation.m[0]) * kRadiansToDegrees)};
-    const auto a = closestDegrees(first, referenceDegrees);
-    const auto b = closestDegrees({first.x + 180, 180 - first.y, first.z + 180}, referenceDegrees);
-    return eulerDistance(a, referenceDegrees) <= eulerDistance(b, referenceDegrees) ? a : b;
+    return eulerDegreesFromRotation(rotation, referenceDegrees);
 }
 bool TransformGizmoDrag::begin(EntityId owner, const Transform& transform, TransformTool tool, TransformSpace space,
-    GizmoHit hit, const Mat4& view, const Mat4& projection, float width, float height, float mouseX, float mouseY, DVec3 renderOrigin) {
+    GizmoHit hit, const Mat4& view, const Mat4& projection, float width, float height, float mouseX, float mouseY, DVec3 renderOrigin, GizmoSnap snap) {
     if (m_active) { return false; }
-    if (owner == kInvalidEntityId || !finite(transform) || hit.handle < 0 || hit.handle > (tool == TransformTool::Scale ? 3 : 2) ||
+    if (owner == kInvalidEntityId || !finite(transform) || hit.handle < 0 || hit.handle > (tool == TransformTool::Move ? 5 : tool == TransformTool::Scale ? 3 : 2) ||
         !std::isfinite(width) || width <= 0 || !std::isfinite(mouseX) || !std::isfinite(mouseY)) { return false; }
     m_origin = toVec3(transform.position - renderOrigin);
     const float scale = translateGizmoScale(m_origin, view, projection, height);
@@ -195,13 +218,22 @@ bool TransformGizmoDrag::begin(EntityId owner, const Transform& transform, Trans
     m_startX = m_lastX = mouseX; m_startY = m_lastY = mouseY; m_angle = 0;
     m_worldLength = scale * kTranslateGizmoAxisLength;
     m_usePlane = false;
-    if (hit.handle == 3) {
+    m_snap = snap;
+    m_scaleFactor = 1;
+    m_worldRotationDelta = {};
+    if (tool == TransformTool::Scale && hit.handle == 3) {
         m_screenX = 0.70710678f; m_screenY = -0.70710678f; m_screenLength = kTranslateGizmoAxisPixels;
         m_active = true; return true;
     }
     const auto basis = transformGizmoBasis(tool, space, transform.rotation);
-    m_axis = transformGizmoAxis(basis, hit.handle);
     const Ray ray = unprojectRay(mouseX, mouseY, width, height, view, projection);
+    if (tool == TransformTool::Move && hit.handle >= 3) {
+        m_planeNormal = transformGizmoAxis(basis, hit.handle - 3);
+        m_active = std::abs(dot(ray.direction, m_planeNormal)) > 0.05f &&
+            planeHit(ray, m_origin, m_planeNormal, m_planeStart);
+        return m_active;
+    }
+    m_axis = transformGizmoAxis(basis, hit.handle);
     if (tool == TransformTool::Rotate) {
         m_planeNormal = m_axis;
         Vec3 point;
@@ -241,10 +273,7 @@ bool TransformGizmoDrag::update(Scene& scene, float mouseX, float mouseY) {
     if (!entity) { m_active = false; return false; }
     Transform next = entity->transform;
     if (!update(next, mouseX, mouseY)) { return false; }
-    const bool moved = scene.moveEntity(m_owner, next.position);
-    entity->transform = next;
-    if (!moved) { scene.markEdited(); }
-    return true;
+    return scene.setTransform(m_owner, next);
 }
 bool TransformGizmoDrag::update(Transform& transform, float mouseX, float mouseY) {
     if (!m_active) { return false; }
@@ -253,13 +282,33 @@ bool TransformGizmoDrag::update(Transform& transform, float mouseX, float mouseY
     const double pixels = (static_cast<double>(mouseX) - m_startX) * m_screenX + (static_cast<double>(mouseY) - m_startY) * m_screenY;
     const Ray ray = unprojectRay(mouseX, mouseY, m_width, m_height, m_view, m_projection);
     if (m_tool == TransformTool::Move) {
-        double delta = pixels * m_worldLength / m_screenLength;
-        if (m_usePlane) {
+        const auto addDisplacement = [&](Vec3 axis, double delta) {
+            if (m_snap.gridStep > 0 && std::isfinite(m_snap.gridStep)) {
+                const auto& p = m_start.position;
+                const double coordinate = p.x * axis.x + p.y * axis.y + p.z * axis.z;
+                delta = std::round((coordinate + delta) / m_snap.gridStep) * m_snap.gridStep - coordinate;
+            }
+            next.position = next.position + DVec3{axis.x * delta, axis.y * delta, axis.z * delta};
+        };
+        const bool displaced = mouseX != m_startX || mouseY != m_startY;
+        if (displaced && m_handle >= 3) {
             Vec3 hit;
             if (!planeHit(ray, m_origin, m_planeNormal, hit)) { return false; }
-            delta = static_cast<double>(dot(hit - m_origin, m_axis)) - m_startOffset;
+            const auto basis = transformGizmoBasis(m_tool, m_space, m_start.rotation);
+            for (int axis = 0; axis < 3; ++axis) {
+                if (axis == m_handle - 3) { continue; }
+                const Vec3 direction = transformGizmoAxis(basis, axis);
+                addDisplacement(direction, dot(hit - m_planeStart, direction));
+            }
+        } else if (displaced) {
+            double delta = pixels * m_worldLength / m_screenLength;
+            if (m_usePlane) {
+                Vec3 hit;
+                if (!planeHit(ray, m_origin, m_planeNormal, hit)) { return false; }
+                delta = static_cast<double>(dot(hit - m_origin, m_axis)) - m_startOffset;
+            }
+            addDisplacement(m_axis, delta);
         }
-        next.position = m_start.position + DVec3{m_axis.x * delta, m_axis.y * delta, m_axis.z * delta};
     } else if (m_tool == TransformTool::Rotate) {
         if (m_usePlane) {
             Vec3 hit, radial;
@@ -270,9 +319,14 @@ bool TransformGizmoDrag::update(Transform& transform, float mouseX, float mouseY
         } else {
             m_angle += ((static_cast<double>(mouseX) - m_lastX) * m_screenX + (static_cast<double>(mouseY) - m_lastY) * m_screenY) / m_screenLength;
         }
-        const auto delta = gizmoAxisRotation(m_handle, m_angle);
-        next.rotation = gizmoEulerDegrees(m_space == TransformSpace::Local ? m_rotation * delta : delta * m_rotation, m_last.rotation);
+        const double step = m_snap.angleDegrees * (kPi / 180.0);
+        const double angle = step > 0 && std::isfinite(step) ? std::round(m_angle / step) * step : m_angle;
+        const auto delta = gizmoAxisRotation(m_handle, angle);
+        m_worldRotationDelta = m_space == TransformSpace::Local ? m_rotation * delta * inverse(m_rotation) : delta;
+        if (angle == 0) { m_worldRotationDelta = {}; }
+        else { next.rotation = gizmoEulerDegrees(m_space == TransformSpace::Local ? m_rotation * delta : delta * m_rotation, m_last.rotation); }
     } else {
+        m_scaleFactor = 1;
         if (mouseX != m_startX || mouseY != m_startY) {
             double factor = 1.0 + pixels / m_screenLength;
             double minimum = 0, maximum = std::numeric_limits<double>::max();
@@ -283,6 +337,7 @@ bool TransformGizmoDrag::update(Transform& transform, float mouseX, float mouseY
                 maximum = std::min(maximum, std::numeric_limits<float>::max() / magnitude);
             }
             factor = std::clamp(factor, minimum, maximum);
+            m_scaleFactor = factor;
             for (int axis = 0; axis < 3; ++axis) {
                 if (m_handle != 3 && axis != m_handle) { continue; }
                 const float source = component(m_start.scale, axis);
@@ -292,7 +347,7 @@ bool TransformGizmoDrag::update(Transform& transform, float mouseX, float mouseY
         }
     }
     m_lastX = mouseX; m_lastY = mouseY;
-    if (!finite(next) || sameTransform(next, m_last)) { return false; }
+    if (!finite(next)) { return false; }
     m_last = next;
     if (sameTransform(transform, next)) { return false; }
     transform = next;
@@ -303,9 +358,6 @@ bool TransformGizmoDrag::cancel(Scene& scene) {
     m_active = false;
     auto* entity = scene.entityById(m_owner);
     if (!entity || sameTransform(entity->transform, m_start)) { return false; }
-    const bool moved = scene.moveEntity(m_owner, m_start.position);
-    entity->transform = m_start;
-    if (!moved) { scene.markEdited(); }
-    return true;
+    return scene.setTransform(m_owner, m_start);
 }
 }

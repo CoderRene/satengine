@@ -105,6 +105,9 @@ std::uint64_t viewRenderKey(const GameViewCamera& camera, const SceneDrawList& d
     }
     if (draw.animation) { mixViewPod(hash, draw.animation->poseRevision()); }
     mixViewPod(hash, draw.selected);
+    if (draw.selection) {
+        for (EntityId id : *draw.selection) { mixViewPod(hash, id); }
+    }
     mixViewPod(hash, draw.frustumCount);
     for (int index = 0; index < draw.frustumCount && draw.frustums != nullptr; ++index) {
         const CameraFrustumInstance& frustum = draw.frustums[index];
@@ -123,6 +126,7 @@ std::uint64_t viewRenderKey(const GameViewCamera& camera, const SceneDrawList& d
     mixViewPod(hash, draw.gizmo.origin);
     mixViewPod(hash, draw.gizmo.basis);
     mixViewPod(hash, draw.gizmo.highlightedHandle);
+    mixViewPod(hash, static_cast<unsigned char>(draw.gizmo.uniformScaleOnly));
     mixViewPod(hash, static_cast<unsigned char>(draw.gizmo.dragging));
     return hash;
 }
@@ -164,8 +168,9 @@ void EditorSession::renderViews() {
     const Scene& visibleScene = showLiveScene ? state.play.game() : state.scene;
     const Entity* selected = selectedEntity >= 0 ? state.scene.entity(static_cast<std::size_t>(selectedEntity)) : nullptr;
     const EntityId selectedId = selected ? selected->id() : kInvalidEntityId;
+    const auto* selection = state.hierarchy ? &state.hierarchy->selectedIds() : nullptr;
     for (const Entity& entity : visibleScene.entities()) {
-        const bool isSelected = entity.id() == selectedId;
+        const bool isSelected = selection && selection->contains(entity.id());
         if (state.viewport && state.viewport->showColliders()) {
             appendColliderLines(entity, sceneCamera.renderOrigin, isSelected, colliderLines);
         }
@@ -221,13 +226,14 @@ void EditorSession::renderViews() {
     sceneDraw.scene = &visibleScene;
     sceneDraw.animation = showLiveScene ? &state.play.animation() : &state.previewAnimation;
     sceneDraw.selected = selectedId;
+    sceneDraw.selection = selection;
     sceneDraw.frustums = frustumInstances.empty() ? nullptr : frustumInstances.data();
     sceneDraw.frustumCount = static_cast<int>(frustumInstances.size());
     sceneDraw.drawGrid = true;
     sceneDraw.drawEditorOverlay = true;
     if (state.viewport && gizmoEntity) {
         sceneDraw.showTransformGizmo = true;
-        sceneDraw.gizmo = state.viewport->gizmo(*gizmoEntity);
+        sceneDraw.gizmo = state.viewport->gizmo(*gizmoEntity, visibleScene);
     }
 
     // A collapsed panel keeps its last target. Edit mode redraws a visible view only

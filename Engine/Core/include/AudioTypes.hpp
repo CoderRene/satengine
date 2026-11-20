@@ -38,6 +38,8 @@ struct AudioSettings {
     std::uint32_t maxVoices = 64;
     std::uint32_t maxVirtualVoices = 0;
     bool followTimeScale[kAudioBusCount] = {};
+    bool operator==(const AudioSettings&) const = default;
+
 };
 
 } // namespace sat

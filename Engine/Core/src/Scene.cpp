@@ -5,7 +5,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <limits>
+#include <numbers>
 #include <stdexcept>
 #include <utility>
 
@@ -37,7 +39,95 @@ void trimInPlace(std::string& value) {
     }
 }
 
+Vec3 closestDegrees(const Vec3& value, const Vec3& reference) {
+    const auto closest = [](double angle, double target) {
+        return static_cast<float>(angle + 360.0 * std::round((target - angle) / 360.0));
+    };
+    return {closest(value.x, reference.x), closest(value.y, reference.y), closest(value.z, reference.z)};
+}
+
+double eulerDistance(const Vec3& a, const Vec3& b) {
+    const double x = static_cast<double>(a.x) - b.x;
+    const double y = static_cast<double>(a.y) - b.y;
+    const double z = static_cast<double>(a.z) - b.z;
+    return x * x + y * y + z * z;
+}
+
+DVec3 transformOffset(const Mat4& basis, const DVec3& offset) {
+    const auto& m = basis.m;
+    return {m[0] * offset.x + m[4] * offset.y + m[8] * offset.z,
+        m[1] * offset.x + m[5] * offset.y + m[9] * offset.z,
+        m[2] * offset.x + m[6] * offset.y + m[10] * offset.z};
+}
+
 } // namespace
+
+Vec3 eulerDegreesFromRotation(const Mat4& rotation, const Vec3& referenceDegrees) {
+    const double cy = std::hypot(static_cast<double>(rotation.m[0]), static_cast<double>(rotation.m[1]));
+    const double yaw = std::atan2(-static_cast<double>(rotation.m[2]), cy);
+    constexpr double kRadiansToDegrees = 180.0 / std::numbers::pi_v<double>;
+    if (cy < 0.000001) {
+        const double roll = referenceDegrees.z / kRadiansToDegrees;
+        const double pitch = yaw > 0 ? std::atan2(rotation.m[4], rotation.m[5]) + roll :
+            std::atan2(-rotation.m[4], rotation.m[5]) - roll;
+        return closestDegrees({static_cast<float>(pitch * kRadiansToDegrees), yaw > 0 ? 90.0f : -90.0f, referenceDegrees.z}, referenceDegrees);
+    }
+    const Vec3 first{static_cast<float>(std::atan2(rotation.m[6], rotation.m[10]) * kRadiansToDegrees),
+        static_cast<float>(yaw * kRadiansToDegrees), static_cast<float>(std::atan2(rotation.m[1], rotation.m[0]) * kRadiansToDegrees)};
+    const auto a = closestDegrees(first, referenceDegrees);
+    const auto b = closestDegrees({first.x + 180, 180 - first.y, first.z + 180}, referenceDegrees);
+    return eulerDistance(a, referenceDegrees) <= eulerDistance(b, referenceDegrees) ? a : b;
+}
+
+TransformDelta::TransformDelta(const Transform& before, const Transform& after)
+    : m_pivot(before.position), m_displacement(after.position - before.position),
+      m_rotated(before.rotation != after.rotation), m_scaled(before.scale != after.scale) {
+    if (!m_rotated && !m_scaled) {
+        return;
+    }
+    const Mat4 oldBasis = rotationMatrixEuler(before.rotation);
+    Mat4 inverseBasis = oldBasis;
+    std::swap(inverseBasis.m[1], inverseBasis.m[4]);
+    std::swap(inverseBasis.m[2], inverseBasis.m[8]);
+    std::swap(inverseBasis.m[6], inverseBasis.m[9]);
+    const Mat4 newBasis = m_rotated ? rotationMatrixEuler(after.rotation) : oldBasis;
+    if (m_rotated) {
+        m_rotation = newBasis * inverseBasis;
+    }
+    if (m_scaled) {
+        // A collapsed axis has no inverse. Preserve what remains on that axis.
+        const auto ratio = [](double oldScale, double newScale) {
+            return oldScale == 0 ? 1.0 : newScale / oldScale;
+        };
+        m_scaleRatio = {ratio(before.scale.x, after.scale.x), ratio(before.scale.y, after.scale.y),
+            ratio(before.scale.z, after.scale.z)};
+        m_offsetBasis = inverseBasis;
+        m_scaledBasis = newBasis;
+    }
+}
+
+Transform TransformDelta::apply(const Transform& descendant) const {
+    Transform result = descendant;
+    if (m_rotated || m_scaled) {
+        const auto offset = descendant.position - m_pivot;
+        if (m_scaled) {
+            const auto local = transformOffset(m_offsetBasis, offset);
+            result.position = m_pivot + transformOffset(m_scaledBasis,
+                {local.x * m_scaleRatio.x, local.y * m_scaleRatio.y, local.z * m_scaleRatio.z});
+            // World-space TRS stores axis scales and has no shear component.
+            result.scale = {static_cast<float>(descendant.scale.x * m_scaleRatio.x),
+                static_cast<float>(descendant.scale.y * m_scaleRatio.y),
+                static_cast<float>(descendant.scale.z * m_scaleRatio.z)};
+        } else {
+            result.position = m_pivot + transformOffset(m_rotation, offset);
+        }
+        if (m_rotated) {
+            result.rotation = eulerDegreesFromRotation(m_rotation * rotationMatrixEuler(descendant.rotation), descendant.rotation);
+        }
+    }
+    result.position = result.position + m_displacement;
+    return result;
+}
 
 bool isUiDocumentPath(std::string_view path) {
     return path.starts_with("Assets/UI/") && path.ends_with(".rml") && isValidAssetPath(path);
@@ -145,18 +235,29 @@ bool Scene::setParent(EntityId childId, EntityId parentId) {
 }
 
 bool Scene::moveEntity(EntityId id, DVec3 position) {
-    Entity* root = entityById(id);
-    if (!root || root->transform.position == position) {
+    const Entity* root = entityById(id);
+    if (!root) {
         return false;
     }
-    const DVec3 offset = position - root->transform.position;
-    root->transform.position = position;
+    Transform next = root->transform;
+    next.position = position;
+    return setTransform(id, next);
+}
+
+bool Scene::setTransform(EntityId id, const Transform& transform) {
+    Entity* root = entityById(id);
+    if (!root || root->transform == transform) {
+        return false;
+    }
+    const Transform previous = root->transform;
+    root->transform = transform;
     if (root->m_childCount != 0) {
+        const TransformDelta delta(previous, transform);
         for (Entity& entity : m_entities) {
             EntityId parentId = entity.parentId();
             while (parentId != kInvalidEntityId) {
                 if (parentId == id) {
-                    entity.transform.position = entity.transform.position + offset;
+                    entity.transform = delta.apply(entity.transform);
                     break;
                 }
                 parentId = entityById(parentId)->parentId();
@@ -234,6 +335,18 @@ void Scene::addEntityCopy(const Entity& entity) {
     copy.m_parentId = kInvalidEntityId;
     copy.m_childCount = 0;
     (void)insertEntity(std::move(copy));
+}
+
+void Scene::restoreEditorEntities(std::vector<Entity> entities) {
+    std::unordered_map<EntityId, std::size_t> indices;
+    indices.reserve(entities.size());
+    for (std::size_t index = 0; index < entities.size(); ++index) {
+        indices.emplace(entities[index].id(), index);
+    }
+    m_entities = std::move(entities);
+    m_entityIndices = std::move(indices);
+    ++m_destructionRevision;
+    markEdited();
 }
 
 Entity& Scene::insertEntity(Entity entity) {

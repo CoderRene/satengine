@@ -251,6 +251,8 @@ struct HierarchyPanel::Impl {
         for (const EntityId id : removalOrder) {
             (void)m_scene->destroyEntity(id);
         }
+        cancelRename();
+        selectOnly(kInvalidEntityId);
     }
 
     void duplicateSelection() {
@@ -315,8 +317,6 @@ struct HierarchyPanel::Impl {
         switch (m_action) {
         case Action::Remove:
             removeSelection();
-            cancelRename();
-            selectOnly(kInvalidEntityId);
             break;
         case Action::Duplicate:
             duplicateSelection();
@@ -520,6 +520,20 @@ struct HierarchyPanel::Impl {
         return open;
     }
 
+    std::size_t buildLinks() {
+        const auto& entities = m_scene->entities();
+        m_links.assign(entities.size(), {});
+        std::size_t index = kNoIndex;
+        for (std::size_t i = entities.size(); i > 0; --i) {
+            const std::size_t child = i - 1;
+            const auto parent = m_scene->entityIndex(entities[child].parentId());
+            std::size_t& head = parent ? m_links[*parent].firstChild : index;
+            m_links[child].nextSibling = head;
+            head = child;
+        }
+        return index;
+    }
+
     void drawTree(bool readOnly) {
         for (const Entity* item = m_scene->entityById(m_reveal); item;) {
             item = m_scene->entityById(item->parentId());
@@ -532,15 +546,7 @@ struct HierarchyPanel::Impl {
         m_reveal = kInvalidEntityId;
 
         const auto& entities = m_scene->entities();
-        m_links.assign(entities.size(), {});
-        std::size_t index = kNoIndex;
-        for (std::size_t i = entities.size(); i > 0; --i) {
-            const std::size_t child = i - 1;
-            const auto parent = m_scene->entityIndex(entities[child].parentId());
-            std::size_t& head = parent ? m_links[*parent].firstChild : index;
-            m_links[child].nextSibling = head;
-            head = child;
-        }
+        std::size_t index = buildLinks();
 
         // Keep ImGui IDs independent of tree depth and walk without recursion.
         m_visible.clear();
@@ -584,6 +590,26 @@ int HierarchyPanel::selectedIndex() const {
     return index ? static_cast<int>(*index) : -1;
 }
 
+const std::unordered_set<EntityId>& HierarchyPanel::selectedIds() const { return m_impl->m_selected; }
+
+void HierarchyPanel::restoreSelection(const std::unordered_set<EntityId>& ids, EntityId primary) {
+    m_impl->selectOnly(primary);
+    m_impl->m_selected = ids;
+    std::erase_if(m_impl->m_selected, [&](EntityId id) { return !m_impl->m_scene->entityById(id); });
+    if (!m_impl->m_selected.contains(primary)) {
+        m_impl->m_primary = m_impl->m_selected.empty() ? kInvalidEntityId : *m_impl->m_selected.begin();
+    }
+    m_impl->m_anchor = m_impl->m_primary;
+    m_impl->m_reveal = m_impl->m_primary;
+    m_impl->m_selectionActivated = false;
+    m_impl->cancelRename();
+}
+
+void HierarchyPanel::toggleSelected(EntityId id) {
+    if (m_impl->m_scene->entityById(id)) { m_impl->selectRow(id, false, true); }
+    m_impl->m_reveal = m_impl->m_primary;
+}
+
 void HierarchyPanel::setSelectedIndex(int index) {
     const Entity* entity = index >= 0 ? m_impl->m_scene->entity(static_cast<std::size_t>(index)) : nullptr;
     const EntityId id = entity ? entity->id() : kInvalidEntityId;
@@ -592,6 +618,13 @@ void HierarchyPanel::setSelectedIndex(int index) {
     m_impl->m_reveal = id;
     if (m_impl->m_renaming != id) {
         m_impl->cancelRename();
+    }
+}
+
+void HierarchyPanel::deleteSelection() {
+    if (!m_impl->m_selected.empty()) {
+        m_impl->buildLinks();
+        m_impl->removeSelection();
     }
 }
 

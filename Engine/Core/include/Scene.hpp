@@ -21,7 +21,28 @@ struct Transform {
     DVec3 position{};
     Vec3 rotation{};
     Vec3 scale{1.0f, 1.0f, 1.0f};
+    bool operator==(const Transform&) const = default;
+
 };
+
+// Maps a descendant's world-space TRS through a change to its ancestor.
+class TransformDelta {
+public:
+    TransformDelta(const Transform& before, const Transform& after);
+    [[nodiscard]] Transform apply(const Transform& descendant) const;
+
+private:
+    DVec3 m_pivot;
+    DVec3 m_displacement;
+    DVec3 m_scaleRatio{1, 1, 1};
+    Mat4 m_offsetBasis;
+    Mat4 m_scaledBasis;
+    Mat4 m_rotation;
+    bool m_rotated;
+    bool m_scaled;
+};
+
+[[nodiscard]] Vec3 eulerDegreesFromRotation(const Mat4& rotation, const Vec3& referenceDegrees);
 
 inline Mat4 matrixFromTransform(const Transform& transform, DVec3 renderOrigin = {}) {
     return matrixFromTRS(toVec3(transform.position - renderOrigin), transform.rotation, transform.scale);
@@ -33,6 +54,8 @@ struct CameraComponent {
     float farClip = 1000.0f;
     float clearColor[4] = {0.12f, 0.16f, 0.24f, 1.0f};
     bool isMain = false;
+    bool operator==(const CameraComponent&) const = default;
+
 };
 
 enum class LightType { Directional, Point, Spot };
@@ -46,6 +69,8 @@ struct LightComponent {
     float range = 10.0f;
     float innerConeDegrees = 20.0f;
     float outerConeDegrees = 35.0f;
+    bool operator==(const LightComponent&) const = default;
+
 };
 
 struct BloomSettings {
@@ -72,6 +97,8 @@ struct LightingSettings {
     float shadowDistance = 100.0f;
     int shadowCascadeCount = 4;
     float shadowSplitLambda = 0.75f;
+    bool operator==(const LightingSettings&) const = default;
+
 };
 
 struct MeshComponent {
@@ -83,6 +110,8 @@ struct MeshComponent {
     std::string materialPath;
     bool combineStatic = false;
     std::uint32_t meshNode = 0; // Zero selects the complete asset.
+    bool operator==(const MeshComponent&) const = default;
+
 };
 
 // Paths are relative to the project's Scripts folder. Disabled components do not run.
@@ -156,6 +185,8 @@ struct Entity {
     std::optional<GameUiComponent> gameUi;
     bool hasAudioListener = false;
 
+    bool operator==(const Entity&) const = default;
+
 private:
     friend class Scene;
     EntityId m_id = kInvalidEntityId;
@@ -186,13 +217,15 @@ public:
     [[nodiscard]] const Entity* entityById(EntityId id) const;
     // Returns the topmost ancestor (or the entity itself), or an invalid ID if absent.
     [[nodiscard]] EntityId rootEntityId(EntityId id) const;
-    // Hierarchy orders entities in the editor. Transforms remain in world space.
+    // Reparenting preserves the entity's world-space transform.
     // Use kInvalidEntityId as the parent to move an entity to the root.
     [[nodiscard]] bool canSetParent(EntityId childId, EntityId parentId) const;
     [[nodiscard]] bool setParent(EntityId childId, EntityId parentId);
     // Move an entity and its descendants by the same world-space offset.
     // Returns false for a missing entity or an unchanged position.
     bool moveEntity(EntityId id, DVec3 position);
+    // Set a world-space transform and apply its change once to every descendant.
+    bool setTransform(EntityId id, const Transform& transform);
     // Direct children of a removed entity become roots.
     [[nodiscard]] bool destroyEntity(EntityId id);
     [[nodiscard]] bool setMainCameraById(EntityId id);
@@ -209,6 +242,9 @@ public:
     [[nodiscard]] EntityId duplicateEntity(EntityId sourceId, EntityId parentId, std::string name = {});
     // Insert a root from a scene copy with its original ID. The ID must be absent.
     void addEntityCopy(const Entity& entity);
+    // Restore a complete ordered entity set from editor history. IDs and
+    // hierarchy links must describe a valid scene from the same session.
+    void restoreEditorEntities(std::vector<Entity> entities);
     void addEmpty();
     void clear();
     [[nodiscard]] bool attachScript(std::size_t index, std::string path);

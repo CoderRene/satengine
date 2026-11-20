@@ -152,7 +152,11 @@ void PlaySession::stop(const Scene& authored) {
     m_applied.reset();
     m_active = false;
     m_focusGame = false;
-    if (authored.editRevision() == m_prePlay->editRevision()) {
+    if (authored.editRevision() == m_prePlay->editRevision() ||
+        (authored.entities() == m_prePlay->entities() &&
+            authored.physicsSettings == m_prePlay->physicsSettings &&
+            authored.audioSettings == m_prePlay->audioSettings &&
+            authored.lightingSettings == m_prePlay->lightingSettings)) {
         m_prePlay.reset();
     }
 }

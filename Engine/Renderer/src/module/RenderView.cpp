@@ -209,7 +209,7 @@ void RenderSession::renderOffscreenView(
         }
     }
 
-    if (drawList.drawEditorOverlay && drawList.scene && drawList.selected != kInvalidEntityId) {
+    if (drawList.drawEditorOverlay && drawList.scene && (drawList.selection || drawList.selected != kInvalidEntityId)) {
         const Scene& scene = *drawList.scene;
         const Entity* selectedEntity = scene.entityById(drawList.selected);
         const auto drawOutline = [&](const Entity& entity) {
@@ -225,10 +225,25 @@ void RenderSession::renderOffscreenView(
                 }
             }
         };
-        if (selectedEntity && selectedEntity->hasMesh) {
+        if (drawList.selection) {
+            bool outlineDescendants = false;
+            for (EntityId id : *drawList.selection) {
+                const auto* entity = scene.entityById(id);
+                if (!entity) { continue; }
+                if (entity->hasMesh) { drawOutline(*entity); }
+                outlineDescendants |= entity->parentId() == kInvalidEntityId && entity->hasChildren();
+            }
+            if (outlineDescendants) {
+                for (const Entity& entity : scene.entities()) {
+                    if (entity.hasMesh && entity.parentId() != kInvalidEntityId &&
+                        !drawList.selection->contains(entity.id()) &&
+                        drawList.selection->contains(scene.rootEntityId(entity.id()))) { drawOutline(entity); }
+                }
+            }
+        } else if (selectedEntity && selectedEntity->hasMesh) {
             drawOutline(*selectedEntity);
         }
-        if (selectedEntity && selectedEntity->parentId() == kInvalidEntityId && selectedEntity->hasChildren()) {
+        if (!drawList.selection && selectedEntity && selectedEntity->parentId() == kInvalidEntityId && selectedEntity->hasChildren()) {
             for (const Entity& entity : scene.entities()) {
                 if (entity.hasMesh && entity.parentId() != kInvalidEntityId &&
                     scene.rootEntityId(entity.id()) == selectedEntity->id()) {

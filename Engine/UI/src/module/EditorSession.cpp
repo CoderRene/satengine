@@ -31,7 +31,7 @@
 namespace sat {
 
 EditorSession::State::State(Scene& sceneIn, Project& projectIn, const Input& input)
-    : project(projectIn), scene(sceneIn), input(input), play(input), previewAnimation(sceneIn, AnimationSystem::Mode::Preview), savedSceneRevision(sceneIn.editRevision()) {}
+    : project(projectIn), scene(sceneIn), input(input), play(input), previewAnimation(sceneIn, AnimationSystem::Mode::Preview), history(sceneIn) {}
 
 EditorSession::EditorSession(Scene& scene, Project& project, const Input& input)
     : m_state(std::make_unique<State>(scene, project, input)) {
@@ -139,21 +139,36 @@ bool EditorSession::projectOpening() const {
 }
 
 bool EditorSession::hasUnsavedChanges() const {
-    return m_state->scene.editRevision() != m_state->savedSceneRevision ||
+    return m_state->history.dirty(m_state->scene) ||
         (m_state->project.isOpen() && !m_state->hasSavedScene);
 }
 
 void EditorSession::recordLoadedScene() {
-    m_state->savedSceneRevision = m_state->scene.editRevision();
+    m_state->history.reset(m_state->scene);
     std::error_code error;
     // Legacy projects without Scene.sat have not saved their default scene.
     m_state->hasSavedScene = std::filesystem::is_regular_file(m_state->project.root() / "Scene.sat", error);
 }
 
+void EditorSession::resetViewportInteraction() {
+    auto& state = *m_state;
+    if (!state.viewport) { return; }
+    const bool dragging = state.viewport->transformActive();
+    state.viewport->resetInteraction();
+    if (dragging && state.recordsSceneHistory()) {
+        state.history.capture(state.scene, "Transform Selection", 0, state.viewport->transformTargets());
+    }
+}
+
 bool EditorSession::saveScene() {
     if (!m_state->project.isOpen()) { return true; }
+    if (m_state->viewport && m_state->viewport->transformActive()) { resetViewportInteraction(); }
     if (!m_state->project.saveScene(m_state->scene, m_state->sceneError)) { return false; }
-    m_state->savedSceneRevision = m_state->scene.editRevision();
+    auto& state = *m_state;
+    const auto selection = state.sceneSelection();
+    state.history.capture(state.scene, state.play.decisionPending() ? "Play Edits" : "Scene Edit", 0, std::nullopt,
+        state.play.decisionPending() ? &state.prePlaySelection : nullptr, &selection);
+    state.history.markSaved();
     m_state->hasSavedScene = true;
     return true;
 }
@@ -168,17 +183,19 @@ void EditorSession::stopPlay() {
     if (!m_state->play.active()) {
         return;
     }
+    resetViewportInteraction();
     m_state->play.stop(m_state->scene);
-    m_state->gameUi.reset();
-    if (m_state->viewport) {
-        m_state->viewport->resetInteraction();
+    if (!m_state->play.decisionPending()) {
+        m_state->history.capture(m_state->scene, "Play Edits", 0, std::nullopt);
     }
+    m_state->gameUi.reset();
 }
 
 void EditorSession::discardPlayEdits() {
     m_state->play.discardInto(m_state->scene);
     if (m_state->hierarchy) {
-        m_state->hierarchy->setSelectedIndex(-1);
+        const auto& selection = m_state->prePlaySelection;
+        m_state->hierarchy->restoreSelection(selection.ids, selection.primary);
     }
 }
 
@@ -200,17 +217,18 @@ void EditorSession::startPlayNow() {
     if (state.play.active() || state.play.decisionPending() || !state.project.isOpen()) {
         return;
     }
-    if (state.viewport) { state.viewport->resetInteraction(); }
+    resetViewportInteraction();
     if (!saveScene()) {
         return;
     }
+    state.prePlaySelection = state.sceneSelection();
     state.content->stopAudioPreview();
-    if (state.viewport) { state.viewport->resetInteraction(); }
+    resetViewportInteraction();
     state.gameUi = std::make_unique<GameUi>(state.renderer->uiRenderInterface(), fileAssetReader(state.project.root()));
     state.gameUi->enableHotReload();
     if (!state.play.start(state.scene, state.project.root(), state.gameUi.get())) {
         state.gameUi.reset();
-        if (state.viewport) { state.viewport->resetInteraction(); }
+        resetViewportInteraction();
     }
 }
 
@@ -221,6 +239,7 @@ void EditorSession::openProject(const std::filesystem::path& folder) {
 void EditorSession::openProjectNow(const std::filesystem::path& folder) {
     auto& state = *m_state;
     if (projectOpening()) { return; }
+    resetViewportInteraction();
     state.projectOpenFolder = folder;
     state.preparingProject = false;
     state.projectProgressShown = false;
@@ -233,7 +252,7 @@ void EditorSession::openProjectNow(const std::filesystem::path& folder) {
 
 void EditorSession::prepareProjectSwitch(ProjectOpenResult opened) {
     auto& state = *m_state;
-    if (state.viewport) { state.viewport->resetInteraction(); }
+    resetViewportInteraction();
     state.preparingProject = true;
     state.projectProgressShown = false;
     try {
@@ -276,7 +295,7 @@ void EditorSession::finishProjectOpen() {
     state.play.setAssetReader(fileAssetReader(state.project.root()));
     state.previewAnimation.setAssetReader(fileAssetReader(state.project.root()));
     if (state.hierarchy) { state.hierarchy->setSelectedIndex(-1); }
-    if (state.viewport) { state.viewport->resetInteraction(); }
+    resetViewportInteraction();
     state.recent.add(state.project.root());
     if (!state.sceneError.empty()) { std::cerr << state.sceneError << '\n'; }
 }
@@ -289,12 +308,14 @@ void EditorSession::reloadAssets() {
     });
 }
 
-void EditorSession::selectEntity(EntityId id, bool keepHierarchySelection) {
-    m_state->assetImports->request([this, id, keepHierarchySelection] {
-        m_state->viewport->resetInteraction();
+void EditorSession::selectEntity(EntityId id, bool keepHierarchySelection, bool toggle) {
+    m_state->assetImports->request([this, id, keepHierarchySelection, toggle] {
+        resetViewportInteraction();
         m_state->assetImports->clear();
         m_state->content->setSelectedAsset({});
-        if (!keepHierarchySelection) {
+        if (toggle && id != kInvalidEntityId) {
+            m_state->hierarchy->toggleSelected(id);
+        } else if (!keepHierarchySelection) {
             const auto index = m_state->scene.entityIndex(id);
             m_state->hierarchy->setSelectedIndex(index ? static_cast<int>(*index) : -1);
         }
@@ -310,7 +331,7 @@ void EditorSession::syncLuaTooling() const {
 
 bool EditorSession::createProjectFromDialog() {
     auto& state = *m_state;
-    if (state.viewport) { state.viewport->resetInteraction(); }
+    resetViewportInteraction();
     Project created;
     if (!saveScene() || !created.create(state.newProjectParent, std::string(state.newProjectName))) {
         return false;
@@ -339,7 +360,7 @@ bool EditorSession::createProjectThunk(void* context) {
 
 void EditorSession::prepareClose() {
     if (projectOpening()) { m_state->projectOpen.wait(); }
-    if (m_state->viewport) { m_state->viewport->resetInteraction(); }
+    resetViewportInteraction();
     stopPlay();
     if (m_state->play.decisionPending()) { discardPlayEdits(); }
     if (!m_state->discardSceneOnClose && !saveScene()) {

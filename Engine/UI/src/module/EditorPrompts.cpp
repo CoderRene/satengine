@@ -22,6 +22,7 @@ bool EditorSession::requestClose() {
             return false;
         }
     }
+    if (state.viewport && state.viewport->transformActive()) { resetViewportInteraction(); }
     if (!hasUnsavedChanges() && !state.assetImports->dirty()) {
         return true;
     }
