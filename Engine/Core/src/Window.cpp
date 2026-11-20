@@ -29,7 +29,7 @@ struct Window::Impl {
 };
 
 #if defined(_WIN32)
-static void enableDarkTitleBar(GLFWwindow* window) {
+static void applyDarkTitleBar(GLFWwindow* window, Window::FrameStyle frameStyle) {
     HWND hwnd = glfwGetWin32Window(window);
     if (hwnd == nullptr) {
         return;
@@ -45,12 +45,17 @@ static void enableDarkTitleBar(GLFWwindow* window) {
             hwnd, kUseImmersiveDarkModeBefore20H1, &useDark, sizeof(useDark));
     }
 
-    // Win11 caption/border colors — matches ImGui title/menu bar (~0.08, 0.08, 0.09).
-    constexpr DWORD kCaptionColor = 35;
-    constexpr DWORD kBorderColor = 255;
-    const COLORREF titleColor = RGB(20, 20, 23);
-    DwmSetWindowAttribute(hwnd, kCaptionColor, &titleColor, sizeof(titleColor));
-    DwmSetWindowAttribute(hwnd, kBorderColor, &titleColor, sizeof(titleColor));
+    // Custom caption colors are available on Windows 11. Older versions use the dark-mode request above.
+    const bool editor = frameStyle == Window::FrameStyle::Editor;
+    constexpr COLORREF kEditorCaption = RGB(13, 26, 47);
+    constexpr COLORREF kDarkCaption = RGB(20, 20, 23);
+    const COLORREF captionColor = editor ? kEditorCaption : kDarkCaption;
+    if (SUCCEEDED(DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &captionColor, sizeof(captionColor))) && editor) {
+        constexpr COLORREF kEditorBorder = RGB(64, 84, 110);
+        constexpr COLORREF kEditorText = RGB(243, 245, 251);
+        DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &kEditorBorder, sizeof(kEditorBorder));
+        DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &kEditorText, sizeof(kEditorText));
+    }
 }
 #endif
 
@@ -70,7 +75,7 @@ void Window::setIcon(const char* path) {
     stbi_image_free(pixels);
 }
 
-Window::Window(int width, int height, const char* title)
+Window::Window(int width, int height, const char* title, [[maybe_unused]] FrameStyle frameStyle)
     : m_impl(std::make_unique<Impl>()) {
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW\n";
@@ -87,7 +92,7 @@ Window::Window(int width, int height, const char* title)
     }
 
 #if defined(_WIN32)
-    enableDarkTitleBar(m_impl->window);
+    applyDarkTitleBar(m_impl->window, frameStyle);
 #endif
 
     glfwSetWindowUserPointer(m_impl->window, m_impl.get());

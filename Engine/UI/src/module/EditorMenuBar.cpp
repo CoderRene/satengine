@@ -3,6 +3,7 @@
 #include "FileDialog.hpp"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <GLFW/glfw3.h>
 
@@ -130,7 +131,7 @@ void EditorSession::drawMenuBar(bool canSaveScene) {
     }
 
     if (hasUnsavedChanges()) {
-        ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.25f, 1.0f), "* Unsaved changes");
+        ImGui::TextColored(ImGui::GetStyleColorVec4(ImGuiCol_UnsavedMarker), "* Unsaved changes");
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", state.project.isOpen()
                 ? (state.play.active() || state.play.decisionPending()
@@ -143,30 +144,33 @@ void EditorSession::drawMenuBar(bool canSaveScene) {
     const bool playing = state.play.active();
     ImGui::BeginDisabled(!playing && (!state.project.isOpen() || state.play.decisionPending()));
     ImGui::PushStyleColor(ImGuiCol_Button, playing
-        ? ImVec4(0.55f, 0.16f, 0.16f, 1.0f)
-        : ImVec4(0.12f, 0.40f, 0.23f, 1.0f));
+        ? ImVec4(0.71f, 0.26f, 0.21f, 1.0f)
+        : ImVec4(0.16f, 0.39f, 0.73f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, playing
-        ? ImVec4(0.70f, 0.22f, 0.22f, 1.0f)
-        : ImVec4(0.16f, 0.52f, 0.30f, 1.0f));
+        ? ImVec4(0.75f, 0.28f, 0.23f, 1.0f)
+        : ImVec4(0.19f, 0.42f, 0.76f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, playing
-        ? ImVec4(0.44f, 0.12f, 0.12f, 1.0f)
-        : ImVec4(0.09f, 0.32f, 0.18f, 1.0f));
+        ? ImVec4(0.61f, 0.22f, 0.19f, 1.0f)
+        : ImVec4(0.15f, 0.34f, 0.63f, 1.0f));
     // Keep the button within the menu bar's height and stable when toggling.
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 0.0f));
-    const float buttonWidth = ImGui::CalcTextSize("Stop").x + 24.0f;
+    constexpr float kButtonPaddingX = 14.0f;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kButtonPaddingX, 3.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, ImGui::GetFrameHeight() * 0.5f);
+    const float buttonWidth = ImGui::CalcTextSize("Stop").x + 2.0f * kButtonPaddingX;
     // Center on the host window, keeping clear of the menus at narrow widths.
     const float centeredX = (ImGui::GetWindowWidth() - buttonWidth) * 0.5f;
     if (centeredX > ImGui::GetCursorPosX()) {
         ImGui::SetCursorPosX(centeredX);
     }
-    if (ImGui::Button(playing ? "Stop##PlayMode" : "Play##PlayMode", ImVec2(buttonWidth, 0.0f))) {
+    if (ImGui::ButtonEx(playing ? "Stop##PlayMode" : "Play##PlayMode", ImVec2(buttonWidth, 0.0f),
+            ImGuiButtonFlags_AlignTextBaseLine)) {
         if (playing) {
             stopPlay();
         } else {
             startPlay();
         }
     }
-    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(3);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
         ImGui::SetTooltip("%s", playing

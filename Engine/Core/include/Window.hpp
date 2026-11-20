@@ -16,7 +16,9 @@ struct FileDrop {
 
 class Window {
 public:
-    Window(int width, int height, const char* title);
+    enum class FrameStyle { Dark, Editor };
+
+    Window(int width, int height, const char* title, FrameStyle frameStyle = FrameStyle::Dark);
     ~Window();
 
     Window(const Window&) = delete;

@@ -314,6 +314,7 @@ if(NOT imgui_POPULATED)
 endif()
 
 include("${PROJECT_SOURCE_DIR}/cmake/ImGuiShaders.cmake")
+include("${PROJECT_SOURCE_DIR}/cmake/ImGuiDockGrip.cmake")
 
 add_library(SatEditor STATIC
     Core/src/RecentProjects.cpp
@@ -353,7 +354,7 @@ add_library(SatEditor STATIC
     UI/src/ContentPanel.cpp
     UI/src/ViewportPanel.cpp
     ${imgui_SOURCE_DIR}/imgui.cpp
-    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_draw_generated}
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp

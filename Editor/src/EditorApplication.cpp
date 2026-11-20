@@ -22,7 +22,7 @@
 namespace sat {
 
 int EditorApplication::run() {
-    Window window(1280, 720, "SatEngine");
+    Window window(1280, 720, "SatEngine", Window::FrameStyle::Editor);
     if (window.nativeHandle() == nullptr) {
         return 1;
     }
