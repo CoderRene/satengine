@@ -28,7 +28,7 @@ public:
     [[nodiscard]] const std::string& path() const { return m_path; }
     void request(std::function<void()> action);
     void draw(bool readOnly);
-    [[nodiscard]] std::string updateMaterialReferences(std::string_view oldPath, std::string_view newPath);
+    [[nodiscard]] std::string updateMaterialReferences(std::string_view oldPath, std::string_view newPath, bool directory);
     void drawPrompt();
 private:
     struct ImportResult {

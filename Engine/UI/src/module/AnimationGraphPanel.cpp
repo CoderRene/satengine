@@ -30,6 +30,14 @@ void AnimationGraphPanel::load() {
         m_dirty = false; m_positions = true; m_state = m_transition = -1;
     }
 }
+void AnimationGraphPanel::relocate(std::string_view oldPath, std::string_view newPath, bool directory) {
+    for (auto* path : {&m_path, &m_pendingPath, &m_mesh}) {
+        if (*path == oldPath || (directory && path->starts_with(oldPath) &&
+                path->size() > oldPath.size() && (*path)[oldPath.size()] == '/')) {
+            path->replace(0, oldPath.size(), newPath);
+        }
+    }
+}
 void AnimationGraphPanel::open(std::string path) {
     if (m_dirty && path != m_path) { m_pendingPath = std::move(path); m_open = true; return; }
     m_path = std::move(path); load(); m_open = true;

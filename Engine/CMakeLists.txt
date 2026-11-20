@@ -1,18 +1,25 @@
+# ufbx v0.17.1
+add_library(SatUfbx STATIC ThirdParty/ufbx/ufbx.c)
+
 add_library(SatAssets STATIC
     Core/src/AssetData.cpp
     Core/src/AnimationAsset.cpp
     Core/src/AnimationGraph.cpp
     Core/src/MaterialData.cpp
     Core/src/AssetImportSettings.cpp
+    Core/src/module/FbxImport.cpp
     Core/src/AssetImporter.cpp
     Core/src/AssetLibrary.cpp
     Core/src/TextureData.cpp
 )
 target_include_directories(SatAssets PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Core/include")
+target_include_directories(SatAssets PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Core/src")
 target_include_directories(SatAssets SYSTEM PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb"
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/cgltf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/ufbx"
 )
+target_link_libraries(SatAssets PRIVATE SatUfbx)
 target_compile_features(SatAssets PUBLIC cxx_std_20)
 
 # Scene extraction is portable and can be tested without a window or graphics device.

@@ -31,12 +31,13 @@ void EditorSession::initialize() {
     state.inspector = std::make_unique<InspectorPanel>(state.scene, state.project);
     state.assetImports = std::make_unique<AssetImportPanel>(state.project, renderer);
     state.content = std::make_unique<ContentPanel>(state.project, renderer);
-    state.content->setMoveHandler([this](std::string_view oldPath, std::string_view newPath) {
+    state.content->setMoveHandler([this](std::string_view oldPath, std::string_view newPath, bool directory) {
         auto& scene = m_state->scene;
         bool changed = false;
-        const auto replace = [&changed](std::string& path, std::string_view from, std::string_view to) {
-            if (path == from) {
-                path = to;
+        const auto replace = [&changed, directory](std::string& path, std::string_view from, std::string_view to) {
+            if (path == from || (directory && path.starts_with(from) &&
+                    path.size() > from.size() && path[from.size()] == '/')) {
+                path.replace(0, from.size(), to);
                 changed = true;
             }
         };
@@ -45,6 +46,10 @@ void EditorSession::initialize() {
             auto& entity = *scene.entity(i);
             replace(entity.mesh.meshPath, oldPath, newPath);
             replace(entity.mesh.materialPath, oldPath, newPath);
+            replace(entity.animator.controllerPath, oldPath, newPath);
+            if (isAnimationClipAssetPath(entity.animator.clip)) {
+                replace(entity.animator.clip, oldPath, newPath);
+            }
             replace(entity.audioSource.clipPath, oldPath, newPath);
             if (entity.gameUi) {
                 replace(entity.gameUi->documentPath, oldPath, newPath);
@@ -57,12 +62,17 @@ void EditorSession::initialize() {
             }
         }
         if (changed) { scene.markEdited(); }
-        auto error = m_state->assetImports->updateMaterialReferences(oldPath, newPath);
-        if (isShaderAssetPath(oldPath)) {
+        auto error = m_state->assetImports->updateMaterialReferences(oldPath, newPath, directory);
+        m_state->animationGraph->relocate(oldPath, newPath, directory);
+        if (isShaderAssetPath(oldPath) || (directory && oldPath.starts_with("Assets/"))) {
             m_state->renderer->setProjectShaderSource(fileAssetReader(m_state->project.root()));
         }
-        if (m_state->assetImports->active() && m_state->assetImports->path() != oldPath) {
-            m_state->assetImports->select(m_state->assetImports->path());
+        if (m_state->assetImports->active()) {
+            const std::string_view selected = m_state->assetImports->path();
+            if (selected != oldPath && !(directory && selected.starts_with(oldPath) &&
+                    selected.size() > oldPath.size() && selected[oldPath.size()] == '/')) {
+                m_state->assetImports->select(std::string(selected));
+            }
         }
         return error;
     });

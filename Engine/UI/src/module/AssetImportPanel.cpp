@@ -1,4 +1,5 @@
 #include "AssetImportPanel.hpp"
+#include "AssetImporter.hpp"
 #include "AssetWrite.hpp"
 #include "ContentDragDrop.hpp"
 #include "CursorWrap.hpp"
@@ -51,6 +52,13 @@ void readMeshMaterialNames(std::string_view bytes, std::string_view path, const 
         if (decodeObjMaterials(bytes, path, reader, materials, error)) { collectObjMaterialNames(materials, names); }
     }
 }
+void readFbxMaterialInfo(const MeshData& mesh, std::vector<std::string>& names,
+    std::vector<std::string>& textures, std::string& warning) {
+    names = mesh.materialNames;
+    textures = mesh.dependencies;
+    for (const auto& image : mesh.embeddedImages) { textures.push_back(image.path); }
+    warning = mesh.materialWarning;
+}
 bool fileEntryExists(const std::filesystem::path& file, std::error_code& error) {
     const auto status = std::filesystem::symlink_status(file, error);
     if (error == std::errc::no_such_file_or_directory) { error.clear(); }
@@ -58,8 +66,10 @@ bool fileEntryExists(const std::filesystem::path& file, std::error_code& error) 
 }
 }
 AssetImportPanel::AssetImportPanel(Project& project, Renderer& renderer) : m_project(project), m_renderer(renderer) {}
-std::string AssetImportPanel::updateMaterialReferences(std::string_view oldPath, std::string_view newPath) {
-    if (!isTextureAssetPath(oldPath) && !isShaderAssetPath(oldPath)) { return {}; }
+std::string AssetImportPanel::updateMaterialReferences(std::string_view oldPath, std::string_view newPath, bool directory) {
+    if (directory ? !oldPath.starts_with("Assets/") :
+            !isTextureAssetPath(oldPath) && !isShaderAssetPath(oldPath)) { return {}; }
+    const std::string prefix = directory ? std::string(oldPath) + '/' : std::string{};
     const auto reader = fileAssetReader(m_project.root());
     const auto assets = m_project.root() / "Assets";
     std::error_code ec;
@@ -83,8 +93,8 @@ std::string AssetImportPanel::updateMaterialReferences(std::string_view oldPath,
                 &material.normalTexture, &material.emissiveTexture, &material.occlusionTexture,
                 &material.transmissionTexture, &material.thicknessTexture, &material.clearcoatTexture,
                 &material.clearcoatRoughnessTexture, &material.clearcoatNormalTexture, &material.shaderPath}) {
-            if (*reference == oldPath) {
-                *reference = newPath;
+            if (*reference == oldPath || (directory && reference->starts_with(prefix))) {
+                reference->replace(0, oldPath.size(), newPath);
                 changed = true;
             }
         }
@@ -212,13 +222,16 @@ void AssetImportPanel::pollMeshInfo() {
             if (!result.validSettings) { return result; }
             const AssetReader readMesh = [&](std::string_view file, std::string& output, std::string& error) {
                 const auto read = reader(file, output, error);
-                if (read == AssetReadResult::Found && file == path) {
+                if (read == AssetReadResult::Found && file == path && !isFbxAssetPath(path)) {
                     readMeshMaterialNames(output, path, reader, result.materials, result.textureNames, result.materialError);
                 }
                 return read;
             };
             PreparedAssetImport asset;
             if (decodeAssetImport(readMesh, path, &result.settings, asset, result.error)) {
+                if (isFbxAssetPath(path)) {
+                    readFbxMaterialInfo(asset.mesh, result.materials, result.textureNames, result.materialError);
+                }
                 result.info = std::to_string(asset.mesh.vertices.size()) + " vertices, " +
                     std::to_string(asset.mesh.indices.size() / 3) + " triangles";
             }
@@ -247,7 +260,9 @@ void AssetImportPanel::startImport(bool reimport) {
                 } else if (decodeAssetImport(reader, path, reimport ? nullptr : &settings, result.asset, result.error) &&
                     reimport && isMeshAssetPath(path)) {
                     std::string bytes;
-                    if (reader(path, bytes, result.materialStatus) == AssetReadResult::Found) {
+                    if (isFbxAssetPath(path)) {
+                        readFbxMaterialInfo(result.asset.mesh, result.materialNames, result.textureNames, result.materialStatus);
+                    } else if (reader(path, bytes, result.materialStatus) == AssetReadResult::Found) {
                         readMeshMaterialNames(bytes, path, reader, result.materialNames, result.textureNames, result.materialStatus);
                     } else if (result.materialStatus.empty()) {
                         result.materialStatus = "Cannot read model source";
@@ -413,10 +428,15 @@ void AssetImportPanel::requestMaterialExtraction(bool all) {
     }
 
     const bool gltf = isGltfAssetPath(m_path);
+    const bool fbx = isFbxAssetPath(m_path);
+    MeshData fbxMesh;
     std::vector<std::string> names;
     std::vector<ObjMaterial> objMaterials;
     if (gltf) {
         if (!gltfMaterialNames(bytes, names, m_materialStatus)) { return; }
+    } else if (fbx) {
+        if (!importMesh(m_path, bytes, reader, {}, fbxMesh, m_materialStatus)) { return; }
+        names = std::move(fbxMesh.materialNames);
     } else {
         if (!decodeObjMaterials(bytes, m_path, reader, objMaterials, m_materialStatus)) { return; }
         collectObjMaterialNames(objMaterials, names);
@@ -434,6 +454,9 @@ void AssetImportPanel::requestMaterialExtraction(bool all) {
         extraction.paths = std::move(paths);
         if (gltf) {
             if (!decodeGltfMaterials(bytes, m_path, reader, extraction.materials, extraction.images, m_materialStatus)) { return; }
+        } else if (fbx) {
+            extraction.materials = std::move(fbxMesh.materials);
+            extraction.images = std::move(fbxMesh.embeddedImages);
         } else {
             extraction.materials.reserve(objMaterials.size());
             for (auto& material : objMaterials) { extraction.materials.push_back(std::move(material.material)); }
@@ -444,6 +467,14 @@ void AssetImportPanel::requestMaterialExtraction(bool all) {
             extraction.materials.resize(1);
             if (!decodeGltfMaterial(bytes, m_path, reader, m_materialIndex,
                 extraction.materials.front(), extraction.images, m_materialStatus)) { return; }
+        } else if (fbx) {
+            auto& material = fbxMesh.materials[m_materialIndex];
+            for (auto& image : fbxMesh.embeddedImages) {
+                if (image.path == material.baseColorTexture || image.path == material.normalTexture) {
+                    extraction.images.push_back(std::move(image));
+                }
+            }
+            extraction.materials.push_back(std::move(material));
         } else {
             extraction.materials.push_back(std::move(objMaterials[m_materialIndex].material));
         }
@@ -620,14 +651,14 @@ void AssetImportPanel::draw(bool readOnly) {
         return;
     }
     const bool mesh = isMeshAssetPath(m_path);
-    const bool gltf = isGltfAssetPath(m_path);
+    const bool sceneModel = isSceneModelAssetPath(m_path);
     ImGui::TextUnformatted(mesh ? "Mesh Import Settings" : "Texture Import Settings");
     ImGui::Separator();
     const bool loadingMesh = m_meshInfoPending || (m_meshInfo.valid() && !m_meshInfoObsolete);
     ImGui::BeginDisabled(readOnly || loadingMesh);
     if (mesh) {
         dragFloat("Scale", &m_edited.scale, 0.01f);
-        if (gltf) {
+        if (sceneModel) {
             ImGui::Checkbox("Preserve Node Hierarchy", &m_edited.preserveNodeHierarchy);
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Create selectable child entities when dragging this asset into the Hierarchy.");
@@ -636,6 +667,7 @@ void AssetImportPanel::draw(bool readOnly) {
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Batch compatible opaque and alpha-masked geometry, including selectable child meshes.");
             }
+            if (isFbxAssetPath(m_path)) { ImGui::Checkbox("Flip UV V", &m_edited.flipV); }
         } else {
             int handedness = m_edited.rightHanded ? 0 : 1;
             if (ImGui::Combo("Source coordinates", &handedness, "Right-handed\0Left-handed\0")) { m_edited.rightHanded = handedness == 0; }
@@ -669,7 +701,7 @@ void AssetImportPanel::draw(bool readOnly) {
         ImGui::BeginDisabled(readOnly || loadingMesh);
         drawMeshMaterials();
         ImGui::EndDisabled();
-        if (gltf) {
+        if (sceneModel) {
             if (!loadingMesh && ImGui::TreeNodeEx("Textures", ImGuiTreeNodeFlags_DefaultOpen)) {
                 if (m_textureNames.empty()) {
                     ImGui::TextDisabled("No textures.");

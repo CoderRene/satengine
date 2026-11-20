@@ -311,7 +311,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
             (version >= kSceneVersionWithStaticMeshes && !(in >> e.mesh.combineStatic)) ||
             (version >= kSceneVersionWithMeshNodes && (!(in >> meshNode) || meshNode < 0 ||
                 meshNode > std::numeric_limits<std::uint32_t>::max() ||
-                (meshNode != 0 && !isGltfAssetPath(e.mesh.meshPath)))) ||
+                (meshNode != 0 && !isSceneModelAssetPath(e.mesh.meshPath)))) ||
             !(in >> e.hasCamera >> c.isMain
                  >> c.fieldOfView >> c.nearClip >> c.farClip) ||
             !finite(t.position) || !finite(t.rotation) || !finite(t.scale) || primitive != 0 ||

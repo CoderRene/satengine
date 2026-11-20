@@ -1,4 +1,5 @@
 #include "AssetData.hpp"
+#include "module/MeshGeometry.hpp"
 
 #include "Math.hpp"
 #include "AnimationAsset.hpp"
@@ -28,8 +29,7 @@
 
 namespace sat {
 namespace {
-constexpr std::size_t kMaxVertices = 1000000;
-constexpr std::size_t kMaxIndices = 3000000;
+using namespace meshGeometry;
 
 bool extensionIs(std::string_view path, std::string_view extension) {
     if (path.size() < extension.size()) { return false; }
@@ -50,18 +50,14 @@ std::string_view token(std::string_view& line) {
     line = end == std::string_view::npos ? std::string_view{} : line.substr(end);
     return result;
 }
+}
+namespace meshGeometry {
 Vec3 unitVector(const Vec3& vector) {
     const float magnitude = std::max({std::abs(vector.x), std::abs(vector.y), std::abs(vector.z)});
     if (!std::isfinite(magnitude) || magnitude < std::numeric_limits<float>::min()) { return {0, 0, 1}; }
     return normalize(vector * (1.0f / magnitude));
 }
-bool number(std::string_view value, float& result) {
-    if (value.starts_with('+')) { value.remove_prefix(1); }
-    if (value.empty()) { return false; }
-    const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
-    return !value.empty() && parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && std::isfinite(result);
-}
-Vec3 positionOf(const MeshVertex& vertex) {
+static Vec3 positionOf(const MeshVertex& vertex) {
     return {vertex.x, vertex.y, vertex.z};
 }
 void accumulateTangent(MeshData& mesh, std::vector<Vec3>& bitangents,
@@ -107,6 +103,15 @@ void finalizeMesh(MeshData& mesh, const std::vector<Vec3>& bitangents) {
         }
     }
 }
+}
+namespace {
+using meshGeometry::positionOf;
+bool number(std::string_view value, float& result) {
+    if (value.starts_with('+')) { value.remove_prefix(1); }
+    if (value.empty()) { return false; }
+    const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
+    return !value.empty() && parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && std::isfinite(result);
+}
 bool index(std::string_view value, std::size_t count, std::uint32_t& result) {
     std::int64_t raw = 0;
     if (value.starts_with('+')) { value.remove_prefix(1); }
@@ -140,7 +145,13 @@ bool isValidAssetPath(std::string_view path) {
 }
 bool isMeshAssetPath(std::string_view path) {
     return isValidAssetPath(path) &&
-        (extensionIs(path, ".obj") || extensionIs(path, ".gltf") || extensionIs(path, ".glb"));
+        (extensionIs(path, ".obj") || extensionIs(path, ".fbx") || extensionIs(path, ".gltf") || extensionIs(path, ".glb"));
+}
+bool isFbxAssetPath(std::string_view path) {
+    return isValidAssetPath(path) && extensionIs(path, ".fbx");
+}
+bool isSceneModelAssetPath(std::string_view path) {
+    return isGltfAssetPath(path) || isFbxAssetPath(path);
 }
 bool isGltfAssetPath(std::string_view path) {
     return isValidAssetPath(path) && (extensionIs(path, ".gltf") || extensionIs(path, ".glb"));

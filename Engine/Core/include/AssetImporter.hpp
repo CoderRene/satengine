@@ -11,6 +11,9 @@ namespace sat {
 // on failure. Companion files are read through the supplied reader.
 [[nodiscard]] bool importMesh(std::string_view path, std::string_view bytes, const AssetReader& reader,
     const AssetImportSettings& settings, MeshData& mesh, std::string& error);
+// Animation translations and binds use the same unscaled model space as the mesh decoder.
+[[nodiscard]] bool importModelAnimation(std::string_view path, std::string_view bytes, const AssetReader& reader,
+    AnimationData& animation, std::string& error);
 [[nodiscard]] bool importTexture(std::string_view bytes, const AssetImportSettings& settings, TextureData& texture, std::string& error);
 // Source dimensions and import settings must already be validated.
 [[nodiscard]] TextureInfo textureImportInfo(int width, int height, const AssetImportSettings& settings);

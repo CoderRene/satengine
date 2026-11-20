@@ -385,7 +385,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
             entity->mesh.meshNode = 0;
             changed = true;
         }
-        const char* defaultMaterial = isGltfAssetPath(entity->mesh.meshPath) ? "glTF Materials" : "Default";
+        const char* defaultMaterial = isSceneModelAssetPath(entity->mesh.meshPath) ? "Imported Materials" : "Default";
         changed |= m_impl->assetPicker("Material", defaultMaterial, entity->mesh.materialPath, m_impl->materials);
         if (!entity->mesh.meshPath.empty() && entity->mesh.meshNode == 0) {
             changed |= ImGui::Checkbox("Combine Static at Runtime", &entity->mesh.combineStatic);

@@ -209,17 +209,31 @@ void RenderSession::renderOffscreenView(
         }
     }
 
-    const Entity* selectedEntity = drawList.scene ? drawList.scene->entityById(drawList.selected) : nullptr;
-    if (drawList.drawEditorOverlay && selectedEntity && selectedEntity->hasMesh) {
-        MeshInstance selected{};
-        selected.world = matrixFromTransform(selectedEntity->transform, camera.renderOrigin);
-        selected.meshPath = selectedEntity->mesh.meshPath;
-        selected.meshNode = selectedEntity->mesh.meshNode;
-        const GpuMesh* meshGeometry = m_state->meshPass.geometry(selected);
-        if (meshGeometry != nullptr && m_state->outlinePass.ensure(m_state->device)) {
-            const bool skinned = meshGeometry->skinVertices != nullptr;
-            if (!skinned || m_state->meshPass.bindSkin(m_state->context, drawList.selected, *meshGeometry)) {
-                m_state->outlinePass.draw(m_state->context, m_state->shaders.program(skinned ? ShaderId::SelectionOutlineSkinned : ShaderId::SelectionOutline), viewProj, selected, *meshGeometry);
+    if (drawList.drawEditorOverlay && drawList.scene && drawList.selected != kInvalidEntityId) {
+        const Scene& scene = *drawList.scene;
+        const Entity* selectedEntity = scene.entityById(drawList.selected);
+        const auto drawOutline = [&](const Entity& entity) {
+            MeshInstance selected{};
+            selected.world = matrixFromTransform(entity.transform, camera.renderOrigin);
+            selected.meshPath = entity.mesh.meshPath;
+            selected.meshNode = entity.mesh.meshNode;
+            const GpuMesh* meshGeometry = m_state->meshPass.geometry(selected);
+            if (meshGeometry != nullptr && m_state->outlinePass.ensure(m_state->device)) {
+                const bool skinned = meshGeometry->skinVertices != nullptr;
+                if (!skinned || m_state->meshPass.bindSkin(m_state->context, entity.id(), *meshGeometry)) {
+                    m_state->outlinePass.draw(m_state->context, m_state->shaders.program(skinned ? ShaderId::SelectionOutlineSkinned : ShaderId::SelectionOutline), viewProj, selected, *meshGeometry);
+                }
+            }
+        };
+        if (selectedEntity && selectedEntity->hasMesh) {
+            drawOutline(*selectedEntity);
+        }
+        if (selectedEntity && selectedEntity->parentId() == kInvalidEntityId && selectedEntity->hasChildren()) {
+            for (const Entity& entity : scene.entities()) {
+                if (entity.hasMesh && entity.parentId() != kInvalidEntityId &&
+                    scene.rootEntityId(entity.id()) == selectedEntity->id()) {
+                    drawOutline(entity);
+                }
             }
         }
     }

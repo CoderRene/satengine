@@ -9,6 +9,8 @@ CompileFlags:
     - -IEngine/UI/src/module
     - -IEngine/GameUi/include
     - -IEngine/ThirdParty/stb
+    - -IEngine/ThirdParty/cgltf
+    - -IEngine/ThirdParty/ufbx
     - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Core/include"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/Renderer/include"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/UI/include"
@@ -16,6 +18,8 @@ CompileFlags:
     - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/UI/src/module"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/GameUi/include"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/ThirdParty/stb"
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/ThirdParty/cgltf"
+    - "-ID:/Software Projects/GameEngine Project/SatEngine/Engine/ThirdParty/ufbx"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/glfw-src/include"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/imgui-src"
     - "-ID:/Software Projects/GameEngine Project/SatEngine/build/_deps/imgui-src/backends"

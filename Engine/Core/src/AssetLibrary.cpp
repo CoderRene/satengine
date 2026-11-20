@@ -27,6 +27,7 @@ std::size_t cost(const MeshData& mesh) {
             material.clearcoatRoughnessTexture.size() + material.clearcoatNormalTexture.size() + material.shaderPath.size();
     }
     for (const auto& image : mesh.embeddedImages) { bytes += sizeof(GltfImage) + image.path.size() + image.bytes.size(); }
+    for (const auto& name : mesh.materialNames) { bytes += sizeof(std::string) + name.size(); }
     for (const auto& path : mesh.dependencies) { bytes += sizeof(std::string) + path.size(); }
     return bytes;
 }

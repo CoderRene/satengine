@@ -1,4 +1,5 @@
 #include "PakArchive.hpp"
+#include "AssetImporter.hpp"
 #include "AssetImportSettings.hpp"
 #include "AssetLibrary.hpp"
 #include "AnimationAsset.hpp"
@@ -105,10 +106,10 @@ int main(int argc, char** argv) {
                 sat::AnimationData rig;
                 const auto meshPath = sat::animatorMeshPath(scene, entity);
                 if (meshPath.empty()) {
-                    throw std::runtime_error("Animator on " + entity.name + " requires a glTF mesh or a hierarchy from a single glTF asset");
+                    throw std::runtime_error("Animator on " + entity.name + " requires a glTF or FBX mesh, or a hierarchy from one model asset");
                 }
                 if (animationReader(meshPath, bytes, error) != sat::AssetReadResult::Found ||
-                    !sat::decodeGltfAnimation(bytes, meshPath, animationReader, rig, error)) {
+                    !sat::importModelAnimation(meshPath, bytes, animationReader, rig, error)) {
                     throw std::runtime_error("Animator on " + entity.name + ": " + error);
                 }
                 const auto validateClip = [&](const std::string& reference) {

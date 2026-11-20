@@ -92,7 +92,7 @@ unsigned evaluationInterval(const AnimationFrustum& camera, const Transform& tra
 
 std::string_view animatorMeshPath(const Scene& scene, const Entity& entity) {
     if (entity.hasMesh) {
-        return isGltfAssetPath(entity.mesh.meshPath) ? std::string_view(entity.mesh.meshPath) : std::string_view{};
+        return isSceneModelAssetPath(entity.mesh.meshPath) ? std::string_view(entity.mesh.meshPath) : std::string_view{};
     }
     std::string_view path;
     for (const auto& mesh : scene.entities()) {
@@ -105,7 +105,7 @@ std::string_view animatorMeshPath(const Scene& scene, const Entity& entity) {
             break;
         }
     }
-    return isGltfAssetPath(path) ? path : std::string_view{};
+    return isSceneModelAssetPath(path) ? path : std::string_view{};
 }
 
 float animationOcclusionWorldRadius(const Entity& entity) {
@@ -248,7 +248,7 @@ struct AnimationSystem::Impl {
         if (auto found = rigs.find(key); found != rigs.end()) { return &found->second; }
         std::string bytes;
         Rig candidate;
-        if (!read(path, bytes) || !decodeGltfAnimation(bytes, path, reader, candidate.data, error)) { return nullptr; }
+        if (!read(path, bytes) || !importModelAnimation(path, bytes, reader, candidate.data, error)) { return nullptr; }
         std::string metadata;
         const auto metadataResult = reader(key + ".satimport", metadata, error);
         AssetImportSettings settings;
@@ -368,7 +368,7 @@ struct AnimationSystem::Impl {
         if (!entity || !entity->hasAnimator) { return nullptr; }
         const auto path = animatorMeshPath(scene, *entity);
         if (path.empty()) {
-            error = "Animator requires a glTF mesh or a hierarchy from a single glTF asset"; return nullptr;
+            error = "Animator requires a glTF or FBX mesh, or a hierarchy from one model asset"; return nullptr;
         }
         if (current && current->meshPath == path && current->settings == entity->animator) {
             current->sceneRevision = scene.editRevision();

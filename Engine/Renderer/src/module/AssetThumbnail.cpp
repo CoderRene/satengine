@@ -48,7 +48,7 @@ void RenderSession::uploadReadyThumbnails() {
 }
 
 AssetThumbnail RenderSession::assetThumbnail(std::string_view path, std::span<const Mat4> palette) {
-    if (!palette.empty() && isGltfAssetPath(path) && valid()) {
+    if (!palette.empty() && isSceneModelAssetPath(path) && valid()) {
         MeshInstance mesh; mesh.meshPath = path;
         SceneDrawList draw; draw.meshes = &mesh; draw.meshCount = 1;
         m_state->meshPass.prepareAssets(m_state->device, draw);

@@ -22,7 +22,7 @@ bool readAnimationComponent(std::istream& in, Entity& entity, bool hasModes, boo
         >> animator.playOnStart >> animator.loop >> animator.speed >> animator.crossfadeSeconds) ||
         animator.clip.size() > 4096 || !std::isfinite(animator.speed) || !std::isfinite(animator.crossfadeSeconds) || animator.crossfadeSeconds < 0 ||
         (!animator.controllerPath.empty() && !isAnimationGraphAssetPath(animator.controllerPath)) ||
-        (entity.hasAnimator && entity.hasMesh && !isGltfAssetPath(entity.mesh.meshPath))) {
+        (entity.hasAnimator && entity.hasMesh && !isSceneModelAssetPath(entity.mesh.meshPath))) {
         error = "Invalid Animator component or mesh"; return false;
     }
     if (hasModes) {

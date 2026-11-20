@@ -607,7 +607,7 @@ struct ViewportPanel::Impl {
                                     }
                                 }
                                 selectionActivated = true;
-                                const auto authoredIndex = scene->entityIndex(bestEntity);
+                                const auto authoredIndex = scene->entityIndex(scene->rootEntityId(bestEntity));
                                 selectedIndex = authoredIndex ? static_cast<int>(*authoredIndex) : -1;
                             }
                         }

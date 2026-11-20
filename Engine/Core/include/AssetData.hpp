@@ -24,6 +24,8 @@ using AssetReader = std::function<AssetReadResult(std::string_view, std::string&
 // Project-relative UTF-8 paths under Assets/, with '/' separators and no traversal.
 [[nodiscard]] bool isValidAssetPath(std::string_view path);
 [[nodiscard]] bool isMeshAssetPath(std::string_view path);
+[[nodiscard]] bool isFbxAssetPath(std::string_view path);
+[[nodiscard]] bool isSceneModelAssetPath(std::string_view path);
 [[nodiscard]] bool isGltfAssetPath(std::string_view path);
 [[nodiscard]] bool isTextureAssetPath(std::string_view path);
 [[nodiscard]] bool isShaderAssetPath(std::string_view path);
@@ -122,7 +124,7 @@ struct MeshSection {
 };
 struct MeshNode {
     std::string name;
-    std::uint32_t id = 0; // One-based index into the source glTF node array.
+    std::uint32_t id = 0; // Stable one-based source node identifier.
     std::uint32_t parent = 0;
     std::uint32_t firstSection = 0;
     std::uint32_t sectionCount = 0;
@@ -190,6 +192,7 @@ struct MeshData {
     std::vector<std::uint32_t> nodeIndices;
     bool mergeNodeDraws = false;
     std::vector<MaterialData> materials;
+    std::vector<std::string> materialNames; // Source order, when available.
     std::vector<GltfImage> embeddedImages;
     std::string materialWarning;
     std::vector<std::string> dependencies; // Files read during mesh import.

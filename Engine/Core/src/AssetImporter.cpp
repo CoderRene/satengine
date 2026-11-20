@@ -1,5 +1,7 @@
 #include "AssetImporter.hpp"
 
+#include "module/FbxImport.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -97,8 +99,13 @@ bool importMesh(std::string_view path, std::string_view bytes, const AssetReader
     const AssetImportSettings& settings, MeshData& mesh, std::string& error) {
     if (!valid(settings, error)) { return false; }
     MeshData candidate;
-    if (isGltfAssetPath(path) ? !decodeGltf(bytes, path, reader, candidate, error) :
-        !decodeObj(bytes, candidate, error, settings.rightHanded, settings.flipV)) { return false; }
+    if (isFbxAssetPath(path)) {
+        if (!decodeFbxMesh(path, bytes, reader, settings.flipV, candidate, error)) { return false; }
+    } else if (isGltfAssetPath(path)) {
+        if (!decodeGltf(bytes, path, reader, candidate, error)) { return false; }
+    } else if (!decodeObj(bytes, candidate, error, settings.rightHanded, settings.flipV)) {
+        return false;
+    }
     for (auto& vertex : candidate.vertices) {
         vertex.x *= settings.scale;
         vertex.y *= settings.scale;
@@ -145,6 +152,12 @@ bool importMesh(std::string_view path, std::string_view bytes, const AssetReader
     mesh = std::move(candidate);
     return true;
 }
+bool importModelAnimation(std::string_view path, std::string_view bytes, const AssetReader& reader,
+    AnimationData& animation, std::string& error) {
+    if (isFbxAssetPath(path)) { return decodeFbxAnimation(bytes, animation, error); }
+    return decodeGltfAnimation(bytes, path, reader, animation, error);
+}
+
 TextureInfo textureImportInfo(int width, int height, const AssetImportSettings& settings) {
     const int largest = std::max(width, height);
     if (largest > settings.maximumSize) {

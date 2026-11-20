@@ -32,7 +32,7 @@ public:
     void stopAudioPreview();
     [[nodiscard]] bool deletingFiles() const { return m_delete.valid(); }
     void setSelectionHandler(std::function<void(std::string)> handler) { m_select = std::move(handler); }
-    void setMoveHandler(std::function<std::string(std::string_view, std::string_view)> handler) {
+    void setMoveHandler(std::function<std::string(std::string_view, std::string_view, bool)> handler) {
         m_onMove = std::move(handler);
     }
     void setSelectedAsset(std::string path);
@@ -45,6 +45,7 @@ private:
     void drawBreadcrumb();
     void drawFolderList(bool canMoveFiles, bool canReferenceAssets);
     bool moveFile(std::string_view relativePath, const std::filesystem::path& targetFolder);
+    bool relocateEntry(std::string_view relativePath, const std::filesystem::path& newRelative, bool directory);
     void moveFiles(std::string_view paths, const std::filesystem::path& targetFolder);
     struct DeleteResult {
         std::vector<std::string> deleted;
@@ -52,6 +53,7 @@ private:
     };
     void deletePendingFiles();
     void finishDelete();
+    void drawRenameDialog(bool allowRename);
     void drawNewFolderDialog(bool allowCreate, bool requested);
     void acceptFileDrops(std::span<const FileDrop> fileDrops);
     void navigateInto(const std::filesystem::path& folderName);
@@ -66,7 +68,7 @@ private:
     std::uintptr_t m_returnIcon = 0;
     std::uintptr_t m_luaIcon = 0;
     std::function<void(std::string)> m_select;
-    std::function<std::string(std::string_view, std::string_view)> m_onMove;
+    std::function<std::string(std::string_view, std::string_view, bool)> m_onMove;
     std::string m_selectedAsset;
     std::filesystem::path m_selectionFolder;
     std::vector<std::string> m_selectedFiles;
@@ -80,6 +82,12 @@ private:
     AssetImportSettings m_audioImport;
     std::string m_audioError;
     std::string m_dropStatus;
+    std::string m_renamePath;
+    std::string m_renameExtension;
+    std::string m_renameError;
+    char m_renameName[1024]{};
+    bool m_renameDirectory = false;
+    bool m_renameRequested = false;
     char m_newFolderName[256]{};
     std::string m_newFolderError;
     double m_parentDragHoverStart = 0.0;

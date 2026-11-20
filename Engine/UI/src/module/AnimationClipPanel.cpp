@@ -1,10 +1,12 @@
 #include "AssetImportPanel.hpp"
+#include "AssetImporter.hpp"
 #include "AssetWrite.hpp"
 #include "Project.hpp"
 #include "Renderer.hpp"
 #include <imgui.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <unordered_set>
 
@@ -91,7 +93,7 @@ void AssetImportPanel::drawAnimations() {
     if (!m_animationsLoaded) {
         m_animationsLoaded = true;
         const auto reader = fileAssetReader(m_project.root()); std::string bytes;
-        if (reader(m_path, bytes, m_error) == AssetReadResult::Found) { (void)decodeGltfAnimation(bytes, m_path, reader, m_animations, m_error); }
+        if (reader(m_path, bytes, m_error) == AssetReadResult::Found) { (void)importModelAnimation(m_path, bytes, reader, m_animations, m_error); }
     }
     for (std::size_t index = 0; index < m_animations.clips.size(); ++index) {
         const auto& clip = m_animations.clips[index]; ImGui::PushID(static_cast<int>(index));
@@ -99,23 +101,51 @@ void AssetImportPanel::drawAnimations() {
         ImGui::TextDisabled("%.3f seconds, %zu channels", clip.duration, clip.channels.size()); ImGui::PopID();
     }
     ImGui::BeginDisabled(m_animations.clips.empty());
-    if (ImGui::Button(m_previewAnimation.isPlaying(m_previewEntity) ? "Pause Preview" : "Play Preview")) {
-        if (m_previewAnimation.isPlaying(m_previewEntity)) { m_previewAnimation.stop(m_previewEntity); }
-        else {
+    if (!m_animations.clips.empty()) {
+        m_animationIndex = std::clamp(m_animationIndex, 0, static_cast<int>(m_animations.clips.size()) - 1);
+        const auto& clip = m_animations.clips[m_animationIndex];
+        const auto showingClip = [&] {
+            const auto* entity = m_previewScene.entityById(m_previewEntity);
+            return entity && entity->animator.clip == clip.name;
+        };
+        const auto selectPreview = [&](bool loop) {
             if (!m_previewEntity) {
                 auto& entity = m_previewScene.createEntity("Animation Preview");
-                entity.hasMesh = entity.hasAnimator = true; entity.mesh.meshPath = m_path;
-                m_previewEntity = entity.id(); m_previewAnimation.setAssetReader(fileAssetReader(m_project.root()));
+                entity.hasMesh = entity.hasAnimator = true;
+                entity.mesh.meshPath = m_path;
+                m_previewEntity = entity.id();
+                m_previewAnimation.setAssetReader(fileAssetReader(m_project.root()));
             }
             auto* entity = m_previewScene.entityById(m_previewEntity);
-            entity->animator.clip = m_animations.clips[m_animationIndex].name;
-            (void)m_previewAnimation.play(m_previewEntity, entity->animator.clip, true, 0);
+            if (!m_previewAnimation.play(m_previewEntity, clip.name, loop, 0)) {
+                m_error = m_previewAnimation.error();
+                return false;
+            }
+            entity->animator.clip = clip.name;
+            return true;
+        };
+        const bool playing = showingClip() && m_previewAnimation.isPlaying(m_previewEntity);
+        float time = showingClip() ? m_previewAnimation.time(m_previewEntity) : 0;
+        if (playing && clip.duration > 0) { time = std::fmod(time, clip.duration); }
+        if (ImGui::Button(playing ? "Pause Preview" : "Play Preview")) {
+            if (playing) {
+                m_previewAnimation.stop(m_previewEntity);
+                (void)m_previewAnimation.setTime(m_previewEntity, time);
+            } else if (selectPreview(true) && time < clip.duration) {
+                (void)m_previewAnimation.setTime(m_previewEntity, time);
+            }
         }
-    }
-    if (m_previewEntity) {
-        m_previewAnimation.update(ImGui::GetIO().DeltaTime);
-        const auto preview = m_renderer.assetThumbnail(m_path, m_previewAnimation.palette(m_previewEntity));
-        if (preview.texture) { ImGui::Image(ImTextureRef(static_cast<ImTextureID>(preview.texture)), ImVec2(192, 192)); }
+        ImGui::BeginDisabled(clip.duration == 0);
+        if (ImGui::SliderFloat("Preview Time", &time, 0, clip.duration, "%.3f s") && selectPreview(false)) {
+            (void)m_previewAnimation.setTime(m_previewEntity, time);
+            m_previewAnimation.stop(m_previewEntity);
+        }
+        ImGui::EndDisabled();
+        if (m_previewEntity) {
+            m_previewAnimation.update(ImGui::GetIO().DeltaTime);
+            const auto preview = m_renderer.assetThumbnail(m_path, m_previewAnimation.palette(m_previewEntity));
+            if (preview.texture) { ImGui::Image(ImTextureRef(static_cast<ImTextureID>(preview.texture)), ImVec2(192, 192)); }
+        }
     }
     if (ImGui::Button("Extract Clip")) { extractAnimations(false); }
     ImGui::SameLine(); if (ImGui::Button("Extract All Clips")) { extractAnimations(true); }

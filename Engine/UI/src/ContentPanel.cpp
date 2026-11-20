@@ -142,6 +142,10 @@ bool isLuaFile(const fs::path& name) {
     return name.extension() == ".lua";
 }
 
+bool isProtectedDirectory(std::string_view path) {
+    return path == "Assets" || path == "Scripts" || path == "Assets/UI";
+}
+
 bool isToolingEntry(std::string_view fileName) {
     return fileName == "LuaDefs" || fileName == ".satengine" || fileName == ".vscode" ||
            fileName == ".luarc.json" || fileName == "SatEngine.code-workspace" ||
@@ -175,6 +179,8 @@ void ContentPanel::syncToProject() {
         setSelectedAsset({});
         m_trackedRoot.clear();
         m_pendingDelete.clear();
+        m_renamePath.clear();
+        m_renameRequested = false;
         m_selectedFiles.clear();
         m_selectionAnchor.clear();
         m_dropStatus.clear();
@@ -186,6 +192,8 @@ void ContentPanel::syncToProject() {
         setSelectedAsset({});
         m_trackedRoot = m_project->root();
         m_pendingDelete.clear();
+        m_renamePath.clear();
+        m_renameRequested = false;
         m_selectedFiles.clear();
         m_selectionAnchor.clear();
         m_dropStatus.clear();
@@ -328,19 +336,24 @@ void ContentPanel::acceptFileDrops(std::span<const FileDrop> fileDrops) {
 
 bool ContentPanel::moveFile(std::string_view relativePath, const fs::path& targetFolder) {
     const fs::path relative(std::u8string(relativePath.begin(), relativePath.end()));
+    return relocateEntry(relativePath, targetFolder / relative.filename(), false);
+}
+
+bool ContentPanel::relocateEntry(std::string_view relativePath, const fs::path& newRelative, bool directory) {
+    const fs::path relative(std::u8string(relativePath.begin(), relativePath.end()));
     std::error_code error;
     const auto root = fs::canonical(m_project->root(), error);
     const auto sourceFolder = error ? fs::path{} : fs::canonical(root / relative.parent_path(), error);
-    const auto folder = error ? fs::path{} : fs::canonical(root / targetFolder, error);
+    const auto folder = error ? fs::path{} : fs::canonical(root / newRelative.parent_path(), error);
     if (error || !isWithin(sourceFolder, root) || !isWithin(folder, root) || !fs::is_directory(folder, error)) {
         m_dropStatus = "Choose a destination folder inside the project.";
         return false;
     }
-    if (sourceFolder == folder) { return false; }
 
-    const auto encoded = (targetFolder / relative.filename()).generic_u8string();
+    const auto encoded = newRelative.generic_u8string();
     const std::string newPath(encoded.begin(), encoded.end());
-    if (isValidAssetPath(relativePath) && !isValidAssetPath(newPath)) {
+    if (sourceFolder == folder && relative.filename() == newRelative.filename()) { return false; }
+    if (!directory && isValidAssetPath(relativePath) && !isValidAssetPath(newPath)) {
         m_dropStatus = "Move assets to a folder inside Assets.";
         return false;
     }
@@ -349,17 +362,17 @@ bool ContentPanel::moveFile(std::string_view relativePath, const fs::path& targe
         m_dropStatus = "Move UI assets to a folder inside Assets/UI.";
         return false;
     }
-    if (relativePath.starts_with("Scripts/") && relative.extension() == ".lua" &&
+    if (!directory && relativePath.starts_with("Scripts/") && relative.extension() == ".lua" &&
         (!newPath.starts_with("Scripts/") || !isValidScriptPath(std::string_view(newPath).substr(8)))) {
         m_dropStatus = "Move scripts to a folder inside Scripts.";
         return false;
     }
 
     const auto source = sourceFolder / relative.filename();
-    const auto destination = folder / relative.filename();
+    const auto destination = folder / newRelative.filename();
     const auto sourceStatus = fs::symlink_status(source, error);
-    if (error || !fs::is_regular_file(sourceStatus)) {
-        m_dropStatus = "Only regular files can be moved.";
+    if (error || !(directory ? fs::is_directory(sourceStatus) : fs::is_regular_file(sourceStatus))) {
+        m_dropStatus = "The source is missing or is not a regular file or folder.";
         return false;
     }
 
@@ -367,16 +380,19 @@ bool ContentPanel::moveFile(std::string_view relativePath, const fs::path& targe
     sourceSettings += ".satimport";
     auto destinationSettings = destination;
     destinationSettings += ".satimport";
-    const auto settingsStatus = fs::symlink_status(sourceSettings, error);
+    const auto settingsStatus = directory ? fs::file_status{} : fs::symlink_status(sourceSettings, error);
     if (error == std::errc::no_such_file_or_directory) { error.clear(); }
     const bool hasSettings = fs::exists(settingsStatus);
     if (!error && hasSettings && !fs::is_regular_file(settingsStatus)) {
         error = std::make_error_code(std::errc::operation_not_supported);
     }
 
+    const bool affectsSelection = m_selectedAsset == relativePath ||
+        (directory && m_selectedAsset.starts_with(relativePath) &&
+            m_selectedAsset.size() > relativePath.size() && m_selectedAsset[relativePath.size()] == '/');
     if (!error && destinationAvailable(destination, error) &&
-        destinationAvailable(destinationSettings, error)) {
-        if (m_selectedAsset == relativePath) { stopAudioPreview(); }
+        (directory || destinationAvailable(destinationSettings, error))) {
+        if (affectsSelection) { stopAudioPreview(); }
         if (hasSettings) { fs::rename(sourceSettings, destinationSettings, error); }
         if (!error) {
             fs::rename(source, destination, error);
@@ -396,8 +412,8 @@ bool ContentPanel::moveFile(std::string_view relativePath, const fs::path& targe
         return false;
     }
 
-    if (m_onMove) { m_dropStatus = m_onMove(relativePath, newPath); }
-    if (m_selectedAsset == relativePath) {
+    if (m_onMove) { m_dropStatus = m_onMove(relativePath, newPath, directory); }
+    if (affectsSelection) {
         setSelectedAsset({});
         if (m_select) { m_select({}); }
     }
@@ -500,6 +516,63 @@ void ContentPanel::finishDelete() {
     }
 }
 
+void ContentPanel::drawRenameDialog(bool allowRename) {
+    constexpr char kPopup[] = "Rename Item";
+    if (m_renameRequested) {
+        m_renameRequested = false;
+        ImGui::OpenPopup(kPopup);
+    }
+    if (!ImGui::BeginPopupModal(kPopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) { return; }
+
+    if (m_renamePath.empty()) { ImGui::CloseCurrentPopup(); }
+    if (ImGui::IsWindowAppearing()) { ImGui::SetKeyboardFocusHere(); }
+    ImGui::BeginDisabled(!allowRename || m_renamePath.empty());
+    const bool submitted = ImGui::InputText("Name", m_renameName, sizeof(m_renameName),
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+    if (!m_renameExtension.empty()) {
+        ImGui::SameLine();
+        ImGui::TextUnformatted(m_renameExtension.c_str());
+    }
+    if (ImGui::Button("Rename") || submitted) {
+        const std::string_view name(m_renameName);
+        const std::string fileName = std::string(name) + m_renameExtension;
+        const fs::path source(std::u8string(m_renamePath.begin(), m_renamePath.end()));
+        const auto destination = source.parent_path() / fs::path(std::u8string(fileName.begin(), fileName.end()));
+        const auto encoded = destination.generic_u8string();
+        const std::string destinationPath(encoded.begin(), encoded.end());
+        if (name.empty() || name.starts_with('.') || name.back() == '.' || name.back() == ' ' ||
+            name.find_first_of("<>:\"/\\|?*") != std::string_view::npos ||
+            std::any_of(name.begin(), name.end(), [](unsigned char ch) { return ch < 32; }) ||
+            isToolingEntry(fileName) || isProtectedFile(destinationPath) || isProtectedDirectory(destinationPath) ||
+            fileName.ends_with(".satimport") || fileName.ends_with(".satimport.tmp") || fileName.ends_with(".satmat.tmp")) {
+            m_renameError = "Enter a valid name.";
+        } else if (m_renamePath == destinationPath) {
+            m_renamePath.clear();
+            ImGui::CloseCurrentPopup();
+        } else {
+            m_dropStatus.clear();
+            if (relocateEntry(m_renamePath, destination, m_renameDirectory)) {
+                std::replace(m_selectedFiles.begin(), m_selectedFiles.end(), m_renamePath, destinationPath);
+                if (m_selectionAnchor == m_renamePath) { m_selectionAnchor = destinationPath; }
+                m_renderer->setProjectAssetRoot(m_project->root());
+                m_renamePath.clear();
+                ImGui::CloseCurrentPopup();
+            } else {
+                m_renameError = std::move(m_dropStatus);
+                m_dropStatus.clear();
+            }
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        m_renamePath.clear();
+        ImGui::CloseCurrentPopup();
+    }
+    if (!m_renameError.empty()) { ImGui::TextWrapped("%s", m_renameError.c_str()); }
+    ImGui::EndPopup();
+}
+
 void ContentPanel::drawNewFolderDialog(bool allowCreate, bool requested) {
     constexpr char kPopup[] = "New Folder";
     if (requested) {
@@ -579,6 +652,7 @@ void ContentPanel::onImGuiRender(bool playMode, std::span<const FileDrop> fileDr
             }
         }
         drawFolderList(allowMove, !playMode);
+        drawRenameDialog(allowMove);
         constexpr char kDeletePopup[] = "Delete selected files?";
         if (!m_pendingDelete.empty() && !ImGui::IsPopupOpen(kDeletePopup)) {
             ImGui::OpenPopup(kDeletePopup);
@@ -842,9 +916,21 @@ void ContentPanel::drawFolderList(bool canMoveFiles, bool canReferenceAssets) {
         }
     };
 
-    const auto drawFileMenu = [&](const Entry& entry, const std::string& path) {
-        if (entry.isDirectory || !ImGui::BeginPopupContextItem("FileContext")) { return; }
-        if (ImGui::MenuItem("Delete", nullptr, false, canMoveFiles && !isProtectedFile(path))) {
+    const auto drawItemMenu = [&](const Entry& entry, const std::string& path) {
+        if (entry.name == ".." || !ImGui::BeginPopupContextItem("ItemContext")) { return; }
+        const bool canRename = canMoveFiles && !isProtectedFile(path) && !isProtectedDirectory(path);
+        if (ImGui::MenuItem("Rename", nullptr, false, canRename)) {
+            const auto name = pathText(entry.isDirectory ? entry.name : entry.name.stem());
+            m_renamePath = path;
+            m_renameDirectory = entry.isDirectory;
+            m_renameExtension = entry.isDirectory ? std::string{} : pathText(entry.name.extension());
+            m_renameError.clear();
+            const auto length = (std::min)(name.size(), sizeof(m_renameName) - 1);
+            std::copy_n(name.data(), length, m_renameName);
+            m_renameName[length] = '\0';
+            m_renameRequested = true;
+        }
+        if (!entry.isDirectory && ImGui::MenuItem("Delete", nullptr, false, canMoveFiles && !isProtectedFile(path))) {
             if (std::find(m_selectedFiles.begin(), m_selectedFiles.end(), path) == m_selectedFiles.end()) {
                 m_pendingDelete.assign(1, path);
             } else {
@@ -895,7 +981,7 @@ void ContentPanel::drawFolderList(bool canMoveFiles, bool canReferenceAssets) {
             }
 
             handleDragDrop(entry, assetPath, name);
-            drawFileMenu(entry, assetPath);
+            drawItemMenu(entry, assetPath);
             ImGui::PopID();
         }
         return;
@@ -926,7 +1012,7 @@ void ContentPanel::drawFolderList(bool canMoveFiles, bool canReferenceAssets) {
 
         const auto assetPath = assetPathFor(entry);
         handleDragDrop(entry, assetPath, name);
-        drawFileMenu(entry, assetPath);
+        drawItemMenu(entry, assetPath);
         if (pressed && !entry.isDirectory) { selectFile(entry, assetPath); }
         if (hovered || isHighlighted(assetPath, entry.isDirectory)) {
             draw->AddRectFilled(

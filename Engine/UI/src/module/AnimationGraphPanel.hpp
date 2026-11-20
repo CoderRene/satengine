@@ -2,6 +2,7 @@
 #include "AnimationGraph.hpp"
 #include "Scene.hpp"
 #include <string>
+#include <string_view>
 struct ImNodesContext;
 namespace sat {
 class Project;
@@ -13,6 +14,7 @@ public:
     ~AnimationGraphPanel();
     AnimationGraphPanel(const AnimationGraphPanel&) = delete;
     AnimationGraphPanel& operator=(const AnimationGraphPanel&) = delete;
+    void relocate(std::string_view oldPath, std::string_view newPath, bool directory);
     void open(std::string path);
     void draw(AnimationSystem* animation, EntityId entity);
 private:

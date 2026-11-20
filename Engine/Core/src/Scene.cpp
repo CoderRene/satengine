@@ -93,6 +93,17 @@ const Entity* Scene::entityById(EntityId id) const {
     return found != m_entityIndices.end() ? &m_entities[found->second] : nullptr;
 }
 
+EntityId Scene::rootEntityId(EntityId id) const {
+    const Entity* entity = entityById(id);
+    if (!entity) {
+        return kInvalidEntityId;
+    }
+    while (entity->parentId() != kInvalidEntityId) {
+        entity = entityById(entity->parentId());
+    }
+    return entity->id();
+}
+
 bool Scene::canSetParent(const Entity& child, const Entity* parent) const {
     if (parent == &child) {
         return false;

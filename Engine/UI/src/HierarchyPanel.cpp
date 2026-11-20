@@ -384,7 +384,7 @@ struct HierarchyPanel::Impl {
 
         AssetImportSettings settings;
         PreparedAssetImport imported;
-        if (m_project && isGltfAssetPath(path)) {
+        if (m_project && isSceneModelAssetPath(path)) {
             const auto reader = fileAssetReader(m_project->root());
             std::string metadata;
             const auto result = reader(m_droppedMeshPath + ".satimport", metadata, m_meshDropError);
@@ -396,7 +396,7 @@ struct HierarchyPanel::Impl {
                 settings.mergeGeometry = false;
                 if (!decodeAssetImport(reader, path, &settings, imported, m_meshDropError)) { return; }
                 if (imported.mesh.nodes.size() >= kMaxSceneEntities - m_scene->entityCount()) {
-                    m_meshDropError = "This glTF hierarchy would exceed the scene entity limit.";
+                    m_meshDropError = "This model hierarchy would exceed the scene entity limit.";
                     return;
                 }
             }

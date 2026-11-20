@@ -9,7 +9,7 @@
 #include <vector>
 
 namespace sat {
-// Resolves a mesh directly or a single glTF asset represented by descendant mesh nodes.
+// Resolves a mesh directly or a single glTF or FBX asset represented by descendant mesh nodes.
 [[nodiscard]] std::string_view animatorMeshPath(const Scene& scene, const Entity& entity);
 
 // A dense lookup token valid for the layout that issued it.

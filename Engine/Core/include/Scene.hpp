@@ -131,6 +131,7 @@ inline constexpr EntityId kInvalidEntityId = 0;
 struct Entity {
     [[nodiscard]] EntityId id() const { return m_id; }
     [[nodiscard]] EntityId parentId() const { return m_parentId; }
+    [[nodiscard]] bool hasChildren() const { return m_childCount != 0; }
     std::string name;
     Transform transform;
     bool hasCamera = false;
@@ -183,6 +184,8 @@ public:
     [[nodiscard]] std::optional<std::size_t> entityIndex(EntityId id) const;
     [[nodiscard]] Entity* entityById(EntityId id);
     [[nodiscard]] const Entity* entityById(EntityId id) const;
+    // Returns the topmost ancestor (or the entity itself), or an invalid ID if absent.
+    [[nodiscard]] EntityId rootEntityId(EntityId id) const;
     // Hierarchy orders entities in the editor. Transforms remain in world space.
     // Use kInvalidEntityId as the parent to move an entity to the root.
     [[nodiscard]] bool canSetParent(EntityId childId, EntityId parentId) const;
