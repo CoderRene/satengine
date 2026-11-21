@@ -108,14 +108,20 @@ void EditorSession::drawMenuBar(bool canSaveScene) {
         const bool playingNow = state.play.active();
         const bool canBuild = state.project.isOpen() && !playingNow &&
             !state.play.decisionPending() && !building;
-        if (ImGui::MenuItem("Build Standalone", nullptr, false, canBuild)) {
+        const auto build = [&](GameBuilder::AssetMode mode) {
             if (saveScene()) {
                 const auto obfuscatorFolder = openFolderDialog(state.window,
                     "Optional obfuscator folder (generate.py) - Cancel builds without obfuscation");
-                const bool started = state.builder.start(state.project.root(), obfuscatorFolder);
+                const bool started = state.builder.start(state.project.root(), obfuscatorFolder, mode);
                 (void)started; // Failure details are displayed in Build Status.
             }
             state.showBuildStatus = true;
+        };
+        if (ImGui::BeginMenu("Build Standalone", canBuild)) {
+            if (ImGui::MenuItem("Full Project")) { build(GameBuilder::AssetMode::FullProject); }
+            if (ImGui::MenuItem("Referenced Assets")) { build(GameBuilder::AssetMode::Referenced); }
+            ImGui::TextDisabled("Extra includes: StandaloneIncludes.txt");
+            ImGui::EndMenu();
         }
         if (!state.project.isOpen()) {
             ImGui::TextDisabled("Open a project to build.");

@@ -59,12 +59,77 @@ bool EditorSession::rendererValid() const {
 }
 
 void EditorSession::pollSystems() {
-    m_state->builder.poll();
+    auto& state = *m_state;
+    state.builder.poll();
+    const auto now = std::chrono::steady_clock::now();
+    if (state.watchedProject != state.project.root()) {
+        if (state.assetScan.valid()) {
+            if (state.assetScan.wait_for(std::chrono::seconds(0)) != std::future_status::ready) { return; }
+            state.assetScan = {};
+        }
+        state.watchedProject = state.project.root();
+        state.assetSnapshot.clear();
+        state.pendingAssetChanges.clear();
+        state.hasAssetSnapshot = false;
+        state.nextAssetScan = now;
+    }
+    if (!state.renderer || state.watchedProject.empty()) { return; }
+    if (state.assetScan.valid() &&
+        state.assetScan.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        auto snapshot = state.assetScan.get();
+        if (snapshot) {
+            if (state.hasAssetSnapshot) {
+                for (const auto& [path, stamp] : *snapshot) {
+                    const auto previous = state.assetSnapshot.find(path);
+                    if (previous == state.assetSnapshot.end() || previous->second != stamp) {
+                        state.pendingAssetChanges.insert(path);
+                    }
+                }
+                for (const auto& [path, stamp] : state.assetSnapshot) {
+                    if (!snapshot->contains(path)) { state.pendingAssetChanges.insert(path); }
+                }
+            }
+            state.assetSnapshot = std::move(*snapshot);
+            state.hasAssetSnapshot = true;
+        }
+    }
+    if (!state.assetScan.valid() && now >= state.nextAssetScan) {
+        state.nextAssetScan = now + std::chrono::milliseconds(350);
+        state.assetScan = std::async(std::launch::async, [root = state.watchedProject]() -> std::optional<State::AssetSnapshot> {
+            State::AssetSnapshot snapshot;
+            std::error_code error;
+            const auto assets = root / "Assets";
+            if (!std::filesystem::exists(assets, error)) {
+                return error ? std::nullopt : std::optional{std::move(snapshot)};
+            }
+            std::filesystem::recursive_directory_iterator it(assets, error), end;
+            for (; it != end && !error; it.increment(error)) {
+                if (!it->is_regular_file(error) || error) { continue; }
+                const auto name = it->path().lexically_relative(root).generic_u8string();
+                const std::string path(name.begin(), name.end());
+                if (it->path().filename().u8string().starts_with(u8"._") || path.ends_with(".tmp")) { continue; }
+                const auto stamp = it->last_write_time(error);
+                if (error) { break; }
+                const auto size = it->file_size(error);
+                if (!error) { snapshot.emplace(path, State::AssetStamp{stamp, size}); }
+            }
+            if (error) { return std::nullopt; }
+            return snapshot;
+        });
+    }
+    if (sceneBusy() || !state.recordsSceneHistory() ||
+        (state.assetImports && (state.assetImports->dirty() || state.assetImports->importPending()))) { return; }
+    if (!state.pendingAssetChanges.empty()) {
+        state.renderer->refreshProjectAssets(state.pendingAssetChanges);
+        state.pendingAssetChanges.clear();
+    }
 }
 
 void EditorSession::beginRendererFrame() {
     m_state->frameStart = std::chrono::steady_clock::now();
-    m_state->renderer->newFrame();
+    const auto& imports = m_state->assetImports;
+    m_state->renderer->newFrame(!sceneBusy() && m_state->recordsSceneHistory() &&
+        (!imports || (!imports->dirty() && !imports->importPending())));
 }
 
 void EditorSession::bindWindowTarget() {

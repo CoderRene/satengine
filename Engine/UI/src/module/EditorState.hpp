@@ -27,7 +27,11 @@
 #include <filesystem>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 struct GLFWwindow;
@@ -64,6 +68,15 @@ struct EditorSession::State {
     bool discardSceneOnClose = false;
     std::unique_ptr<ViewportPanel> viewport;
     std::unique_ptr<LuaLogPanel> luaLog;
+
+    using AssetStamp = std::pair<std::filesystem::file_time_type, std::uintmax_t>;
+    using AssetSnapshot = std::unordered_map<std::string, AssetStamp>;
+    std::filesystem::path watchedProject;
+    AssetSnapshot assetSnapshot;
+    std::future<std::optional<AssetSnapshot>> assetScan;
+    std::unordered_set<std::string> pendingAssetChanges;
+    std::chrono::steady_clock::time_point nextAssetScan{};
+    bool hasAssetSnapshot = false;
 
     std::string sceneError;
     SceneEditHistory history;

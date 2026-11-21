@@ -80,7 +80,13 @@ void AssetThumbnailLoader::run(std::stop_token stop) {
             if (isTextureAssetPath(job->path)) {
                 result.image = decodeTextureThumbnail(source->reader, job->path);
             } else if (source->prepareMesh) {
-                result.meshPass = source->prepareMesh(source->reader, job->path);
+                const AssetReader track = [&](std::string_view path, std::string& bytes, std::string& error) {
+                    if (path != job->path && std::ranges::find(result.dependencies, path) == result.dependencies.end()) {
+                        result.dependencies.emplace_back(path);
+                    }
+                    return source->reader(path, bytes, error);
+                };
+                result.meshPass = source->prepareMesh(track, job->path);
             }
         } catch (const std::exception&) {
             // An unreadable preview renders as the normal file icon.

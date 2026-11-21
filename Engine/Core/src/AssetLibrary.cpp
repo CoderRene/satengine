@@ -124,6 +124,10 @@ void AssetLibrary::invalidateMaterial(std::string_view path) {
         return message.starts_with(path) && std::string_view(message).substr(path.size(), 2) == ": ";
     });
 }
+void AssetLibrary::replaceMaterial(std::string_view path, MaterialData&& data) {
+    invalidateMaterial(path);
+    m_materials.emplace(std::string(path), Entry<MaterialData>{std::move(data), true});
+}
 void AssetLibrary::invalidateAsset(std::string_view path) {
     const auto eraseDecoded = [&](auto& cache, auto entry) {
         if (entry->second.valid) {
@@ -195,6 +199,10 @@ bool decodeAssetImport(const AssetReader& reader, std::string_view path, const A
         if (!importMesh(path, bytes, readDependency, candidate.settings, candidate.mesh, error)) { return false; }
         candidate.mesh.dependencies = std::move(dependencies);
     } else if (!importTexture(bytes, candidate.settings, candidate.texture, error)) {
+        return false;
+    }
+    if ((isMesh ? cost(candidate.mesh) : cost(candidate.texture)) > kMaxCacheBytes) {
+        error = "Decoded asset exceeds 256 MiB";
         return false;
     }
     prepared = std::move(candidate);
@@ -296,13 +304,17 @@ void AssetLibrary::commit(PreparedAssetImport&& prepared) {
     });
     prepared.path.clear();
 }
-const MeshData* AssetLibrary::mesh(std::string_view path) {
+const MeshData* AssetLibrary::cachedMesh(std::string_view path) {
     if (const auto found = m_meshes.find(path); found != m_meshes.end()) {
         auto& entry = found->second;
         if (!entry.valid) { return nullptr; }
         m_recency.splice(m_recency.begin(), m_recency, entry.recency);
         return &entry.data;
     }
+    return nullptr;
+}
+const MeshData* AssetLibrary::mesh(std::string_view path) {
+    if (m_meshes.contains(path)) { return cachedMesh(path); }
     PreparedAssetImport prepared;
     std::string error;
     if (!isMeshAssetPath(path)) { error = "Unsupported or invalid mesh asset path"; }

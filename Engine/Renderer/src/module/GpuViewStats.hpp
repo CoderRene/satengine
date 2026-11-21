@@ -25,7 +25,7 @@ public:
     void end();
 
 private:
-    static constexpr unsigned kPasses = 7; // Four cascades, two opaque phases, and transmission.
+    static constexpr unsigned kPasses = 8; // Four cascades, one spot, two opaque phases, and transmission.
     static constexpr unsigned kTimestamps = static_cast<unsigned>(ViewTimestamp::Count);
     struct BatchSize {
         unsigned triangles, vertices, passes;

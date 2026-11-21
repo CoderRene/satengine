@@ -37,6 +37,9 @@ struct alignas(16) MeshFrameCb {
     unsigned orthographic;
     float originHigh[4];
     float originLow[4];
+    float spotViewProj[16];
+    int spotLight;
+    float spotPadding[3];
 };
 
 inline void writeNormalColumns(float* normal, const Mat4& matrix) {
@@ -188,10 +191,11 @@ struct alignas(16) GizmoFrameCb {
 static_assert(sizeof(MeshVertex) == 72 && offsetof(MeshVertex, nx) == 12 &&
     offsetof(MeshVertex, u) == 24 && offsetof(MeshVertex, tx) == 32 &&
     offsetof(MeshVertex, u1) == 48 && offsetof(MeshVertex, color) == 56);
-static_assert(sizeof(MeshFrameCb) == 480 && alignof(MeshFrameCb) == 16 &&
+static_assert(sizeof(MeshFrameCb) == 560 && alignof(MeshFrameCb) == 16 &&
     offsetof(MeshFrameCb, cascadeViewProj) == 128 && offsetof(MeshFrameCb, cascadeSplits) == 384 &&
     offsetof(MeshFrameCb, cascadeTexel) == 400 && offsetof(MeshFrameCb, cascadeCount) == 416 &&
-    offsetof(MeshFrameCb, originHigh) == 448 && offsetof(MeshFrameCb, originLow) == 464);
+    offsetof(MeshFrameCb, originHigh) == 448 && offsetof(MeshFrameCb, originLow) == 464 &&
+    offsetof(MeshFrameCb, spotViewProj) == 480 && offsetof(MeshFrameCb, spotLight) == 544);
 static_assert(sizeof(MaterialCb) == 448 && offsetof(MaterialCb, uv) == 64 &&
     offsetof(MaterialCb, transmission) == 288 && offsetof(MaterialCb, coatUv) == 320 &&
     offsetof(MaterialCb, clearcoat) == 416 && offsetof(MaterialCb, transmissionRoughnessStrength) == 432 &&

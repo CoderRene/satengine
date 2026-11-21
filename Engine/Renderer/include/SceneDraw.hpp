@@ -72,6 +72,8 @@ struct LightInstance {
     float range = 0;
     float innerCos = 1;
     float outerCos = 1;
+    EntityId entity = kInvalidEntityId;
+    bool castShadow = false;
 };
 
 [[nodiscard]] LightInstance makeLightInstance(const Entity& entity, DVec3 renderOrigin);
@@ -80,6 +82,8 @@ struct LightInstance {
 struct SceneDrawList {
     std::string_view environmentPath;
     float environmentIntensity = 1.0f;
+    bool showEnvironmentSky = false;
+    bool weightedTransparency = false;
     bool directionalShadows = true;
     int shadowResolution = 2048;
     float shadowDistance = 100.0f;

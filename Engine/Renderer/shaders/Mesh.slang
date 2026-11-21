@@ -27,6 +27,9 @@ cbuffer Frame : register(b0)
     uint orthographic;
     float4 originHigh;
     float4 originLow;
+    float4x4 spotViewProj;
+    int spotLight;
+    float3 spotPadding;
 };
 cbuffer Lights : register(b3)
 {
@@ -45,10 +48,16 @@ SamplerComparisonState shadowSampler : register(s2);
 Texture2D<float4> opaqueScene : register(t12);
 SamplerState opaqueSceneSampler : register(s12);
 
-float2 environmentUv(float3 direction)
+Texture2DArray<float> spotShadowMap : register(t15);
+
+float spotVisibility(float3 position)
 {
-    return float2(atan2(direction.x, direction.z) * 0.159154943 + 0.5,
-        acos(clamp(direction.y, -1.0, 1.0)) * 0.318309886);
+    float4 clip = mul(spotViewProj, float4(position, 1.0));
+    if (clip.w <= 0.0) { return 1.0; }
+    float3 projected = clip.xyz / clip.w;
+    float2 uv = projected.xy * float2(0.5, -0.5) + 0.5;
+    if (any(uv <= 0.0) || any(uv >= 1.0) || projected.z <= 0.0 || projected.z >= 1.0) { return 1.0; }
+    return spotShadowMap.SampleCmpLevelZero(shadowSampler, float3(uv, 0.0), projected.z - 0.0001);
 }
 
 float sampleCascade(uint cascade, float3 position, float3 normal, float normalBias)
@@ -188,8 +197,7 @@ float3 transmittedScene(MeshFragment input, Surface surface, float3 v, float ior
     return background * volumeAttenuation(travel);
 }
 
-[shader("fragment")]
-float4 psMain(MeshFragment input, bool frontFace : SV_IsFrontFace) : SV_Target
+float4 shadeMesh(MeshFragment input, bool frontFace)
 {
     float4 base = sampleBaseColor(input.uv, input.uv1) * input.color;
     float opacity = materialOpacity(base.a);
@@ -259,6 +267,7 @@ float4 psMain(MeshFragment input, bool frontFace : SV_IsFrontFace) : SV_Target
                 float viewDepth = orthoDepthScale != 0.0 ? cascadeNear + input.position.z * orthoDepthScale : input.clipW;
                 radiance *= shadowVisibility(input.worldPosition, surface.normal, l, viewDepth);
             }
+            if (int(i) == spotLight) { radiance *= spotVisibility(input.worldPosition); }
             color += radiance * evaluateSurfaceBrdf(surface.normal, v, l, diffuseColor, surface.rough, specularStrength, f0);
             if (coatWeight > 0.0)
             {
@@ -272,3 +281,30 @@ float4 psMain(MeshFragment input, bool frontFace : SV_IsFrontFace) : SV_Target
     float3 displayLinear = saturate(1.0 - 1.0 / (1.0 + color));
     return float4(encodeSrgb(saturate(displayLinear + transmitted)), opacity);
 }
+
+#ifdef SAT_WEIGHTED_BLEND
+struct WeightedFragment
+{
+    float4 accumulated : SV_Target0;
+    float4 coverage : SV_Target1;
+};
+
+[shader("fragment")]
+WeightedFragment psMain(MeshFragment input, bool frontFace : SV_IsFrontFace)
+{
+    float4 color = shadeMesh(input, frontFace);
+    float alpha = saturate(color.a);
+    float depthWeight = 1.0 - 0.9 * saturate(input.position.z);
+    float weight = max(0.01, depthWeight * depthWeight * depthWeight);
+    WeightedFragment result;
+    result.accumulated = float4(clamp(color.rgb, 0.0, 1024.0) * alpha, alpha) * weight;
+    result.coverage = float4(alpha, alpha, alpha, alpha);
+    return result;
+}
+#else
+[shader("fragment")]
+float4 psMain(MeshFragment input, bool frontFace : SV_IsFrontFace) : SV_Target
+{
+    return shadeMesh(input, frontFace);
+}
+#endif

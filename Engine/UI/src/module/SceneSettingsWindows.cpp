@@ -73,6 +73,8 @@ void drawSceneSettingsWindows(bool& showLighting, bool& showAudio, bool& showPhy
                 }
                 ImGui::EndCombo();
             }
+            changed |= ImGui::Checkbox("Show Environment Sky", &settings.showEnvironmentSky);
+            changed |= ImGui::Checkbox("Weighted Blended Transparency", &settings.weightedTransparency);
             changed |= dragFloat("Environment Intensity", &settings.environmentIntensity, 0.01f,
                 0.0f, 100.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
             changed |= dragFloat("Ambient Intensity", &settings.ambientIntensity, 0.01f,

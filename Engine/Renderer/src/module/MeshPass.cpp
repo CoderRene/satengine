@@ -20,6 +20,7 @@
 #include "AssetData.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cmath>
@@ -38,6 +39,18 @@ namespace {
 constexpr UINT kSkinnedVertexSlot = 14;
 
 constexpr UINT kOpaqueSceneSlot = 12;
+constexpr UINT kSpotShadowSlot = 15;
+
+void drawFullscreen(ID3D11DeviceContext& context, ShaderProgram program, ID3D11RasterizerState* rasterizer,
+    ID3D11DepthStencilState* depth) {
+    context.IASetInputLayout(nullptr);
+    context.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context.VSSetShader(program.vertex, nullptr, 0);
+    context.PSSetShader(program.pixel, nullptr, 0);
+    context.OMSetDepthStencilState(depth, 0);
+    context.RSSetState(rasterizer);
+    context.Draw(3, 0);
+}
 
 
 template <typename T>
@@ -104,6 +117,38 @@ struct MeshPass::Impl {
     ID3D11DepthStencilState* depthState = nullptr;
     Microsoft::WRL::ComPtr<ID3D11RasterizerState> doubleSidedRasterizer;
     Microsoft::WRL::ComPtr<ID3D11BlendState> blend;
+    Microsoft::WRL::ComPtr<ID3D11BlendState> weightedBlend;
+    Microsoft::WRL::ComPtr<ID3D11DepthStencilState> fullscreenDepth;
+    struct WeightedTargets {
+        std::array<Microsoft::WRL::ComPtr<ID3D11RenderTargetView>, 2> targets;
+        std::array<Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>, 2> views;
+        UINT width = 0, height = 0;
+
+        bool ensure(ID3D11Device& device, UINT newWidth, UINT newHeight) {
+            if (newWidth == width && newHeight == height) { return views[0] && views[1]; }
+            *this = {};
+            width = newWidth;
+            height = newHeight;
+            constexpr DXGI_FORMAT kFormats[] = {DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16_FLOAT};
+            for (std::size_t i = 0; i < std::size(kFormats); ++i) {
+                D3D11_TEXTURE2D_DESC desc{};
+                desc.Width = width;
+                desc.Height = height;
+                desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+                desc.Format = kFormats[i];
+                desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+                Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+                if (FAILED(device.CreateTexture2D(&desc, nullptr, texture.GetAddressOf())) ||
+                    FAILED(device.CreateRenderTargetView(texture.Get(), nullptr, targets[i].GetAddressOf())) ||
+                    FAILED(device.CreateShaderResourceView(texture.Get(), nullptr, views[i].GetAddressOf()))) {
+                    std::cerr << "Cannot allocate weighted transparency targets\n";
+                    return false;
+                }
+            }
+            return true;
+        }
+    };
+    WeightedTargets weightedTargets[2];
     Microsoft::WRL::ComPtr<ID3D11DepthStencilState> transparentDepth;
     struct OpaqueSnapshot {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
@@ -169,6 +214,7 @@ struct MeshPass::Impl {
     };
     OpaqueSnapshot opaqueSnapshots[2];
     CascadedShadowMap shadowMap;
+    CascadedShadowMap spotMap;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> environmentSampler;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> transmissionSampler;
     GpuMesh cubeMesh{};
@@ -212,8 +258,8 @@ void MeshPass::release() {
     m_impl = nullptr;
 }
 
-void MeshPass::setAssetReader(AssetReader reader) {
-    m_assets.setReader(std::move(reader));
+void MeshPass::setAssetReader(AssetReader reader, bool asynchronous) {
+    m_assets.setReader(std::move(reader), asynchronous);
     ++m_assetRevision;
 }
 std::uint64_t MeshPass::sceneDrawRevision(const Scene& scene) {
@@ -375,6 +421,22 @@ bool MeshPass::ensure(ID3D11Device* device) {
         return false;
     }
 
+    D3D11_DEPTH_STENCIL_DESC fullscreenDepth{};
+    fullscreenDepth.DepthFunc = D3D11_COMPARISON_ALWAYS;
+    if (FAILED(device->CreateDepthStencilState(&fullscreenDepth, m_impl->fullscreenDepth.GetAddressOf()))) {
+        std::cerr << "Cannot create fullscreen depth state\n";
+    }
+    blend.IndependentBlendEnable = TRUE;
+    target.SrcBlend = target.DestBlend = target.SrcBlendAlpha = target.DestBlendAlpha = D3D11_BLEND_ONE;
+    auto& reveal = blend.RenderTarget[1];
+    reveal = target;
+    reveal.SrcBlend = D3D11_BLEND_ZERO;
+    reveal.DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    reveal.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED;
+    if (FAILED(device->CreateBlendState(&blend, m_impl->weightedBlend.GetAddressOf()))) {
+        std::cerr << "Cannot create weighted transparency blend state\n";
+    }
+
     D3D11_SAMPLER_DESC environmentSampler{};
     environmentSampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
     environmentSampler.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
@@ -406,6 +468,14 @@ void MeshPass::draw(
     const auto program = shaders.program(ShaderId::Mesh);
     auto* shadowPixel = shaders.program(ShaderId::Shadow).pixel;
 
+    const LightInstance* spotCaster = nullptr;
+    for (int i = 0; drawList.lights && i < drawList.lightCount; ++i) {
+        const auto& light = drawList.lights[i];
+        if (light.type == LightType::Spot && light.castShadow && light.range > 0.0f &&
+            dot(light.radiance, light.radiance) > 0.0f && (!spotCaster || light.entity < spotCaster->entity)) {
+            spotCaster = &light;
+        }
+    }
     const auto syncStart = std::chrono::steady_clock::now();
     const unsigned viewIndex = sceneView ? 0 : 1;
     auto& culling = m_impl->culling[viewIndex];
@@ -427,7 +497,7 @@ void MeshPass::draw(
     const auto syncScene = [&] {
         if (!sync()) { return false; }
         if (drawList.animationOcclusion && drawList.animationOcclusion == drawList.animation &&
-            drawList.animationOcclusion->refreshOcclusionPoses(scene.geometryMoved())) {
+            drawList.animationOcclusion->refreshOcclusionPoses(scene.geometryMoved() || spotCaster != nullptr)) {
             return sync();
         }
         return true;
@@ -446,7 +516,6 @@ void MeshPass::draw(
             std::chrono::steady_clock::now() - syncStart).count();
     }
     const auto submitStart = std::chrono::steady_clock::now();
-    if (scene.batches().empty() && scene.transparent().empty()) { culling.invalidateDepth(); return; }
 
     const Mat4 viewProj = projection * view;
     const int lightCount = drawList.lights ? std::clamp(drawList.lightCount, 0, kMaxLights) : 0;
@@ -467,6 +536,11 @@ void MeshPass::draw(
             return distanceA == distanceB ? a < b : distanceA < distanceB;
         });
     }
+    if (spotCaster && !order.empty() && std::find(order.begin(), order.begin() + lightCount, spotCaster) ==
+        order.begin() + lightCount) { order[lightCount - 1] = spotCaster; }
+    const auto lightAt = [&](int index) -> const LightInstance& {
+        return order.empty() ? drawList.lights[index] : *order[index];
+    };
     D3D11_VIEWPORT viewport{};
     UINT viewportCount = 1;
     context->RSGetViewports(&viewportCount, &viewport);
@@ -476,11 +550,36 @@ void MeshPass::draw(
     splitOrigin(renderOrigin, frame.originHigh, frame.originLow);
     auto* environment = m_assets.environment(drawList.environmentPath);
     frame.environmentIntensity = environment && m_impl->environmentSampler ? drawList.environmentIntensity : 0.0f;
+    const auto sky = shaders.program(ShaderId::EnvironmentSky);
+    if (drawList.showEnvironmentSky && environment && m_impl->environmentSampler &&
+        sky.vertex && sky.pixel && m_impl->fullscreenDepth &&
+        SUCCEEDED(context->Map(m_impl->frameCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+        Mat4 rotation = view;
+        rotation.m[12] = rotation.m[13] = rotation.m[14] = 0;
+        const Mat4 skyProjection = projection.m[15] == 1.0f ?
+            perspective(90.0f, viewport.Width / viewport.Height, 0.1f, 10.0f) : projection;
+        const Mat4 worldFromClip = inverse(skyProjection * rotation);
+        auto* constants = static_cast<MeshFrameCb*>(mapped.pData);
+        std::memcpy(constants->viewProj, worldFromClip.m, sizeof(worldFromClip.m));
+        constants->eye[0] = frame.environmentIntensity;
+        constants->eye[1] = hdr ? 1.0f : 0.0f;
+        context->Unmap(m_impl->frameCb, 0);
+        context->PSSetConstantBuffers(0, 1, &m_impl->frameCb);
+        context->PSSetShaderResources(4, 1, &environment);
+        context->PSSetSamplers(1, 1, m_impl->environmentSampler.GetAddressOf());
+        context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+        drawFullscreen(*context, sky, m_impl->doubleSidedRasterizer.Get(), m_impl->fullscreenDepth.Get());
+        context->PSSetShaderResources(4, 1, &nullView);
+    }
+    if (scene.batches().empty() && scene.transparent().empty()) { culling.invalidateDepth(); return; }
+
     frame.shadowLight = -1;
+    frame.spotLight = -1;
+    auto& spotMap = m_impl->spotMap;
     auto& shadowMap = m_impl->shadowMap;
     if (drawList.directionalShadows) {
         for (int i = 0; i < lightCount; ++i) {
-            const auto& light = order.empty() ? drawList.lights[i] : *order[i];
+            const auto& light = lightAt(i);
             if (light.type != LightType::Directional || dot(light.radiance, light.radiance) == 0) { continue; }
             if (shadowMap.update(context, view, projection, renderOrigin, light.direction, drawList)) {
                 frame.shadowLight = i;
@@ -500,10 +599,23 @@ void MeshPass::draw(
             break;
         }
     }
-    if (frame.cascadeCount != 0 && !culling.ensureShadows(*device.Get(), static_cast<UINT>(scene.batches().size()),
-            scene.itemCount(), frame.cascadeCount)) {
+    if (spotCaster) {
+        for (int i = 0; i < lightCount; ++i) {
+            if (&lightAt(i) == spotCaster && spotMap.updateSpot(context, spotCaster->position, spotCaster->direction,
+                spotCaster->outerCos, spotCaster->range)) {
+                frame.spotLight = i;
+                const auto& spotViewProj = spotMap.cascade(0).viewProj;
+                std::memcpy(frame.spotViewProj, spotViewProj.m, sizeof(spotViewProj.m));
+                break;
+            }
+        }
+    }
+    const unsigned shadowSlots = std::max(frame.cascadeCount, frame.spotLight >= 0 ? 1u : 0u);
+    if (shadowSlots != 0 && !culling.ensureShadows(*device.Get(), static_cast<UINT>(scene.batches().size()),
+            scene.itemCount(), shadowSlots)) {
         if (!m_impl->shadowAllocationFailed) { std::cerr << "Cannot allocate shadow culling buffers\n"; }
         m_impl->shadowAllocationFailed = true;
+        frame.spotLight = -1;
         frame.cascadeCount = 0;
         frame.shadowLight = -1;
     } else {
@@ -526,7 +638,7 @@ void MeshPass::draw(
         if (FAILED(context->Map(m_impl->lightsCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) { return; }
         auto* packed = static_cast<LightsCb*>(mapped.pData);
         for (int i = 0; i < lightCount; ++i) {
-            const auto& light = order.empty() ? drawList.lights[i] : *order[i];
+            const auto& light = lightAt(i);
             packed->lights[i] = {{light.position.x, light.position.y, light.position.z}, static_cast<float>(light.type),
                 {light.direction.x, light.direction.y, light.direction.z}, light.range,
                 {light.radiance.x, light.radiance.y, light.radiance.z}, light.innerCos, light.outerCos, {}};
@@ -542,7 +654,7 @@ void MeshPass::draw(
         return static_cast<int>(std::clamp(std::log2(std::max(w, 0.125f)) + 3.0f, 0.0f, 7.0f));
     };
     for (int i = 0; i < lightCount; ++i) {
-        const auto& light = order.empty() ? drawList.lights[i] : *order[i];
+        const auto& light = lightAt(i);
         int minX = 0, minY = 0, minZ = 0;
         int maxX = kClusterTiles - 1, maxY = maxX, maxZ = kClusterSlices - 1;
         if (light.type != LightType::Directional) {
@@ -592,7 +704,8 @@ void MeshPass::draw(
 
     const GpuMesh* boundMesh = nullptr;
     const GpuMaterial* boundMaterial = nullptr;
-    bool shadowPass = false;
+    const CascadedShadowMap* shadowPass = nullptr;
+    ID3D11PixelShader* weightedPixel = nullptr;
     bool passChanged = true;
     ID3D11PixelShader* boundPixel = program.pixel;
     auto* boundVertex = program.vertex;
@@ -615,7 +728,7 @@ void MeshPass::draw(
         }
         const auto* mesh = draw.mesh;
         const auto* material = draw.material;
-        auto* rasterizer = shadowPass ? shadowMap.rasterizer(material->doubleSided) :
+        auto* rasterizer = shadowPass ? shadowPass->rasterizer(material->doubleSided) :
             (material->doubleSided ? m_impl->doubleSidedRasterizer.Get() : m_impl->rasterizer);
         if (rasterizer != boundRasterizer) {
             context->RSSetState(rasterizer);
@@ -635,7 +748,7 @@ void MeshPass::draw(
         if (shadowPass || material != boundMaterial) {
             auto* custom = shadowPass ? nullptr : scene.customPixel(material);
             auto* pixel = shadowPass ? (material->alphaMode == AlphaMode::Mask ? shadowPixel : nullptr)
-                                     : (custom ? custom : program.pixel);
+                                     : (weightedPixel ? weightedPixel : (custom ? custom : program.pixel));
             if (pixel != boundPixel) {
                 context->PSSetShader(pixel, nullptr, 0);
                 boundPixel = pixel;
@@ -689,33 +802,40 @@ void MeshPass::draw(
     };
     if (gpuStats) { gpuStats->mark(*context, ViewTimestamp::ShadowStart); }
 
-    if (frame.cascadeCount != 0) {
-        shadowPass = true;
-        ID3D11ShaderResourceView* unboundShadow = nullptr;
-        context->PSSetShaderResources(5, 1, &unboundShadow);
+    if (frame.cascadeCount != 0 || frame.spotLight >= 0) {
+        context->PSSetShaderResources(5, 1, &nullView);
+        context->PSSetShaderResources(kSpotShadowSlot, 1, &nullView);
         Microsoft::WRL::ComPtr<ID3D11RenderTargetView> previousTarget;
         Microsoft::WRL::ComPtr<ID3D11DepthStencilView> previousDepth;
         context->OMGetRenderTargets(1, previousTarget.GetAddressOf(), previousDepth.GetAddressOf());
-        const float size = static_cast<float>(shadowMap.resolution());
-        const D3D11_VIEWPORT shadowViewport{0, 0, size, size, 0, 1};
-        context->RSSetViewports(1, &shadowViewport);
+        const auto drawShadow = [&](CascadedShadowMap& map, unsigned slot, const FrustumPlanes& planes) {
+            if (FAILED(context->Map(m_impl->frameCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) { return false; }
+            MeshFrameCb shadowFrame = frame;
+            const auto& lightViewProj = map.cascade(slot).viewProj;
+            std::memcpy(shadowFrame.viewProj, lightViewProj.m, sizeof(lightViewProj.m));
+            std::memcpy(mapped.pData, &shadowFrame, sizeof(shadowFrame));
+            context->Unmap(m_impl->frameCb, 0);
+
+            const float size = static_cast<float>(map.resolution());
+            const D3D11_VIEWPORT shadowViewport{0, 0, size, size, 0, 1};
+            context->RSSetViewports(1, &shadowViewport);
+            auto* depthView = map.depthView(slot);
+            context->OMSetRenderTargets(0, nullptr, depthView);
+            context->ClearDepthStencilView(depthView, D3D11_CLEAR_DEPTH, 1, 0);
+            shadowPass = &map;
+            passChanged = true;
+            submit(MeshQueue::Shadow, GpuCulling::Phase::Frustum, planes, false, slot);
+            return true;
+        };
         for (unsigned cascade = 0; cascade < frame.cascadeCount; ++cascade) {
-            if (FAILED(context->Map(m_impl->frameCb, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+            if (!drawShadow(shadowMap, cascade, shadowMap.cullingPlanes(cascade))) {
                 frame.shadowLight = -1;
                 frame.cascadeCount = 0;
                 break;
             }
-            MeshFrameCb shadowFrame = frame;
-            std::memcpy(shadowFrame.viewProj, frame.cascadeViewProj[cascade], sizeof(frame.viewProj));
-            std::memcpy(mapped.pData, &shadowFrame, sizeof(shadowFrame));
-            context->Unmap(m_impl->frameCb, 0);
-
-            auto* depthView = shadowMap.depthView(cascade);
-            context->OMSetRenderTargets(0, nullptr, depthView);
-            context->ClearDepthStencilView(depthView, D3D11_CLEAR_DEPTH, 1, 0);
-            passChanged = true;
-            submit(MeshQueue::Shadow, GpuCulling::Phase::Frustum,
-                shadowMap.cullingPlanes(cascade), false, cascade);
+        }
+        if (frame.spotLight >= 0 && !drawShadow(spotMap, 0, frustumPlanes(spotMap.cascade(0).viewProj))) {
+            frame.spotLight = -1;
         }
         auto* target = previousTarget.Get();
         context->OMSetRenderTargets(1, &target, previousDepth.Get());
@@ -724,7 +844,7 @@ void MeshPass::draw(
         context->RSSetState(boundRasterizer);
         context->PSSetShader(program.pixel, nullptr, 0);
         boundPixel = program.pixel;
-        shadowPass = false;
+        shadowPass = nullptr;
         passChanged = true;
         boundMaterial = nullptr;
     }
@@ -734,7 +854,10 @@ void MeshPass::draw(
 
     if (gpuStats) { gpuStats->mark(*context, ViewTimestamp::ShadowEnd); }
     ID3D11ShaderResourceView* lightingViews[] = {environment, frame.cascadeCount != 0 ? shadowMap.shaderView() : nullptr};
-    ID3D11SamplerState* lightingSamplers[] = {m_impl->environmentSampler.Get(), shadowMap.sampler()};
+    ID3D11SamplerState* lightingSamplers[] = {m_impl->environmentSampler.Get(),
+        frame.spotLight >= 0 ? spotMap.sampler() : shadowMap.sampler()};
+    auto* spotView = frame.spotLight >= 0 ? spotMap.shaderView() : nullptr;
+    context->PSSetShaderResources(kSpotShadowSlot, 1, &spotView);
     context->PSSetShaderResources(4, 2, lightingViews);
     context->PSSetSamplers(1, 2, lightingSamplers);
     const auto planes = frustumPlanes(viewProj);
@@ -753,7 +876,7 @@ void MeshPass::draw(
                     (void)culling.buildDepth(*device.Get(), *context, shaders, depth, width, height, viewProj, renderOrigin);
                 }
             }
-            if (drawList.animationOcclusion && drawList.animationOcclusion == drawList.animation && built) {
+            if (drawList.animationOcclusion && drawList.animationOcclusion == drawList.animation && built && !spotCaster) {
                 culling.sampleAnimationOcclusion(*device.Get(), *context, shaders, *drawList.animationOcclusion);
             }
         }
@@ -765,11 +888,16 @@ void MeshPass::draw(
     transparent.clear();
     const bool hasTransmission = scene.itemRange(MeshQueue::Transmission).count != 0;
     bool needsSnapshot = hasTransmission;
+    const auto composite = shaders.program(ShaderId::TransparencyComposite);
+    auto* weightedShader = shaders.program(ShaderId::MeshWeighted).pixel;
+    bool weighted = drawList.weightedTransparency && weightedShader && composite.vertex && composite.pixel &&
+        m_impl->weightedBlend && m_impl->fullscreenDepth && viewport.TopLeftX == 0 && viewport.TopLeftY == 0;
     for (const auto& item : scene.transparent()) {
         const auto& instance = scene.instance(item.instance);
         const Vec3 translation = relativePosition(instance, renderOrigin);
         const auto& bounds = instance.bounds;
         if (!insideFrustum(planes, translation + Vec3{bounds[0], bounds[1], bounds[2]}, bounds[3])) { continue; }
+        weighted &= item.range.material->shaderPath.empty();
         const auto& basis = instance.basis;
         const Vec3 center = translation + Vec3{
             basis[0][0] * item.localCenter.x + basis[1][0] * item.localCenter.y + basis[2][0] * item.localCenter.z,
@@ -788,10 +916,21 @@ void MeshPass::draw(
     }
     if (gpuStats) { gpuStats->mark(*context, ViewTimestamp::TransmissionEnd); }
     if (!transparent.empty()) {
-        std::sort(transparent.begin(), transparent.end(), [](const auto& a, const auto& b) {
-            if (a.depth != b.depth) { return a.depth > b.depth; }
-            return a.draw < b.draw;
-        });
+        Microsoft::WRL::ComPtr<ID3D11RenderTargetView> colorTarget;
+        Microsoft::WRL::ComPtr<ID3D11DepthStencilView> sceneDepth;
+        auto& targets = m_impl->weightedTargets[viewIndex];
+        if (weighted) {
+            context->OMGetRenderTargets(1, colorTarget.GetAddressOf(), sceneDepth.GetAddressOf());
+            D3D11_RENDER_TARGET_VIEW_DESC desc{};
+            if (colorTarget) { colorTarget->GetDesc(&desc); }
+            weighted = desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2D && targets.ensure(*device.Get(), width, height);
+        }
+        if (!weighted) {
+            std::sort(transparent.begin(), transparent.end(), [](const auto& a, const auto& b) {
+                if (a.depth != b.depth) { return a.depth > b.depth; }
+                return a.draw->instance < b.draw->instance;
+            });
+        }
         if (transparent.size() > m_impl->transparentCapacity) {
             const auto capacity = std::bit_ceil(transparent.size());
             D3D11_BUFFER_DESC desc{};
@@ -814,7 +953,19 @@ void MeshPass::draw(
             context->Unmap(m_impl->transparentIndices.Get(), 0);
             const UINT stride = sizeof(unsigned), offset = 0;
             context->IASetVertexBuffers(1, 1, m_impl->transparentIndices.GetAddressOf(), &stride, &offset);
-            context->OMSetBlendState(m_impl->blend.Get(), nullptr, 0xffffffff);
+            if (weighted) {
+                const float zero[4]{};
+                const float one[4]{1, 1, 1, 1};
+                ID3D11RenderTargetView* drawTargets[] = {targets.targets[0].Get(), targets.targets[1].Get()};
+                context->ClearRenderTargetView(drawTargets[0], zero);
+                context->ClearRenderTargetView(drawTargets[1], one);
+                context->OMSetRenderTargets(2, drawTargets, sceneDepth.Get());
+                context->OMSetBlendState(m_impl->weightedBlend.Get(), nullptr, 0xffffffff);
+                weightedPixel = weightedShader;
+                boundMaterial = nullptr;
+            } else {
+                context->OMSetBlendState(m_impl->blend.Get(), nullptr, 0xffffffff);
+            }
             context->OMSetDepthStencilState(m_impl->transparentDepth.Get(), 0);
             passChanged = true;
             unsigned firstInstance = 0;
@@ -829,6 +980,19 @@ void MeshPass::draw(
                     stats->vertices += draw.vertexCount;
                 }
             }
+            if (weighted) {
+                auto* color = colorTarget.Get();
+                context->OMSetRenderTargets(1, &color, nullptr);
+                ID3D11ShaderResourceView* inputs[] = {targets.views[0].Get(), targets.views[1].Get()};
+                context->PSSetShaderResources(0, 2, inputs);
+                context->OMSetBlendState(m_impl->blend.Get(), nullptr, 0xffffffff);
+                drawFullscreen(*context, composite, m_impl->doubleSidedRasterizer.Get(), m_impl->fullscreenDepth.Get());
+                if (stats) { ++stats->drawCalls; ++stats->setPassCalls; }
+                context->PSSetShaderResources(0, 1, &nullView);
+                context->PSSetShaderResources(1, 1, &nullView);
+                context->OMSetRenderTargets(1, &color, sceneDepth.Get());
+                context->RSSetState(m_impl->rasterizer);
+            }
             context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
         }
     }
@@ -841,6 +1005,7 @@ void MeshPass::draw(
     if (boundRasterizer != m_impl->rasterizer) { context->RSSetState(m_impl->rasterizer); }
     ID3D11ShaderResourceView* unbound[kOpaqueSceneSlot + 1]{};
     context->PSSetShaderResources(0, static_cast<UINT>(std::size(unbound)), unbound);
+    context->PSSetShaderResources(kSpotShadowSlot, 1, &nullView);
 }
 
 } // namespace sat

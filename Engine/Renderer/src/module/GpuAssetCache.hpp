@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <unordered_set>
 
 namespace sat {
 // Device-thread only. Owns asset GPU resources and decoded CPU cache.
@@ -31,7 +32,10 @@ public:
     ~GpuAssetCache();
     GpuAssetCache(const GpuAssetCache&) = delete;
     GpuAssetCache& operator=(const GpuAssetCache&) = delete;
-    void setReader(AssetReader reader);
+    void setReader(AssetReader reader, bool asynchronous = false);
+    void refresh(ID3D11Device* device, const std::unordered_set<std::string>& paths);
+    [[nodiscard]] bool pollUpload(ID3D11Device* device, bool allowReload);
+    [[nodiscard]] bool hasPendingAssets() const;
     void releaseDecodedAssets();
     void invalidateMaterial(std::string_view path);
     void invalidateAsset(std::string_view path);
@@ -52,6 +56,8 @@ public:
     [[nodiscard]] const std::vector<std::string>& errors() const;
 private:
     [[nodiscard]] bool publishPrepared(ID3D11Device* device, PreparedAssetImport& prepared, bool exists,
+        const AssetImportWriter& writer, std::string& error);
+    [[nodiscard]] bool commitImport(ID3D11Device* device, PreparedAssetImport& prepared,
         const AssetImportWriter& writer, std::string& error);
     struct Impl;
     std::unique_ptr<Impl> m_impl;

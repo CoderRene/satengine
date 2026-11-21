@@ -194,6 +194,16 @@ EntityId Scene::rootEntityId(EntityId id) const {
     return entity->id();
 }
 
+EntityId Scene::selectionRootId(EntityId id) const {
+    EntityId root = kInvalidEntityId;
+    for (const Entity* entity = entityById(id); entity; entity = entityById(entity->parentId())) {
+        if (!entity->isGroup()) {
+            root = entity->id();
+        }
+    }
+    return root;
+}
+
 bool Scene::canSetParent(const Entity& child, const Entity* parent) const {
     if (parent == &child) {
         return false;

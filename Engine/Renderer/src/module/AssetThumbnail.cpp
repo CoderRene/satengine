@@ -40,9 +40,15 @@ void RenderSession::uploadReadyThumbnails() {
     // Limit main-thread work to one preview per frame.
     auto ready = m_state->thumbnailLoader.takeReady();
     if (!ready || !makeThumbnailSpace()) { return; }
+    auto& entry = m_state->thumbnails.try_emplace(ready->path).first->second;
+    entry.dependencies = std::move(ready->dependencies);
+    entry.stale = false;
     if (ready->meshPass) {
-        renderThumbnail(std::move(ready->path), *ready->meshPass);
-    } else {
+        if (!entry.view || ready->meshPass->assetErrors().empty()) {
+            renderThumbnail(std::move(ready->path), *ready->meshPass);
+        }
+    } else if (!ready->image.pixels.empty()) {
+        entry.view.Reset();
         uploadTextureThumbnail(std::move(ready->path), ready->image);
     }
 }
@@ -59,9 +65,12 @@ AssetThumbnail RenderSession::assetThumbnail(std::string_view path, std::span<co
     auto& cache = m_state->thumbnails;
     if (const auto found = cache.find(std::string(path)); found != cache.end()) {
         found->second.lastUsed = m_state->thumbnailFrame;
+        if (found->second.stale && !m_state->meshPass.hasPendingAssets()) {
+            (void)m_state->thumbnailLoader.request(path);
+        }
         return {reinterpret_cast<std::uintptr_t>(found->second.view.Get()), found->second.aspectRatio};
     }
-    (void)m_state->thumbnailLoader.request(path);
+    if (!m_state->meshPass.hasPendingAssets()) { (void)m_state->thumbnailLoader.request(path); }
     return {};
 }
 

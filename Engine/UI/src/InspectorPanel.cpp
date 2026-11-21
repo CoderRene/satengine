@@ -577,6 +577,7 @@ void InspectorPanel::onImGuiRender(int selectedIndex, Entity* liveEntity, Conten
                 "%.2f", ImGuiSliderFlags_AlwaysClamp);
         }
         if (light.type == LightType::Spot) {
+            changed |= ImGui::Checkbox("Cast Shadow", &light.castShadow);
             changed |= ImGui::SliderFloat("Inner Cone", &light.innerConeDegrees, 0.0f,
                 light.outerConeDegrees, "%.1f deg", ImGuiSliderFlags_AlwaysClamp);
             changed |= ImGui::SliderFloat("Outer Cone", &light.outerConeDegrees, light.innerConeDegrees,

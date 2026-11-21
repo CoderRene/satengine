@@ -1,4 +1,5 @@
 import Common;
+#include "Fullscreen.slang"
 
 Texture2D<float4> hdrImage : register(t0);
 Texture2D<float4> secondaryImage : register(t1);
@@ -14,21 +15,6 @@ cbuffer Bloom : register(b0)
     float coarseWeight;
     uint padding;
 };
-
-struct FullscreenVertex
-{
-    float4 position : SV_Position;
-    float2 uv : TEXCOORD0;
-};
-
-[shader("vertex")]
-FullscreenVertex vsMain(uint index : SV_VertexID)
-{
-    FullscreenVertex output;
-    output.uv = float2((index << 1) & 2, index & 2);
-    output.position = float4(output.uv * float2(2, -2) + float2(-1, 1), 0, 1);
-    return output;
-}
 
 float3 extractHighlight(float4 sampleColor)
 {

@@ -516,7 +516,7 @@ bool GpuScene::sync(ID3D11DeviceContext& context, ShaderLibrary& shaders, GpuAss
     m_assetRevision = assetRevision;
     if (topology) { rebuild(assets, cube, list); }
     m_geometryMoved = topology || m_shaderRevision != shaders.revision();
-    if (m_shaderRevision != shaders.revision()) {
+    if (topology || m_shaderRevision != shaders.revision()) {
         m_pixels.clear();
         for (const auto& item : m_ranges) {
             const auto* material = item.range.material;

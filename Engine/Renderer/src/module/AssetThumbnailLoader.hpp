@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace sat {
 
@@ -25,6 +26,7 @@ public:
         std::string path;
         TextureData image;
         std::shared_ptr<MeshPass> meshPass;
+        std::vector<std::string> dependencies;
     };
 
     using PrepareMesh = std::function<std::shared_ptr<MeshPass>(const AssetReader&, std::string_view)>;

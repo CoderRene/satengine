@@ -114,10 +114,10 @@ protected:
         std::string error;
         const std::string_view pakName = SAT_GAME_PAK_NAME;
         const auto pakPath = executableFolder() / std::filesystem::path(std::u8string(pakName.begin(), pakName.end()));
-        const auto loadGroup = [&](sat::PakArchive& archive, const std::filesystem::path& path, std::string_view group) {
+        const auto loadGroup = [&](sat::PakReader& archive, const std::filesystem::path& path, std::string_view group) {
             sat::ScopedPakKey key;
             if (!sat::loadGamePakKey(group, key.bytes)) { error = "Missing archive group key"; return false; }
-            return archive.load(path, error, key.bytes);
+            return archive.open(path, error, key.bytes);
         };
         if (!loadGroup(m_archive, pakPath, "scripts")) {
             m_failed = true;
@@ -133,48 +133,53 @@ protected:
                 std::cerr << error << '\n'; requestStop(); return;
             }
         }
-        if (!sat::deserializeScene(m_archive.find("Scene.sat"), scene(), error)) {
+        std::string sceneBytes;
+        if (m_archive.read("Scene.sat", sceneBytes, error, sat::kMaxAssetBytes) != sat::PakReadResult::Found ||
+            !sat::deserializeScene(sceneBytes, scene(), error)) {
             m_failed = true;
-            std::cerr << "Cannot load packed scene: " << error << '\n';
+            std::cerr << "Cannot load packed scene: " << (error.empty() ? "Missing Scene.sat" : error) << '\n';
             requestStop();
             return;
         }
-        const sat::AssetReader readAsset = [this](std::string_view path, std::string& bytes, std::string& assetError) {
-            for (const auto& archive : m_assets) {
-                const auto source = archive.find(path);
-                if (!source.empty() || std::any_of(archive.entries().begin(), archive.entries().end(),
-                    [&](const sat::PakEntry& entry) { return entry.name == path; })) {
-                    if (source.size() > (path.ends_with(".satimport") ? 4096 : sat::kMaxAssetBytes)) {
-                        assetError = "Packed asset exceeds read limit";
-                        return sat::AssetReadResult::Error;
-                    }
-                    bytes.assign(source);
-                    return sat::AssetReadResult::Found;
-                }
+        const auto read = [](const sat::PakReader& archive, std::string_view path, std::string& bytes,
+            std::string& error, std::size_t limit) {
+            switch (archive.read(path, bytes, error, limit)) {
+            case sat::PakReadResult::Found: return sat::AssetReadResult::Found;
+            case sat::PakReadResult::Error: return sat::AssetReadResult::Error;
+            case sat::PakReadResult::Missing: return sat::AssetReadResult::Missing;
             }
-            assetError.clear();
+            return sat::AssetReadResult::Error;
+        };
+        const sat::AssetReader readAsset = [this, read](std::string_view path, std::string& bytes, std::string& error) {
+            for (const auto& archive : m_assets) {
+                const auto result = read(archive, path, bytes, error, path.ends_with(".satimport") ? 4096 : sat::kMaxAssetBytes);
+                if (result != sat::AssetReadResult::Missing) { return result; }
+            }
             return sat::AssetReadResult::Missing;
         };
         setAssetReader(readAsset);
-        setShaderReader([this](std::string_view path, std::string& bytes, std::string& shaderError) {
+        setShaderReader([this, read](std::string_view path, std::string& bytes, std::string& error) {
             if (!path.starts_with("Shaders/")) { return sat::AssetReadResult::Missing; }
-            const auto source = m_assets[2].find(path);
-            if (source.empty()) { return sat::AssetReadResult::Missing; }
-            if (source.size() > 1024 * 1024) {
-                shaderError = "Packed shader exceeds 1 MiB";
-                return sat::AssetReadResult::Error;
-            }
-            bytes.assign(source);
-            return sat::AssetReadResult::Found;
+            return read(m_assets[2], path, bytes, error, 1024 * 1024);
         });
         m_audio.setAssetReader(readAsset);
         m_animation.setAssetReader(readAsset);
         setAnimationSystem(&m_animation);
         std::vector<sat::LuaScriptSource> scripts;
-        for (const auto& entry : m_archive.entries()) {
-            if (entry.name.starts_with("Scripts/") && entry.name.ends_with(".lua")) {
-                scripts.push_back({std::string_view(entry.name).substr(8), entry.bytes, true});
+        for (const auto& name : m_archive.names()) {
+            if (!name.starts_with("Scripts/") || !name.ends_with(".lua")) { continue; }
+            std::string bytes;
+            if (m_archive.read(name, bytes, error, sat::kMaxAssetBytes) != sat::PakReadResult::Found) {
+                m_failed = true;
+                std::cerr << "Cannot load packed script " << name << ": " << error << '\n';
+                requestStop();
+                return;
             }
+            m_scriptBytes.push_back({name, std::move(bytes)});
+        }
+        scripts.reserve(m_scriptBytes.size());
+        for (const auto& entry : m_scriptBytes) {
+            scripts.push_back({std::string_view(entry.name).substr(8), entry.bytes, true});
         }
         m_scripts.setGameUi(gameUi());
         if (!m_scripts.start(scripts)) {
@@ -199,8 +204,9 @@ private:
         std::cerr << m_scripts.error() << '\n';
         requestStop();
     }
-    sat::PakArchive m_archive;
-    std::array<sat::PakArchive, 3> m_assets;
+    sat::PakReader m_archive;
+    std::array<sat::PakReader, 3> m_assets;
+    std::vector<sat::PakEntry> m_scriptBytes;
     sat::PhysicsSystem m_physics;
     sat::AudioSystem m_audio;
     sat::AnimationSystem m_animation;

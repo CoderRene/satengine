@@ -172,11 +172,19 @@ maximum, bilinear filtering, and a full mip chain.
 
 ## Loading, reload and limits
 
-Loading is synchronous on first use. Repeated draws reuse immutable GPU
-resources. Repeated failures do not retry or log every frame.
-Use the selected asset's **Reimport** after editing its source or fixing a failure.
-Use **File > Reload Assets** to clear all cached assets and diagnostics. Opening another project clears both CPU and GPU caches.
-There is no automatic file watcher or background streaming yet.
+The editor checks the open project’s `Assets/` folder for external changes.
+Saving a mesh, texture, material, or import sidecar refreshes affected GPU
+resources and cached previews. External glTF buffers and images are tracked
+through the imports and materials that use them. A failed reload preserves the
+previous GPU resource and reports the asset path in **Asset Errors**. Fix and
+save the file again to retry. The editor defers automatic reloads during Play
+and while Inspector import edits are pending.
+
+First-use mesh and texture decoding runs on a worker. The render thread
+publishes one prepared upload per frame. Geometry can appear after its first
+frame and materials use fallback textures until their maps are ready. Use
+**Reimport** for a manual retry or **File > Reload Assets** to reset the project’s
+caches and diagnostics.
 
 Asset paths are UTF-8, relative to the project root and begin with `Assets/`.
 Absolute paths, traversal, empty segments, backslashes and control characters
@@ -193,14 +201,22 @@ Scene saves write `SatScene 10` with quoted mesh and material paths. Versions 1�
 still load. Versions 1–5 use default ambient settings. Legacy texture references are discarded
 with a load warning. Create a material that references the texture to restore it.
 
-Standalone builds validate supported meshes, materials, textures, and their sidecars
-before creating archives, including assets referenced only by Lua. Orphaned or
-unsupported sidecars are rejected, and sidecar changes trigger repacking.
-The existing encrypted archive groups include OBJ and SATMAT files in the assets group and
-images in the textures group. The player reads their bytes directly from the
-loaded archives, without extracting files or falling back to project folders.
-The builder includes supported assets and sidecars under `Assets/`; the player
-uses the same importer and settings as the editor.
+Standalone builds validate the selected meshes, materials, textures, and
+sidecars before creating archives. Orphaned or unsupported sidecars are
+rejected, and sidecar changes trigger repacking.
+Standalone archives load their authenticated indexes at startup. The player
+reads and authenticates asset chunks on demand and keeps the last chunk from
+each group in an 8 MiB cache. It uses the same importer and settings as the
+editor. Legacy version 2 archives still use the eager archive reader.
+
+**Build → Build Standalone → Full Project** includes the complete supported
+asset folder. **Referenced Assets** follows dependencies from the saved scene
+and includes its compiled scripts. Add runtime-selected content to
+`StandaloneIncludes.txt` next to `Scene.sat`, one exact project-relative file or
+folder path under `Assets/` per line. Blank lines and lines starting with `#`
+are accepted. Include any assets chosen in Lua, as well as stylesheets, images
+and other files opened by UI documents at runtime. For example, a line
+containing `Assets/Ships` includes the contents of that folder.
 
 ## Native integration
 

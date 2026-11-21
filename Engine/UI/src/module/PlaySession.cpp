@@ -53,6 +53,7 @@ void applyEntityEdits(const Entity& before, const Entity& after, Entity& live, L
     }
     applyEdit(before.light.intensity, after.light.intensity, live.light.intensity);
     applyEdit(before.light.range, after.light.range, live.light.range);
+    applyEdit(before.light.castShadow, after.light.castShadow, live.light.castShadow);
     if (before.light.innerConeDegrees != after.light.innerConeDegrees ||
         before.light.outerConeDegrees != after.light.outerConeDegrees) {
         live.light.innerConeDegrees = after.light.innerConeDegrees;
@@ -291,6 +292,8 @@ void PlaySession::applyEdits(Scene& authored, std::string& error) {
     applyEdit(ambientBefore.ambientIntensity, ambientAfter.ambientIntensity, ambientLive.ambientIntensity);
     applyEdit(ambientBefore.environmentPath, ambientAfter.environmentPath, ambientLive.environmentPath);
     applyEdit(ambientBefore.environmentIntensity, ambientAfter.environmentIntensity, ambientLive.environmentIntensity);
+    applyEdit(ambientBefore.showEnvironmentSky, ambientAfter.showEnvironmentSky, ambientLive.showEnvironmentSky);
+    applyEdit(ambientBefore.weightedTransparency, ambientAfter.weightedTransparency, ambientLive.weightedTransparency);
     applyEdit(ambientBefore.directionalShadows, ambientAfter.directionalShadows, ambientLive.directionalShadows);
     applyEdit(ambientBefore.shadowResolution, ambientAfter.shadowResolution, ambientLive.shadowResolution);
     applyEdit(ambientBefore.shadowDistance, ambientAfter.shadowDistance, ambientLive.shadowDistance);

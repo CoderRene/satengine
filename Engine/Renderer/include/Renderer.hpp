@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace sat {
@@ -62,9 +63,10 @@ public:
     [[nodiscard]] bool valid() const;
 
     // Window/device thread only. Clears CPU/GPU caches and prior diagnostics.
-    // Reader captures must outlive the renderer or the next setAssetReader().
+    // Worker readers may finish outstanding reads after setAssetReader(). Give captures owned lifetimes.
     void invalidateMaterial(std::string_view path);
     void invalidateAsset(std::string_view path);
+    void refreshProjectAssets(const std::unordered_set<std::string>& paths);
     // Set before the first frame. Captured reader sources must outlive rendering.
     void setShaderReader(AssetReader reader);
     [[nodiscard]] bool initializeShaders();
@@ -82,7 +84,7 @@ public:
     [[nodiscard]] std::string assetInfo(std::string_view path);
     [[nodiscard]] const std::vector<std::string>& assetErrors() const;
     [[nodiscard]] bool meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum, std::uint32_t meshNode = 0);
-    void newFrame();
+    void newFrame(bool allowAssetReload = true);
     void resizeGameView(int width, int height);
     void resizeSceneView(int width, int height);
     void renderGameView(const GameViewCamera& camera, const SceneDrawList& drawList = {});

@@ -1,0 +1,11 @@
+SatMaterial 5
+lit
+opaque 0.5
+1
+1 1 1 1 
+0 0.75
+0 0 0 1
+"Assets/Meshes/Ship/ShipPaint.png"
+""
+""
+""

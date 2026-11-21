@@ -43,7 +43,17 @@ public:
     [[nodiscard]] const GpuMaterial* material(std::string_view path) const { return m_assets.material(path, false); }
     void invalidateMaterial(std::string_view path) { m_assets.invalidateMaterial(path); ++m_assetRevision; }
     void invalidateAsset(std::string_view path) { m_assets.invalidateAsset(path); ++m_assetRevision; }
-    void setAssetReader(AssetReader reader);
+    void setAssetReader(AssetReader reader, bool asynchronous = false);
+    void refreshAssets(ID3D11Device* device, const std::unordered_set<std::string>& paths) {
+        m_assets.refresh(device, paths);
+        ++m_assetRevision;
+    }
+    [[nodiscard]] bool pollAssetUpload(ID3D11Device* device, bool allowReload) {
+        if (!m_assets.pollUpload(device, allowReload)) { return false; }
+        ++m_assetRevision;
+        return true;
+    }
+    [[nodiscard]] bool hasPendingAssets() const { return m_assets.hasPendingAssets(); }
     void releaseDecodedAssets() { m_assets.releaseDecodedAssets(); }
     [[nodiscard]] bool reimportAsset(ID3D11Device* device, std::string_view path, const AssetImportSettings* settings,
         const AssetImportWriter& writer, std::string& error) {

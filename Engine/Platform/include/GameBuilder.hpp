@@ -10,6 +10,7 @@ namespace sat {
 // build.log. Destruction releases handles; an active build continues independently.
 class GameBuilder {
 public:
+    enum class AssetMode { FullProject, Referenced };
     enum class Status { Idle, Building, Succeeded, Failed };
 
     explicit GameBuilder(std::filesystem::path engineRoot);
@@ -23,7 +24,7 @@ public:
     // Optional private folder containing generate.py; empty explicitly disables
     // obfuscation for this export. Encryption and release keys remain enabled.
     [[nodiscard]] bool start(const std::filesystem::path& projectRoot,
-                             const std::filesystem::path& obfuscatorFolder = {});
+                             const std::filesystem::path& obfuscatorFolder = {}, AssetMode assetMode = AssetMode::FullProject);
     void poll();
     [[nodiscard]] Status status() const;
     [[nodiscard]] const std::string& message() const;

@@ -99,7 +99,7 @@ void ShaderHotReload::poll(ID3D11Device* device, ShaderLibrary& library) {
     };
     std::array<bool, kPassCount> changed{};
     bool shared = false;
-    constexpr const char* kShared[] = {"Common", "Brdf", "Lighting", "Material", "MeshFragment", "Skinning", "GpuInstance"};
+    constexpr const char* kShared[] = {"Common", "Brdf", "Lighting", "Material", "MeshFragment", "Skinning", "GpuInstance", "Fullscreen"};
     for (std::size_t i = 0; i < m_times.size(); ++i) {
         const bool pass = i < kPassCount;
         const auto* name = pass ? passName(i) : kShared[i - kPassCount];
@@ -115,6 +115,9 @@ void ShaderHotReload::poll(ID3D11Device* device, ShaderLibrary& library) {
     m_initialized = true;
     library.pollProjectShaders(device, shared);
     changed[static_cast<std::size_t>(ShaderId::Mesh)] |= shared;
+    changed[static_cast<std::size_t>(ShaderId::MeshWeighted)] |= shared || changed[static_cast<std::size_t>(ShaderId::Mesh)];
+    changed[static_cast<std::size_t>(ShaderId::EnvironmentSky)] |= shared;
+    changed[static_cast<std::size_t>(ShaderId::TransparencyComposite)] |= shared;
     changed[static_cast<std::size_t>(ShaderId::MeshSkinned)] |= shared || changed[static_cast<std::size_t>(ShaderId::Mesh)];
     changed[static_cast<std::size_t>(ShaderId::SelectionOutlineSkinned)] |=
         shared || changed[static_cast<std::size_t>(ShaderId::SelectionOutline)];

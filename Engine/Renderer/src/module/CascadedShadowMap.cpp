@@ -26,7 +26,7 @@ float snapToTexel(float center, double absoluteOrigin, float texelSize) {
 
 } // namespace
 
-bool CascadedShadowMap::ensureResources(ID3D11DeviceContext* context, unsigned resolution, unsigned count) {
+bool CascadedShadowMap::ensureResources(ID3D11DeviceContext* context, unsigned resolution, unsigned count, bool perspective) {
     if (m_resolutionAttempted == resolution && m_countAttempted == count) {
         return m_shaderView.Get() != nullptr;
     }
@@ -49,7 +49,7 @@ bool CascadedShadowMap::ensureResources(ID3D11DeviceContext* context, unsigned r
     D3D11_RASTERIZER_DESC rasterizer{};
     rasterizer.FillMode = D3D11_FILL_SOLID;
     rasterizer.CullMode = D3D11_CULL_BACK;
-    rasterizer.DepthClipEnable = FALSE;
+    rasterizer.DepthClipEnable = perspective;
     rasterizer.DepthBias = 128;
     rasterizer.SlopeScaledDepthBias = 1.0f;
     rasterizer.DepthBiasClamp = 0.001f;
@@ -62,7 +62,7 @@ bool CascadedShadowMap::ensureResources(ID3D11DeviceContext* context, unsigned r
     texture.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
 
     const auto fail = [&](HRESULT error) {
-        std::cerr << "Cannot create " << count << " directional shadow cascades at " << resolution
+        std::cerr << "Cannot create " << count << " shadow maps at " << resolution
             << " pixels (HRESULT " << error << ")\n";
         return false;
     };
@@ -102,6 +102,20 @@ bool CascadedShadowMap::ensureResources(ID3D11DeviceContext* context, unsigned r
     hr = device->CreateShaderResourceView(depth.Get(), &srv, m_shaderView.GetAddressOf());
     if (FAILED(hr)) { return fail(hr); }
     m_depthViews = std::move(depthViews);
+    return true;
+}
+
+bool CascadedShadowMap::updateSpot(ID3D11DeviceContext* context, Vec3 position, Vec3 direction, float outerCos, float range) {
+    constexpr unsigned kSpotResolution = 1024;
+    if (!ensureResources(context, kSpotResolution, 1, true)) { return false; }
+    const Vec3 up = std::abs(direction.y) < 0.99f ? Vec3{0, 1, 0} : Vec3{0, 0, 1};
+    const float degrees = std::clamp(2.0f * std::acos(std::clamp(outerCos, 0.0f, 1.0f)) / kDegToRad, 0.1f, 179.9f);
+    const Mat4 basis = lookAt({}, direction, up);
+    Mat4 view = basis;
+    view.m[12] = -dot({basis.m[0], basis.m[4], basis.m[8]}, position);
+    view.m[13] = -dot({basis.m[1], basis.m[5], basis.m[9]}, position);
+    view.m[14] = -dot({basis.m[2], basis.m[6], basis.m[10]}, position);
+    m_cascades[0].viewProj = perspective(degrees, 1.0f, std::min(0.05f, range * 0.01f), range) * view;
     return true;
 }
 

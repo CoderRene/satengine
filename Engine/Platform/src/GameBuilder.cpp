@@ -158,7 +158,7 @@ GameBuilder::GameBuilder(std::filesystem::path engineRoot)
 GameBuilder::~GameBuilder() = default;
 
 bool GameBuilder::start(const std::filesystem::path& projectRoot,
-                        const std::filesystem::path& obfuscatorFolder) {
+                        const std::filesystem::path& obfuscatorFolder, AssetMode assetMode) {
     auto& impl = *m_impl;
     if (impl.m_status == Status::Building) {
         return false;
@@ -209,6 +209,7 @@ bool GameBuilder::start(const std::filesystem::path& projectRoot,
     std::wstring command = quoteArgument(powershell) +
         L" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " + quoteArgument(script) +
         L" -Target GamePlayer -Configuration Release -ProjectFolder " + quoteArgument(project);
+    if (assetMode == AssetMode::Referenced) { command += L" -ReferencedAssets"; }
     if (obfuscatorFolder.empty()) {
         command += L" -SkipObfuscation";
     } else {
@@ -244,6 +245,7 @@ bool GameBuilder::start(const std::filesystem::path& projectRoot,
 #else
     (void)projectRoot;
     (void)obfuscatorFolder;
+    (void)assetMode;
     return impl.fail("Standalone builds require Windows and Visual Studio with the C++ toolset.");
 #endif
 }

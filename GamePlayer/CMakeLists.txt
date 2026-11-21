@@ -12,11 +12,18 @@ endif()
 # Track resource additions/removals as well as content changes.
 file(GLOB_RECURSE pak_inputs CONFIGURE_DEPENDS
     "${SAT_GAME_PROJECT}/Scripts/*.lua" "${SAT_GAME_PROJECT}/Assets/*")
+option(SAT_REFERENCED_ASSETS "Pack scene dependencies and explicit includes" OFF)
+set(pak_mode_arg)
+if(SAT_REFERENCED_ASSETS)
+    list(APPEND pak_mode_arg --referenced-assets)
+    file(GLOB pak_include_list CONFIGURE_DEPENDS "${SAT_GAME_PROJECT}/StandaloneIncludes.txt")
+    list(APPEND pak_inputs ${pak_include_list})
+endif()
 set(pak_output "${CMAKE_CURRENT_BINARY_DIR}/${_sat_game_name}.pak")
 include("${PROJECT_SOURCE_DIR}/cmake/PrivatePakKeys.cmake")
 string(JOIN "\n" pak_manifest ${pak_inputs})
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/Pak.manifest"
-    CONTENT "${SAT_GAME_PROJECT}\n${pak_manifest}\n")
+    CONTENT "${SAT_GAME_PROJECT}\n${SAT_REFERENCED_ASSETS}\n${pak_manifest}\n")
 file(GLOB_RECURSE project_shaders CONFIGURE_DEPENDS "${SAT_GAME_PROJECT}/Assets/*.slang")
 list(FILTER project_shaders EXCLUDE REGEX "/\\._[^/]*$")
 set(project_shader_dir "${CMAKE_CURRENT_BINARY_DIR}/ProjectShaders")
@@ -36,7 +43,7 @@ foreach(source IN LISTS project_shaders)
     list(APPEND project_shader_args "${path}")
 endforeach()
 add_custom_command(OUTPUT "${pak_output}" "${pak_output}.parts"
-    COMMAND $<TARGET_FILE:SatPakBuilder> "${SAT_GAME_PROJECT}" "${pak_output}" "${pak_keys}" "${SAT_GAME_SHADER_ROOT}/Shaders" "${project_shader_dir}" ${project_shader_args}
+    COMMAND $<TARGET_FILE:SatPakBuilder> ${pak_mode_arg} "${SAT_GAME_PROJECT}" "${pak_output}" "${pak_keys}" "${SAT_GAME_SHADER_ROOT}/Shaders" "${project_shader_dir}" ${project_shader_args}
     DEPENDS SatShaders ${SAT_SHADER_OUTPUTS} ${project_shader_outputs} SatPakBuilder "${pak_provider}" "${pak_keys}/scripts.bin" "${pak_keys}/textures.bin"
         "${pak_keys}/audio.bin" "${pak_keys}/assets.bin" ${pak_inputs} "${SAT_GAME_PROJECT}/Scene.sat"
         "${CMAKE_CURRENT_BINARY_DIR}/Pak.manifest"

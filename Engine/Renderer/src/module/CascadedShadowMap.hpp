@@ -39,6 +39,8 @@ public:
         DVec3 renderOrigin, Vec3 lightDirection, const SceneDrawList& settings);
     [[nodiscard]] std::array<std::array<float, 4>, 6> cullingPlanes(unsigned index) const;
 
+    [[nodiscard]] bool updateSpot(ID3D11DeviceContext* context, Vec3 position, Vec3 direction, float outerCos, float range);
+
     [[nodiscard]] const Cascade& cascade(unsigned index) const { return m_cascades[index]; }
     [[nodiscard]] float nearDepth() const { return m_nearDepth; }
     [[nodiscard]] unsigned count() const { return m_countAttempted; }
@@ -52,7 +54,7 @@ public:
 
 private:
     [[nodiscard]] Vec3 lightSpaceCenter(Vec3 center) const;
-    [[nodiscard]] bool ensureResources(ID3D11DeviceContext* context, unsigned resolution, unsigned count);
+    [[nodiscard]] bool ensureResources(ID3D11DeviceContext* context, unsigned resolution, unsigned count, bool perspective = false);
 
     std::array<Cascade, kMaxCascades> m_cascades;
     Vec3 m_lightX;

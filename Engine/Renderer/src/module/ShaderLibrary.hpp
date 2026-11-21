@@ -17,8 +17,8 @@
 
 namespace sat {
 
-enum class ShaderId : std::uint8_t { Mesh, SelectionOutline, CameraFrustum, TransformGizmo, Grid, PostProcess, Shadow, Ui, UiEffects, UiGradient, MeshSkinned, SelectionOutlineSkinned, Count };
-inline constexpr std::array kShaderNames{"Mesh", "SelectionOutline", "CameraFrustum", "TransformGizmo", "Grid", "PostProcess", "Shadow", "Ui", "UiEffects", "UiGradient", "MeshSkinned", "SelectionOutlineSkinned"};
+enum class ShaderId : std::uint8_t { Mesh, SelectionOutline, CameraFrustum, TransformGizmo, Grid, PostProcess, Shadow, Ui, UiEffects, UiGradient, MeshSkinned, SelectionOutlineSkinned, MeshWeighted, EnvironmentSky, TransparencyComposite, Count };
+inline constexpr std::array kShaderNames{"Mesh", "SelectionOutline", "CameraFrustum", "TransformGizmo", "Grid", "PostProcess", "Shadow", "Ui", "UiEffects", "UiGradient", "MeshSkinned", "SelectionOutlineSkinned", "MeshWeighted", "EnvironmentSky", "TransparencyComposite"};
 
 [[nodiscard]] constexpr bool isEditorShader(ShaderId id) {
     return id == ShaderId::SelectionOutline || id == ShaderId::SelectionOutlineSkinned ||

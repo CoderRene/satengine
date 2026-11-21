@@ -11,7 +11,7 @@ LightInstance makeLightInstance(const Entity& entity, DVec3 renderOrigin) {
     return {toVec3(entity.transform.position - renderOrigin),
         {basis.m[8], basis.m[9], basis.m[10]},
         Vec3{light.color[0], light.color[1], light.color[2]} * light.intensity, light.type, light.range,
-        std::cos(light.innerConeDegrees * kDegToRad), std::cos(light.outerConeDegrees * kDegToRad)};
+        std::cos(light.innerConeDegrees * kDegToRad), std::cos(light.outerConeDegrees * kDegToRad), entity.id(), light.castShadow};
 }
 
 Vec3 ambientRadiance(const LightingSettings& settings) {
@@ -27,6 +27,8 @@ void SceneRenderData::update(const Scene& scene, int width, int height, const An
     m_ambient = ambientRadiance(scene.lightingSettings);
     m_environmentPath = scene.lightingSettings.environmentPath;
     m_environmentIntensity = scene.lightingSettings.environmentIntensity;
+    m_showEnvironmentSky = scene.lightingSettings.showEnvironmentSky;
+    m_weightedTransparency = scene.lightingSettings.weightedTransparency;
     m_directionalShadows = scene.lightingSettings.directionalShadows;
     m_shadowResolution = scene.lightingSettings.shadowResolution;
     m_shadowDistance = scene.lightingSettings.shadowDistance;
@@ -66,6 +68,8 @@ SceneDrawList SceneRenderData::drawList() const {
     draw.lightCount = static_cast<int>(m_lights.size());
     draw.environmentPath = m_environmentPath;
     draw.environmentIntensity = m_environmentIntensity;
+    draw.showEnvironmentSky = m_showEnvironmentSky;
+    draw.weightedTransparency = m_weightedTransparency;
     draw.directionalShadows = m_directionalShadows;
     draw.shadowResolution = m_shadowResolution;
     draw.shadowDistance = m_shadowDistance;

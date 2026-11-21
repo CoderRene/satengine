@@ -99,6 +99,8 @@ struct RenderSession::State {
         Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
         std::uint64_t lastUsed = 0;
         float aspectRatio = 1.0f;
+        std::vector<std::string> dependencies;
+        bool stale = false;
     };
     std::unordered_map<std::string, Thumbnail> thumbnails;
     std::uint64_t thumbnailFrame = 0;

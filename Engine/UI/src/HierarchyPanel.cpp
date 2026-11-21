@@ -360,7 +360,9 @@ struct HierarchyPanel::Impl {
                     break;
                 }
             }
-            const EntityId group = m_scene->createEntity("Group").id();
+            Entity& groupEntity = m_scene->createEntity("Group");
+            groupEntity.createdAsGroup = true;
+            const EntityId group = groupEntity.id();
             (void)m_scene->setParent(group, parent);
             for (const EntityId id : roots) {
                 (void)m_scene->setParent(id, group);

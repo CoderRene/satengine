@@ -66,6 +66,23 @@ followed by intensity.
   depth testing enabled and depth writes disabled. Intersecting transparent
   objects and overlapping triangles within a mesh can show sorting artifacts.
 
+## Hangar rendering options
+
+- A spot light’s **Cast Shadow** checkbox enables one 1024 × 1024 depth map
+  (4 MiB). The engine chooses the eligible spot with the lowest entity ID. Its
+  range and outer cone set the projection. Opaque, masked, and skinned
+  geometry can cast shadows from the spot alongside directional cascades.
+- **Show Environment Sky** displays the scene environment map using the same
+  orientation as reflections. The image follows camera rotation and is
+  visible through transmission. An unavailable map leaves the camera clear
+  color visible.
+- **Weighted Blended Transparency** accumulates built-in blend materials over
+  opaque depth. It adds 10 bytes per viewport pixel for color and coverage.
+  A visible blended custom shader switches the view to sorted blending.
+  Transmissive materials still sample the opaque scene.
+
+These options default to off and persist with the scene.
+
 ## Bloom
 
 Open **Scene → Lighting Settings → Bloom**. These settings are saved per scene

@@ -1,3 +1,9 @@
+public float2 environmentUv(float3 direction)
+{
+    return float2(atan2(direction.x, direction.z) * 0.159154943 + 0.5,
+        acos(clamp(direction.y, -1.0, 1.0)) * 0.318309886);
+}
+
 public float3 encodeSrgb(float3 color)
 {
     return lerp(12.92 * color, 1.055 * pow(color, 1.0 / 2.4) - 0.055, step(0.0031308, color));

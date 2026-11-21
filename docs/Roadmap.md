@@ -18,9 +18,9 @@ matter for a real game.
 | Done                     | **Working baseline**              | Edit, play, script, physics, audio, UI, package a game |
 | Done                     | **Better art import**             | Drop in modern mesh files (glTF) instead of OBJ-only   |
 | **Done**                 | **Animation**                     | Moving parts, crew, hatches, turrets, simple cutscenes |
-| Next                     | **Editor comfort**                | Undo, snapping, easier multi-object layout             |
-| Soon                     | **Richer space physics**          | Docking joints, hinged parts, better station collision |
-| Later                    | **Bigger projects**               | Faster iteration as scenes and asset folders grow      |
+| Done                     | **Editor comfort**                | Undo, snapping, easier multi-object layout             |
+| Skipped                  | **Richer space physics**          | Docking joints, hinged parts, better station collision |
+| Next                     | **Bigger projects**               | Faster iteration as scenes and asset folders grow      |
 | Later                    | **Visual polish**                 | Better local lights, shadows, and sky                  |
 | Other platforms is Maybe | **Other platforms & stable APIs** | macOS / Linux, APIs that won’t keep shifting           |
 | Maybe                    | **Extras**                        | Particles, AI, saves, if a game needs them             |
@@ -77,7 +77,7 @@ retargeting, and facial systems are out of scope for this pass.
 
 ---
 
-## Next — editor comfort
+## Done — editor comfort
 
 **Goal:** layout and tweak scenes without fear of irreversible mistakes.
 
@@ -91,7 +91,7 @@ day-to-day authoring ([details](SceneTransforms.md)):
 
 ---
 
-## Soon — richer space physics
+## Skipped — richer space physics
 
 **Goal:** gameplay pieces that attach and articulate, not only free-floating
 bodies.
@@ -105,7 +105,7 @@ orbits, planet-sized colliders, and networked physics.
 
 ---
 
-## Later — bigger projects & visuals
+## Next — bigger projects & visuals
 
 **Bigger projects:** as folders grow, waiting on manual reimport and fully
 in-memory packs gets annoying. Planned improvements include watching assets for

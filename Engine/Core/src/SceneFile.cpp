@@ -24,6 +24,8 @@
 
 namespace sat {
 namespace {
+constexpr int kSceneVersionWithGroups = 21;
+constexpr int kSceneVersionWithHangarLighting = 20;
 constexpr int kSceneVersionWithOcclusionRadius = 19;
 constexpr int kSceneVersionWithAnimatorBlend = 18;
 constexpr int kSceneVersionWithAnimator = 17;
@@ -148,6 +150,13 @@ std::string serializeScene(const Scene& scene) {
     if (std::any_of(scene.entities().begin(), scene.entities().end(), [](const Entity& entity) {
             return entity.hasAnimator && entity.animator.occlusionRadius > 0;
         })) { version = kSceneVersionWithOcclusionRadius; }
+    if (scene.lightingSettings.showEnvironmentSky || scene.lightingSettings.weightedTransparency ||
+        std::ranges::any_of(scene.entities(), [](const Entity& entity) { return entity.hasLight && entity.light.castShadow; })) {
+        version = kSceneVersionWithHangarLighting;
+    }
+    if (std::ranges::any_of(scene.entities(), [](const Entity& entity) { return entity.createdAsGroup; })) {
+        version = kSceneVersionWithGroups;
+    }
     out << "SatScene " << version << '\n' << scene.entityCount() << '\n';
     writePhysicsSettings(out, scene.physicsSettings);
     writeAudioSettings(out, scene.audioSettings);
@@ -161,10 +170,15 @@ std::string serializeScene(const Scene& scene) {
     out << bloom.enabled << ' ' << bloom.threshold << ' ' << bloom.softKnee << ' '
         << bloom.intensity << ' ' << bloom.radius << ' ' << bloom.tint[0] << ' '
         << bloom.tint[1] << ' ' << bloom.tint[2] << ' ' << bloom.highlightClamp << ' ' << bloom.quality << '\n';
+    if (version >= kSceneVersionWithHangarLighting) {
+        out << ambient.showEnvironmentSky << ' ' << ambient.weightedTransparency << '\n';
+    }
     for (const auto& entity : scene.entities()) {
         const auto& t = entity.transform;
         const auto& c = entity.camera;
-        out << std::quoted(entity.name) << '\n'
+        out << std::quoted(entity.name);
+        if (version >= kSceneVersionWithGroups) { out << ' ' << entity.createdAsGroup; }
+        out << '\n'
             << std::setprecision(std::numeric_limits<double>::max_digits10)
             << t.position.x << ' ' << t.position.y << ' ' << t.position.z << ' '
             << std::setprecision(std::numeric_limits<float>::max_digits10)
@@ -195,7 +209,9 @@ std::string serializeScene(const Scene& scene) {
         out << entity.hasLight << ' ' << static_cast<int>(light.type) << ' '
             << light.color[0] << ' ' << light.color[1] << ' ' << light.color[2] << ' '
             << light.intensity << ' ' << light.range << ' ' << light.innerConeDegrees << ' '
-            << light.outerConeDegrees << '\n';
+            << light.outerConeDegrees;
+        if (version >= kSceneVersionWithHangarLighting) { out << ' ' << light.castShadow; }
+        out << '\n';
         if (version >= kSceneVersionWithUi) {
             out << entity.gameUi.has_value();
             if (entity.gameUi) {
@@ -224,7 +240,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
     std::string magic;
     int version = 0;
     std::size_t count = 0;
-    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > kSceneVersionWithOcclusionRadius) || count > kMaxSceneEntities) {
+    if (!(in >> magic >> version >> count) || magic != "SatScene" || (version < 1 || version > kSceneVersionWithGroups) || count > kMaxSceneEntities) {
         return fail("Invalid scene header, version or entity count.");
     }
     Scene candidate;
@@ -287,6 +303,9 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
         bloom.quality < 0 || bloom.quality > 2)) {
         return fail("Invalid bloom settings.");
     }
+    if (version >= kSceneVersionWithHangarLighting && !(in >> ambient.showEnvironmentSky >> ambient.weightedTransparency)) {
+        return fail("Invalid sky or transparency settings.");
+    }
     std::size_t droppedTextures = 0;
     bool hasMain = false;
     for (std::size_t index = 0; index < count; ++index) {
@@ -295,6 +314,10 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
             return fail("Invalid entity name at index " + std::to_string(index));
         }
         Entity& e = candidate.createEntity(std::move(name));
+        if (version >= kSceneVersionWithGroups && !(in >> e.createdAsGroup)) {
+            return fail("Invalid group flag at entity index " + std::to_string(index));
+        }
+        if (version < kSceneVersionWithGroups) { e.createdAsGroup = e.name == "Group"; }
         auto& t = e.transform;
         auto& c = e.camera;
         int primitive = 0;
@@ -363,6 +386,7 @@ bool deserializeScene(std::string_view data, Scene& scene, std::string& error) {
             auto& light = e.light;
             if (!(in >> e.hasLight >> type) || type < 0 || type > 2 || !readColor(light.color) ||
                 !(in >> light.intensity >> light.range >> light.innerConeDegrees >> light.outerConeDegrees) ||
+                (version >= kSceneVersionWithHangarLighting && !(in >> light.castShadow)) ||
                 !std::isfinite(light.intensity) || light.intensity < 0 ||
                 !std::isfinite(light.range) || light.range <= 0 ||
                 !std::isfinite(light.innerConeDegrees) || !std::isfinite(light.outerConeDegrees) ||

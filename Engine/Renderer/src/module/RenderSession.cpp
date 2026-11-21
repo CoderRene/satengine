@@ -10,6 +10,7 @@
 #include <dxgi1_2.h>
 #include <dxgi1_5.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <utility>
@@ -95,6 +96,21 @@ void RenderSession::invalidateMaterial(std::string_view path) {
     noteContentChanged();
 }
 
+void RenderSession::refreshProjectAssets(const std::unordered_set<std::string>& paths) {
+    for (const auto& path : paths) {
+        if (isShaderAssetPath(path)) { m_state->shaders.invalidateProjectShader(path); }
+    }
+    m_state->meshPass.refreshAssets(m_state->device, paths);
+    m_state->thumbnailLoader.clear();
+    for (auto& [path, thumbnail] : m_state->thumbnails) {
+        thumbnail.stale |= paths.contains(path) || paths.contains(path + ".satimport") ||
+            std::ranges::any_of(thumbnail.dependencies, [&](const std::string& dep) {
+                return paths.contains(dep) || paths.contains(dep + ".satimport");
+            });
+    }
+    noteContentChanged();
+}
+
 void RenderSession::invalidateAsset(std::string_view path) {
     if (!isValidAssetPath(path)) { return; }
     if (isShaderAssetPath(path)) { m_state->shaders.invalidateProjectShader(path); }
@@ -149,7 +165,7 @@ void RenderSession::setAssetReader(AssetReader reader) {
         return pass;
     });
     m_state->thumbnailsDirty = true;
-    m_state->meshPass.setAssetReader(std::move(reader));
+    m_state->meshPass.setAssetReader(std::move(reader), true);
     noteContentChanged();
 }
 
@@ -213,8 +229,10 @@ std::uint64_t RenderSession::sceneDrawRevision(const Scene& scene) {
     return m_state->meshPass.sceneDrawRevision(scene);
 }
 
-void RenderSession::newFrame() {
+void RenderSession::newFrame(bool allowAssetReload) {
     ++m_state->frameNumber;
+    const bool uploaded = m_state->meshPass.pollAssetUpload(m_state->device, allowAssetReload);
+    if (uploaded) { noteContentChanged(); }
 #ifdef SAT_SHADER_HOT_RELOAD
     if (initializeShaders()) { m_state->hotReload.poll(m_state->device, m_state->shaders); }
 #endif
@@ -233,7 +251,7 @@ void RenderSession::newFrame() {
         return;
     }
     beginGpuFrameTiming();
-    uploadReadyThumbnails();
+    if (!uploaded && allowAssetReload) { uploadReadyThumbnails(); }
 
     int width = 0;
     int height = 0;

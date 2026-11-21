@@ -753,7 +753,7 @@ struct ViewportPanel::Impl {
                                 }
                                 selectionActivated = true;
                                 toggleSelection = io.KeyCtrl;
-                                const auto authoredIndex = scene->entityIndex(scene->rootEntityId(bestEntity));
+                                const auto authoredIndex = scene->entityIndex(scene->selectionRootId(bestEntity));
                                 selectedIndex = authoredIndex ? static_cast<int>(*authoredIndex) : -1;
                             }
                         }

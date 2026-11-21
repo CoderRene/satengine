@@ -23,6 +23,10 @@ void Renderer::invalidateMaterial(std::string_view path) {
     m_impl->invalidateMaterial(path);
 }
 
+void Renderer::refreshProjectAssets(const std::unordered_set<std::string>& paths) {
+    m_impl->refreshProjectAssets(paths);
+}
+
 void Renderer::invalidateAsset(std::string_view path) {
     m_impl->invalidateAsset(path);
 }
@@ -68,8 +72,8 @@ bool Renderer::meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum, s
     return m_impl->meshBounds(path, minimum, maximum, meshNode);
 }
 
-void Renderer::newFrame() {
-    m_impl->newFrame();
+void Renderer::newFrame(bool allowAssetReload) {
+    m_impl->newFrame(allowAssetReload);
 }
 
 void Renderer::resizeGameView(int width, int height) {

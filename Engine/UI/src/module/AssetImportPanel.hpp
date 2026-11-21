@@ -25,6 +25,7 @@ public:
     void clear();
     [[nodiscard]] bool active() const { return !m_path.empty(); }
     [[nodiscard]] bool dirty() const { return m_edited != m_saved || m_material != m_savedMaterial || m_clipDirty; }
+    [[nodiscard]] bool importPending() const { return m_import.valid(); }
     [[nodiscard]] const std::string& path() const { return m_path; }
     void request(std::function<void()> action);
     void draw(bool readOnly);

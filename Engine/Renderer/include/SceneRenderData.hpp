@@ -26,6 +26,8 @@ private:
     Vec3 m_ambient;
     std::string_view m_environmentPath;
     float m_environmentIntensity = 1;
+    bool m_showEnvironmentSky = false;
+    bool m_weightedTransparency = false;
     bool m_directionalShadows = true;
     int m_shadowResolution = 2048;
     float m_shadowDistance = 100.0f;

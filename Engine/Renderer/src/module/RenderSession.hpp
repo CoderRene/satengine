@@ -13,6 +13,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace sat {
@@ -35,6 +36,7 @@ public:
 
     void invalidateMaterial(std::string_view path);
     void invalidateAsset(std::string_view path);
+    void refreshProjectAssets(const std::unordered_set<std::string>& paths);
     void setShaderReader(AssetReader reader);
     [[nodiscard]] bool initializeShaders();
     void setAssetReader(AssetReader reader);
@@ -46,7 +48,7 @@ public:
     [[nodiscard]] std::string assetInfo(std::string_view path);
     [[nodiscard]] const std::vector<std::string>& assetErrors() const;
     [[nodiscard]] bool meshBounds(std::string_view path, Vec3& minimum, Vec3& maximum, std::uint32_t meshNode = 0);
-    void newFrame();
+    void newFrame(bool allowAssetReload);
     void resizeGameView(int width, int height);
     void resizeSceneView(int width, int height);
     void renderGameView(const GameViewCamera& camera, const SceneDrawList& drawList);

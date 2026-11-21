@@ -2,8 +2,10 @@
 
 #include <array>
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <span>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -38,6 +40,25 @@ public:
                                    std::uint64_t maxPartBytes = 2ULL * 1024 * 1024 * 1024);
     [[nodiscard]] static std::filesystem::path partPath(const std::filesystem::path& base, std::uint32_t index);
 private:
+    friend class PakReader;
+    [[nodiscard]] bool loadLegacy(const std::filesystem::path& path, std::string& error, const PakKey& key);
     std::vector<PakEntry> m_entries;
+};
+enum class PakReadResult { Found, Missing, Error };
+
+// Open before sharing. After open, concurrent readers receive owned bytes.
+class PakReader {
+public:
+    PakReader();
+    ~PakReader();
+    [[nodiscard]] bool open(const std::filesystem::path& path, std::string& error, const PakKey& key);
+    [[nodiscard]] std::span<const std::string> names() const;
+    [[nodiscard]] PakReadResult read(std::string_view name, std::string& bytes, std::string& error,
+        std::size_t limit) const;
+    [[nodiscard]] static bool write(const std::filesystem::path& path, std::span<const PakEntry> entries,
+        std::string& error, const PakKey& key);
+private:
+    struct Impl;
+    std::unique_ptr<Impl> m_impl;
 };
 } // namespace sat

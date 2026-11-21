@@ -71,6 +71,11 @@ cmake --install build-gameplayer --config Release --prefix dist/SatGame
 
 Ship the exe together with its `.pak` parts. An MSVC runtime is required on the target machine.
 
+## Featured example
+
+Open [Hangar Demo](Examples/HangarDemo/README.md) to try spot-light shadows,
+environment sky, weighted transparency, and asset reloading.
+
 ## Docs
 
 | Topic | Guide |

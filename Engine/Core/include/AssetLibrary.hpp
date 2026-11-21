@@ -46,9 +46,11 @@ public:
     void setReader(AssetReader reader);
     void clear();
     void invalidateMaterial(std::string_view path);
+    void replaceMaterial(std::string_view path, MaterialData&& data);
     void invalidateAsset(std::string_view path);
     [[nodiscard]] const MaterialData* material(std::string_view path);
     [[nodiscard]] const MeshData* mesh(std::string_view path);
+    [[nodiscard]] const MeshData* cachedMesh(std::string_view path);
     [[nodiscard]] const TextureData* texture(std::string_view path);
     // Null overrides reads saved metadata, with missing metadata using defaults.
     // Reserves the cache slot before returning. Only commit may evict decoded

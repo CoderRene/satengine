@@ -70,6 +70,7 @@ struct LightComponent {
     float range = 10.0f;
     float innerConeDegrees = 20.0f;
     float outerConeDegrees = 35.0f;
+    bool castShadow = false;
     bool operator==(const LightComponent&) const = default;
 
 };
@@ -93,6 +94,8 @@ struct LightingSettings {
     float ambientIntensity = 0.3f;
     std::string environmentPath;
     float environmentIntensity = 1.0f;
+    bool showEnvironmentSky = false;
+    bool weightedTransparency = false;
     bool directionalShadows = true;
     int shadowResolution = 2048;
     float shadowDistance = 100.0f;
@@ -162,7 +165,9 @@ struct Entity {
     [[nodiscard]] EntityId id() const { return m_id; }
     [[nodiscard]] EntityId parentId() const { return m_parentId; }
     [[nodiscard]] bool hasChildren() const { return m_childCount != 0; }
+    [[nodiscard]] bool isGroup() const { return createdAsGroup || name == "Group"; }
     std::string name;
+    bool createdAsGroup = false;
     Transform transform;
     bool hasCamera = false;
     CameraComponent camera;
@@ -218,6 +223,8 @@ public:
     [[nodiscard]] const Entity* entityById(EntityId id) const;
     // Returns the topmost ancestor (or the entity itself), or an invalid ID if absent.
     [[nodiscard]] EntityId rootEntityId(EntityId id) const;
+    // Returns the highest non-group entity in the ancestry, including the starting entity.
+    [[nodiscard]] EntityId selectionRootId(EntityId id) const;
     // Reparenting preserves the entity's world-space transform.
     // Use kInvalidEntityId as the parent to move an entity to the root.
     [[nodiscard]] bool canSetParent(EntityId childId, EntityId parentId) const;

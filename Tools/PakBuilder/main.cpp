@@ -20,9 +20,11 @@
 #include <iterator>
 #include <memory>
 #include <stdexcept>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <unordered_set>
 
 namespace {
 int dump(lua_State*, const void* bytes, std::size_t size, void* target) {
@@ -51,6 +53,8 @@ int main(int argc, char** argv) {
             if (!file) { throw std::runtime_error("Cannot write test key"); }
             return 0;
         }
+        const bool referenced = argc >= 5 && std::filesystem::path(argv[1]) == "--referenced-assets";
+        if (referenced) { ++argv; --argc; }
         if (argc < 4) { throw std::runtime_error("Usage: SatPakBuilder project-root output.pak key.bin [compiled-shader-dir [project-shader-dir [shader-path ...]]]"); }
         const std::filesystem::path keyPath = argv[3];
         const bool grouped = std::filesystem::is_directory(keyPath);
@@ -82,6 +86,111 @@ int main(int argc, char** argv) {
             }
         }
         std::sort(files.begin(), files.end());
+        if (referenced) {
+            std::unordered_set<std::string> included;
+            std::vector<std::string> pending;
+            const auto add = [&](std::string_view dependency, std::string_view referring) {
+                if (dependency.empty()) { return; }
+                if (!std::binary_search(files.begin(), files.end(), dependency, std::less<>{})) {
+                    throw std::runtime_error(std::string(referring) + ": missing dependency " + std::string(dependency));
+                }
+                if (included.emplace(dependency).second) { pending.emplace_back(dependency); }
+            };
+            for (const auto& name : files) {
+                if (name.starts_with("Scripts/")) { add(name, "Scripts"); }
+            }
+            for (const auto& entity : scene.entities()) {
+                if (entity.hasMesh) {
+                    add(entity.mesh.meshPath, entity.name);
+                    add(entity.mesh.materialPath, entity.name);
+                }
+                if (entity.hasAudioSource) { add(entity.audioSource.clipPath, entity.name); }
+                if (entity.hasAnimator) {
+                    add(sat::animatorMeshPath(scene, entity), entity.name);
+                    add(entity.animator.controllerPath, entity.name);
+                    if (sat::isAnimationClipAssetPath(entity.animator.clip)) { add(entity.animator.clip, entity.name); }
+                }
+                if (entity.gameUi) {
+                    add(entity.gameUi->documentPath, entity.name);
+                    add(entity.gameUi->fontPath, entity.name);
+                }
+            }
+            add(scene.lightingSettings.environmentPath, "Scene environment");
+            const auto list = root / "StandaloneIncludes.txt";
+            if (std::filesystem::exists(list)) {
+                std::ifstream input(list);
+                if (!input) { throw std::runtime_error("Cannot read StandaloneIncludes.txt"); }
+                for (std::string line; std::getline(input, line);) {
+                    if (!line.empty() && line.back() == '\r') { line.pop_back(); }
+                    if (line.empty() || line.starts_with('#')) { continue; }
+                    if (line.ends_with('/')) { line.pop_back(); }
+                    if (!sat::isValidAssetPath(line) && line != "Assets") {
+                        throw std::runtime_error("StandaloneIncludes.txt: invalid asset path " + line);
+                    }
+                    if (std::binary_search(files.begin(), files.end(), line)) {
+                        add(line, "StandaloneIncludes.txt");
+                        continue;
+                    }
+                    const auto prefix = line + '/';
+                    auto item = std::lower_bound(files.begin(), files.end(), prefix);
+                    if (item == files.end() || !item->starts_with(prefix)) {
+                        throw std::runtime_error("StandaloneIncludes.txt: missing file or non-empty folder " + line);
+                    }
+                    for (; item != files.end() && item->starts_with(prefix); ++item) {
+                        add(*item, "StandaloneIncludes.txt");
+                    }
+                }
+                if (input.bad()) { throw std::runtime_error("Cannot read StandaloneIncludes.txt"); }
+            }
+            const auto readAsset = sat::fileAssetReader(root);
+            const auto materialDependencies = [&](const sat::MaterialData& material, const std::string& owner,
+                std::span<const sat::GltfImage> embedded = {}) {
+                for (const auto* texture : {&material.baseColorTexture, &material.metallicRoughnessTexture,
+                        &material.normalTexture, &material.emissiveTexture, &material.occlusionTexture,
+                        &material.transmissionTexture, &material.thicknessTexture, &material.clearcoatTexture,
+                        &material.clearcoatRoughnessTexture, &material.clearcoatNormalTexture}) {
+                    if (std::ranges::find(embedded, *texture, &sat::GltfImage::path) == embedded.end()) { add(*texture, owner); }
+                }
+                if (material.shader == sat::MaterialShader::Custom) { add(material.shaderPath, owner); }
+            };
+            for (std::size_t i = 0; i < pending.size(); ++i) {
+                const auto path = pending[i];
+                if (path.ends_with(".satimport")) {
+                    add(std::string_view(path).substr(0, path.size() - 10), path);
+                }
+                const auto sidecar = path + ".satimport";
+                if (std::binary_search(files.begin(), files.end(), sidecar)) { add(sidecar, path); }
+                std::string bytes, error;
+                if (sat::isMeshAssetPath(path)) {
+                    sat::PreparedAssetImport asset;
+                    const sat::AssetReader track = [&](std::string_view dependency, std::string& data, std::string& reason) {
+                        if (dependency != sidecar) { add(dependency, path); }
+                        return readAsset(dependency, data, reason);
+                    };
+                    const auto filePath = root / std::filesystem::path(std::u8string(path.begin(), path.end()));
+                    if (!sat::decodeAssetImport(track, path, nullptr, asset, error) &&
+                        !(sat::isFbxAssetPath(path) && sat::isFbxAnimationOnly(read(filePath)))) {
+                        throw std::runtime_error(path + ": " + error);
+                    }
+                    for (const auto& material : asset.mesh.materials) {
+                        materialDependencies(material, path, asset.mesh.embeddedImages);
+                    }
+                } else if (sat::isMaterialAssetPath(path)) {
+                    sat::MaterialData material;
+                    if (readAsset(path, bytes, error) != sat::AssetReadResult::Found ||
+                        !sat::decodeMaterial(bytes, material, error)) { throw std::runtime_error(path + ": " + error); }
+                    materialDependencies(material, path);
+                } else if (sat::isAnimationGraphAssetPath(path)) {
+                    sat::AnimationGraph graph;
+                    if (readAsset(path, bytes, error) != sat::AssetReadResult::Found ||
+                        !sat::decodeAnimationGraph(bytes, graph, error)) { throw std::runtime_error(path + ": " + error); }
+                    for (const auto& state : graph.states) {
+                        if (sat::isAnimationClipAssetPath(state.clip)) { add(state.clip, path); }
+                    }
+                }
+            }
+            std::erase_if(files, [&](const std::string& name) { return !included.contains(name); });
+        }
         sat::AssetLibrary assets;
         // Asset readers in the player look up exact archive paths, including
         // glTF buffers that have no engine asset extension.
@@ -232,7 +341,9 @@ int main(int argc, char** argv) {
             const auto encoded = std::filesystem::path(argv[i]).generic_u8string();
             std::string path(encoded.begin(), encoded.end());
             if (!sat::isShaderAssetPath(path)) { throw std::runtime_error("Invalid project shader path: " + path); }
-            projectShaders.push_back(std::move(path));
+            if (!referenced || std::binary_search(files.begin(), files.end(), path)) {
+                projectShaders.push_back(std::move(path));
+            }
         }
         const auto& environment = scene.lightingSettings.environmentPath;
         if (!environment.empty() && std::none_of(entries.begin(), entries.end(),
@@ -305,7 +416,7 @@ int main(int argc, char** argv) {
             }
             auto output = base;
             if (group != "scripts") { auto name = base.stem(); name += "." + group; name += base.extension(); output = base.parent_path() / name; }
-            if (!sat::PakArchive::write(output, selected, error, key.bytes)) { throw std::runtime_error(error); }
+            if (!sat::PakReader::write(output, selected, error, key.bytes)) { throw std::runtime_error(error); }
             auto manifest = output; manifest += ".parts";
             combinedManifest += read(manifest);
         }

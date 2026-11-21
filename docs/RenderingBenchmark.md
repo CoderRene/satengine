@@ -56,6 +56,48 @@ Scene sync compares cached transforms because gameplay can write them directly. 
 - Turn the scene camera quickly toward occluded geometry and move an occluder out of the way. Geometry visible in the new view should appear in that frame.
 - Move a combined-static mesh within its cell, then across a boundary. Compare the frame times and check that dirty sources remain visible during rebuilding.
 
+## Hangar loading benchmark
+
+Generate the same fixture in two destinations so the previous revision can
+open the version 19 scene. Generate the current fixture without `--baseline`
+to exercise the three opt-in visual settings.
+
+```powershell
+python .\scripts\render_stress.py hangar "$env:TEMP\SatHangarBefore" --baseline
+python .\scripts\render_stress.py hangar "$env:TEMP\SatHangarAfter"
+```
+
+For a loading comparison, also generate a current-build fixture with
+`--baseline` so both captures use the same visual settings. Use the loading
+capture instrumentation on both revisions. Build GamePlayer against each
+project with identical release settings and start it with
+`SAT_LOADING_BENCHMARK` set to a separate CSV path. The player captures 180
+frames from startup. The first row’s elapsed time ends at first presentation.
+Compare peak working set and the largest frame times around frame 30, when Lua
+instantiates an asset for the first time. Use `SAT_RENDER_BENCHMARK` separately
+for warm steady-state timing.
+
+Compare **Full Project** and **Referenced Assets** archives by summing the
+sizes of the files listed in the generated `.pak.parts` manifest, excluding the
+executable. Repeat with `--unused-textures 0` to isolate unused content. Run
+both builds from a clean staging folder and check that the Lua-only beacon
+appears beside the ship lineup.
+
+Open the current hangar in the editor and display both viewports and a material
+thumbnail. Measure from saving a replacement `ShipPaint.png` to the first
+visible update in each view. Capture the same operation with manual reimport
+on the baseline. Replace the texture briefly with unreadable bytes, then
+restore it. Verify that the last good texture stays visible and the next valid
+save updates it. Repeat with a changed external `Ship.bin`, rapid consecutive
+saves, and a project switch while a mesh is loading.
+
+Play the current hangar to see the moving door’s shadow. Toggle the sky and
+weighted blending individually at the same resolution. Check the sky while
+translating the camera and the intersecting panels while orbiting them. The
+loading CSV includes GPU shadow and transparency timings. The spot adds
+4 MiB of depth and weighted blending adds 10 bytes per pixel per rendered
+view. Use the Windows `AssetRendering` WARP test for pixel checks.
+
 ## Animation benchmark
 
 Generate one v17 project with 200 skinned beacons divided between near, middle,

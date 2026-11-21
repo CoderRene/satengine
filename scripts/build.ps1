@@ -3,6 +3,7 @@ param(
     [ValidateSet("Debug", "Release")][string]$Configuration = "Debug",
     [string]$ProjectFolder = "",
     [string]$ObfuscatorFolder = "",
+    [switch]$ReferencedAssets,
     [switch]$SkipObfuscation
 )
 
@@ -56,7 +57,8 @@ try {
             $privateOptions += "-DSAT_ENABLE_OBFUSCATION=ON"
             $privateOptions += "-DSAT_OBFUSCATOR_DIR="
         }
-        & $cmake --preset windows-gameplayer -B $exportBuild "-DSAT_GAME_PROJECT=$projectPath" "-DSAT_RELEASE_ID=$releaseId" @privateOptions
+        $assetMode = if ($ReferencedAssets) { "ON" } else { "OFF" }
+        & $cmake --preset windows-gameplayer -B $exportBuild "-DSAT_GAME_PROJECT=$projectPath" "-DSAT_RELEASE_ID=$releaseId" "-DSAT_REFERENCED_ASSETS=$assetMode" @privateOptions
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         Write-Output "[SatBuild] 3/4 Compiling engine, Lua bytecode and game pak..."
         & $cmake --build $exportBuild --config $Configuration --target GamePlayer
