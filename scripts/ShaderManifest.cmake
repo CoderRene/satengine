@@ -6,5 +6,7 @@ foreach(entry IN LISTS entries)
     string(APPEND manifest "${name}\n")
 endforeach()
 file(WRITE "${SHADER_DIR}/ShaderManifest" "${manifest}")
-file(WRITE "${GENERATED}/ShaderManifest.hpp"
-    "#pragma once\nnamespace sat { inline constexpr char kShaderLayoutHash[] = \"${hash}\"; }\n")
+if(DEFINED GENERATED)
+    file(WRITE "${GENERATED}/ShaderManifest.hpp"
+        "#pragma once\nnamespace sat { inline constexpr char kShaderLayoutHash[] = \"${hash}\"; }\n")
+endif()

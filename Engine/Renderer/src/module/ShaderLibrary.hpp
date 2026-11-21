@@ -20,6 +20,11 @@ namespace sat {
 enum class ShaderId : std::uint8_t { Mesh, SelectionOutline, CameraFrustum, TransformGizmo, Grid, PostProcess, Shadow, Ui, UiEffects, UiGradient, MeshSkinned, SelectionOutlineSkinned, Count };
 inline constexpr std::array kShaderNames{"Mesh", "SelectionOutline", "CameraFrustum", "TransformGizmo", "Grid", "PostProcess", "Shadow", "Ui", "UiEffects", "UiGradient", "MeshSkinned", "SelectionOutlineSkinned"};
 
+[[nodiscard]] constexpr bool isEditorShader(ShaderId id) {
+    return id == ShaderId::SelectionOutline || id == ShaderId::SelectionOutlineSkinned ||
+        id == ShaderId::CameraFrustum || id == ShaderId::TransformGizmo || id == ShaderId::Grid;
+}
+
 enum class ComputeShaderId : std::uint8_t { ScatterInstances, CullInstances, DepthPyramid, SkinVertices, Count };
 inline constexpr std::array kComputeShaderNames{"ScatterInstances", "CullInstances", "DepthPyramid", "SkinVertices"};
 
@@ -43,6 +48,7 @@ public:
     void release();
     [[nodiscard]] std::uint64_t revision() const { return m_revision; }
     [[nodiscard]] bool ensure(ID3D11Device* device);
+    [[nodiscard]] bool hasEditorShaders() const { return m_hasEditorShaders; }
     [[nodiscard]] ShaderProgram program(ShaderId id) const;
     [[nodiscard]] ID3D11ComputeShader* compute(ComputeShaderId id) const;
     [[nodiscard]] bool replace(ID3D11Device* device, ComputeShaderId id, std::string_view cs);
@@ -72,6 +78,7 @@ private:
     std::uint64_t m_revision = 0;
     bool m_ready = false;
     bool m_failed = false;
+    bool m_hasEditorShaders = false;
 };
 
 } // namespace sat

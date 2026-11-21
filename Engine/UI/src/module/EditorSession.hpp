@@ -39,7 +39,7 @@ public:
     void paceEditor();
 
     [[nodiscard]] bool canSaveScene() const;
-    [[nodiscard]] bool projectOpening() const;
+    [[nodiscard]] bool sceneBusy() const;
     bool saveScene();
     void resetViewportInteraction();
     void tickScripts(float deltaSeconds);
@@ -55,17 +55,19 @@ private:
 
     void shutdown();
     void recordLoadedScene();
+    void recordSavedScene();
     [[nodiscard]] bool hasUnsavedChanges() const;
     void stopPlay();
     void discardPlayEdits();
     void afterStoppingPlay(std::function<void()> action);
     void startPlay();
     void startPlayNow();
+    void finishPlayPreparation();
     void openProject(const std::filesystem::path& folder);
     void openProjectNow(const std::filesystem::path& folder);
     void prepareProjectSwitch(ProjectOpenResult opened);
     void finishProjectOpen();
-    void drawProjectProgress();
+    void drawSceneProgress();
     void reloadAssets();
     void selectEntity(EntityId id, bool keepHierarchySelection = false, bool toggle = false);
     void syncLuaTooling() const;

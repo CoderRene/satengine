@@ -53,7 +53,7 @@ void UiLayer::beginFrame() {
         (void)saved; // Failure details appear in Scene Errors.
     }
     m_impl->drawInterface(canSaveScene);
-    if (!m_impl->projectOpening()) { m_impl->tickScripts(io.DeltaTime); }
+    if (!m_impl->sceneBusy()) { m_impl->tickScripts(io.DeltaTime); }
 }
 
 bool UiLayer::requestClose() {
@@ -65,9 +65,9 @@ void UiLayer::endFrame() {
         return;
     }
 
-    const bool wasOpeningProject = m_impl->projectOpening();
+    const bool wasBusy = m_impl->sceneBusy();
     m_impl->drawPrompts();
-    if (!wasOpeningProject && !m_impl->projectOpening()) { m_impl->renderViews(); }
+    if (!wasBusy && !m_impl->sceneBusy()) { m_impl->renderViews(); }
     ImGui::Render();
     m_impl->bindWindowTarget();
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());

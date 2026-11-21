@@ -440,4 +440,12 @@ bool decodeFbxAnimation(std::string_view bytes, AnimationData& animation, std::s
     error.clear();
     return true;
 }
+
+bool isFbxAnimationOnly(std::string_view bytes) {
+    std::string error;
+    const auto scene = load(bytes, error);
+    if (!scene || scene->meshes.count != 0 || scene->anim_stacks.count == 0) { return false; }
+    Model model(*scene);
+    return model.buildRig(error) && model.readClips(true, error);
+}
 }

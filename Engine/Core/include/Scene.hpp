@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -221,6 +222,10 @@ public:
     // Use kInvalidEntityId as the parent to move an entity to the root.
     [[nodiscard]] bool canSetParent(EntityId childId, EntityId parentId) const;
     [[nodiscard]] bool setParent(EntityId childId, EntityId parentId);
+    // Place entities next to a sibling, preserving their relative scene order
+    // and world-space transforms while adopting the sibling's parent.
+    // Invalid IDs and cyclic moves are rejected before editing the scene.
+    [[nodiscard]] bool moveEntitiesBeside(std::span<const EntityId> ids, EntityId siblingId, bool after);
     // Move an entity and its descendants by the same world-space offset.
     // Returns false for a missing entity or an unchanged position.
     bool moveEntity(EntityId id, DVec3 position);
@@ -230,8 +235,8 @@ public:
     [[nodiscard]] bool destroyEntity(EntityId id);
     [[nodiscard]] bool setMainCameraById(EntityId id);
     // Indices are temporary positions for editor/serialization use, never handles.
-    // Creation may invalidate references; removal swaps in the last entity and
-    // invalidates references/indices. IDs of surviving entities remain valid.
+    // Creation, removal, and reordering can invalidate references/indices.
+    // Removal swaps in the last entity. IDs of surviving entities remain valid.
     [[nodiscard]] Entity* entity(std::size_t index);
     [[nodiscard]] const Entity* entity(std::size_t index) const;
     [[nodiscard]] int mainCameraIndex() const;

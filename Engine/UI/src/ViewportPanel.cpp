@@ -7,6 +7,7 @@
 #include "Scene.hpp"
 #include "SceneDraw.hpp"
 #include "TransformGizmo.hpp"
+#include "module/SceneCameraSpeed.hpp"
 
 #include <imgui.h>
 
@@ -283,7 +284,7 @@ struct ViewportPanel::Impl {
         DVec3 position{-5.12, 3.38, -5.12};
         float yawDegrees = 45.0f;
         float pitchDegrees = -25.0f;
-        float moveSpeed = 8.0f;
+        float moveSpeed = kDefaultSceneCameraSpeed;
         bool looking = false;
         bool draggingPan = false;
         double lastCursorX = 0.0;
@@ -545,6 +546,15 @@ struct ViewportPanel::Impl {
             if (tool == TransformTool::Scale && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                 ImGui::SetTooltip("Scale uses local axes; the center handle scales uniformly.");
             }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(95);
+            ImGui::SliderFloat("Camera Speed", &editorCamera.moveSpeed, kMinSceneCameraSpeed, kMaxSceneCameraSpeed,
+                "%.2f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Scene camera movement speed. Hold Ctrl while right-dragging and scroll to adjust.");
+            }
+            ImGui::BeginDisabled(!canUseGizmo || gizmoDrag.active());
             ImGui::Checkbox("Grid Snap", &gridSnap);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(85);
@@ -621,14 +631,18 @@ struct ViewportPanel::Impl {
                     const Vec3 right = cam.right();
                     const Vec3 up = cross(forward, right);
 
+                    if (!gizmoDrag.active() && io.MouseWheel != 0.0f) {
+                        if (cam.looking && io.KeyCtrl) {
+                            cam.moveSpeed = adjustSceneCameraSpeed(cam.moveSpeed, io.MouseWheel);
+                        } else if (hovered) {
+                            cam.position = cam.position + forward * (io.MouseWheel * cam.moveSpeed * 0.25f);
+                        }
+                    }
+
                     if (cam.draggingPan) {
                         const float panScale = cam.moveSpeed * 0.002f;
                         cam.position = cam.position + right * (-io.MouseDelta.x * panScale) +
                             up * (io.MouseDelta.y * panScale);
-                    }
-
-                    if (hovered && !gizmoDrag.active() && io.MouseWheel != 0.0f) {
-                        cam.position = cam.position + forward * (io.MouseWheel * cam.moveSpeed * 0.25f);
                     }
 
                     if (hovered && !readOnly && !cam.looking && !cam.draggingPan && !gizmoDrag.active() && !io.WantTextInput &&

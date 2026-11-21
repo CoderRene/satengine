@@ -89,10 +89,11 @@ struct EditorSession::State {
 
     std::filesystem::path projectOpenFolder;
     bool preparingProject = false;
-    bool projectProgressShown = false;
-    // The preparation job can borrow the authored scene for saving. The window
-    // thread pauses scene work until the job is consumed and joins it on shutdown.
+    bool sceneProgressShown = false;
+    // Preparation jobs borrow the authored scene. Pause scene work until the
+    // job is consumed and join it before touching the scene on shutdown.
     std::future<ProjectOpenResult> projectOpen;
+    std::future<PlayPreparation> playPreparation;
 
     // Edit mode keeps the previous scene and game targets while these match.
     std::uint64_t sceneViewKey = 0;

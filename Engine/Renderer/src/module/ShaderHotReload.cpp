@@ -122,7 +122,8 @@ void ShaderHotReload::poll(ID3D11Device* device, ShaderLibrary& library) {
     changed[static_cast<std::size_t>(ShaderId::Shadow)] |= shared;
     changed[static_cast<std::size_t>(ShaderId::PostProcess)] |= shared;
     for (std::size_t i = 0; i < changed.size(); ++i) {
-        if (!changed[i]) { continue; }
+        if (!changed[i] || (i < kShaderNames.size() && !library.hasEditorShaders() &&
+                isEditorShader(static_cast<ShaderId>(i)))) { continue; }
         if (!m_session && SLANG_FAILED(slang::createGlobalSession(m_session.GetAddressOf()))) {
             std::cerr << "Cannot initialize Slang shader compiler\n";
             return;

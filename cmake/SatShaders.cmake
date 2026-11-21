@@ -7,30 +7,49 @@ FetchContent_MakeAvailable(slang)
 find_program(sat_slangc NAMES slangc PATHS "${slang_SOURCE_DIR}/bin" "${slang_SOURCE_DIR}" NO_DEFAULT_PATH REQUIRED)
 set(SAT_SLANGC "${sat_slangc}" CACHE INTERNAL "Slang command-line compiler")
 set(shader_source "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/shaders")
-set(shader_dir "${CMAKE_BINARY_DIR}/Shaders")
+set(SAT_GAME_SHADER_ROOT "${CMAKE_BINARY_DIR}/GameShaders" CACHE INTERNAL "Game shader staging root")
+set(shader_dir "${SAT_GAME_SHADER_ROOT}/Shaders")
+set(editor_shader_dir "${CMAKE_BINARY_DIR}/Shaders")
+set(editor_shader_passes SelectionOutline CameraFrustum TransformGizmo Grid SelectionOutlineSkinned)
 set(shader_generated "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
 set(shader_layout "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/src/module/ShaderLayout.hpp")
-set(shader_shared Common Brdf Lighting Material MeshFragment Skinning Mesh SelectionOutline GpuInstance)
+set(shader_shared Common Brdf Lighting Material MeshFragment Skinning Mesh GpuInstance)
 list(TRANSFORM shader_shared PREPEND "${shader_source}/")
 list(TRANSFORM shader_shared APPEND ".slang")
 set(shader_flags -target dxbc -profile sm_5_0 -matrix-layout-column-major -O3)
 set(SAT_SHADER_FLAGS "${shader_flags}" CACHE INTERNAL "Slang compile flags")
 # The manifest order must match kShaderNames in ShaderLibrary.hpp.
 foreach(pass Mesh SelectionOutline CameraFrustum TransformGizmo Grid PostProcess Shadow Ui UiEffects UiGradient MeshSkinned SelectionOutlineSkinned)
+    set(pass_dir "${shader_dir}")
+    set(pass_dependencies)
+    if(pass IN_LIST editor_shader_passes)
+        if(NOT SAT_BUILD_EDITOR)
+            continue()
+        endif()
+        set(pass_dir "${editor_shader_dir}")
+        if(pass STREQUAL "SelectionOutlineSkinned")
+            list(APPEND pass_dependencies "${shader_source}/SelectionOutline.slang")
+        endif()
+    endif()
     foreach(stage vs ps)
         if(stage STREQUAL "vs")
             set(shader_stage vertex)
         else()
             set(shader_stage fragment)
         endif()
-        set(output "${shader_dir}/${pass}.${stage}.dxbc")
+        set(output "${pass_dir}/${pass}.${stage}.dxbc")
         add_custom_command(OUTPUT "${output}"
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${shader_dir}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${pass_dir}"
             COMMAND "${sat_slangc}" "${shader_source}/${pass}.slang" -entry "${stage}Main" -stage "${shader_stage}"
                 ${shader_flags} -I "${shader_source}" -o "${output}"
-            DEPENDS "${shader_source}/${pass}.slang" ${shader_shared} "${sat_slangc}"
+            DEPENDS "${shader_source}/${pass}.slang" ${shader_shared} ${pass_dependencies} "${sat_slangc}"
             VERBATIM)
-        list(APPEND shader_outputs "${output}")
+        list(APPEND editor_view_shader_outputs "${output}")
+        if(pass IN_LIST editor_shader_passes)
+            list(APPEND editor_only_shader_outputs "${output}")
+        else()
+            list(APPEND shader_outputs "${output}")
+        endif()
     endforeach()
 endforeach()
 foreach(pass ScatterInstances CullInstances DepthPyramid SkinVertices)
@@ -42,6 +61,7 @@ foreach(pass ScatterInstances CullInstances DepthPyramid SkinVertices)
         DEPENDS "${shader_source}/${pass}.slang" ${shader_shared} "${sat_slangc}"
         VERBATIM)
     list(APPEND shader_outputs "${output}")
+    list(APPEND editor_view_shader_outputs "${output}")
 endforeach()
 string(REPLACE ";" "|" shader_entries "${shader_outputs}")
 add_custom_command(OUTPUT "${shader_dir}/ShaderManifest" "${shader_generated}/ShaderManifest.hpp"
@@ -55,7 +75,22 @@ add_custom_command(OUTPUT "${shader_dir}/ShaderManifest" "${shader_generated}/Sh
     VERBATIM)
 list(APPEND shader_outputs "${shader_dir}/ShaderManifest")
 add_custom_target(SatShaders DEPENDS ${shader_outputs} "${shader_generated}/ShaderManifest.hpp")
-set(SAT_SHADER_OUTPUTS "${shader_outputs}" CACHE INTERNAL "Compiled shader files")
+set(SAT_SHADER_OUTPUTS "${shader_outputs}" CACHE INTERNAL "Compiled game shader files")
+
+if(SAT_BUILD_EDITOR)
+    string(REPLACE ";" "|" editor_shader_entries "${editor_view_shader_outputs}")
+    set(editor_shader_manifest "${editor_shader_dir}/ShaderManifest")
+    add_custom_command(OUTPUT "${editor_shader_manifest}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${editor_shader_dir}"
+        COMMAND ${CMAKE_COMMAND} "-DLAYOUT=${shader_layout}" "-DSHADER_DIR=${editor_shader_dir}"
+            "-DENTRIES=${editor_shader_entries}" -P "${PROJECT_SOURCE_DIR}/scripts/ShaderManifest.cmake"
+        DEPENDS "${shader_layout}" "${CMAKE_CURRENT_LIST_FILE}" "${PROJECT_SOURCE_DIR}/scripts/ShaderManifest.cmake"
+        VERBATIM)
+    list(APPEND editor_view_shader_outputs "${editor_shader_manifest}")
+    add_custom_target(SatEditorViewShaders DEPENDS ${editor_only_shader_outputs} "${editor_shader_manifest}")
+    add_dependencies(SatEditorViewShaders SatShaders)
+    set(SAT_EDITOR_VIEW_SHADER_OUTPUTS "${editor_view_shader_outputs}" CACHE INTERNAL "Compiled editor viewport shader files")
+endif()
 
 option(SAT_SHADER_HOT_RELOAD "Recompile changed shaders in development configurations" ${SAT_BUILD_EDITOR})
 if(SAT_SHADER_HOT_RELOAD)

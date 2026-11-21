@@ -8,7 +8,7 @@ if(WIN32)
 endif()
 
 target_link_libraries(Editor PRIVATE SatEditor)
-add_dependencies(Editor SatShaders SatEditorShaders)
+add_dependencies(Editor SatEditorViewShaders SatEditorShaders)
 
 # MSBuild/VS often skips relinking Editor when engine libraries change.
 # Refresh a stub .cpp whenever the lib is newer so Editor recompiles and relinks.
@@ -20,7 +20,7 @@ endif()
 add_custom_command(
     OUTPUT "${_sat_relink_stub}"
     COMMAND ${CMAKE_COMMAND} -E touch "${_sat_relink_stub}"
-    DEPENDS ${SAT_EDITOR_SHADER_OUTPUTS} ${SAT_SHADER_OUTPUTS} "$<TARGET_FILE:SatAssets>" "$<TARGET_FILE:SatGameUi>" "$<TARGET_FILE:SatScripting>" "$<TARGET_FILE:SatLua>" "$<TARGET_FILE:SatScene>" "$<TARGET_FILE:SatRuntime>" "$<TARGET_FILE:SatEditor>"
+    DEPENDS ${SAT_EDITOR_SHADER_OUTPUTS} ${SAT_EDITOR_VIEW_SHADER_OUTPUTS} "$<TARGET_FILE:SatAssets>" "$<TARGET_FILE:SatGameUi>" "$<TARGET_FILE:SatScripting>" "$<TARGET_FILE:SatLua>" "$<TARGET_FILE:SatScene>" "$<TARGET_FILE:SatRuntime>" "$<TARGET_FILE:SatEditor>"
         "${_sat_lua_defs}/sat.lua" "${_sat_lua_defs}/globals.lua"
     COMMENT "Engine dependency changed; refreshing Editor relink stub"
     VERBATIM
@@ -29,7 +29,8 @@ target_sources(Editor PRIVATE "${_sat_relink_stub}")
 
 # Keep runtime fonts/icons next to the executable for packaged / Debug-folder runs.
 add_custom_command(TARGET Editor POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/Shaders" "$<TARGET_FILE_DIR:Editor>/Shaders"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:Editor>/Shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${SAT_EDITOR_VIEW_SHADER_OUTPUTS} "$<TARGET_FILE_DIR:Editor>/Shaders"
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/EditorShaders" "$<TARGET_FILE_DIR:Editor>/EditorShaders/Shaders"
     COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:Editor>/LuaDefs"
     COMMAND ${CMAKE_COMMAND} -E copy_directory

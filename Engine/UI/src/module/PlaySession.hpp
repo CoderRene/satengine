@@ -10,6 +10,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <optional>
 #include <string>
 
@@ -17,6 +18,21 @@ namespace sat {
 
 class Input;
 class GameUi;
+class Project;
+
+struct PlayScenes {
+    Scene original;
+    Scene game;
+};
+
+struct PlayPreparation {
+    std::optional<PlayScenes> scenes;
+    std::string error;
+};
+
+// Keep the authored scene alive and immutable until the job completes.
+[[nodiscard]] std::future<PlayPreparation> preparePlayScene(
+    const Project& project, const Scene& authored, bool save);
 
 // Window-thread play runtime. The borrowed Input must outlive this object.
 // Authored scene edits are copied in; simulation changes stay here.
@@ -46,7 +62,7 @@ public:
     void acceptEdits();
     void defer(std::function<void()> action);
     [[nodiscard]] std::function<void()> takePendingAction();
-    [[nodiscard]] bool start(Scene& authored, const std::filesystem::path& projectRoot, GameUi* ui);
+    [[nodiscard]] bool start(PlayScenes prepared, const std::filesystem::path& projectRoot, GameUi* ui);
     void applyEdits(Scene& authored, std::string& error);
 
 private:

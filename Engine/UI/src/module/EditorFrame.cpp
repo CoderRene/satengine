@@ -55,13 +55,13 @@ void EditorSession::drawInterface(bool canSaveScene) {
         drawList->PopClipRect();
     }
 
-    if (!projectOpening()) {
+    if (!sceneBusy()) {
         ImGui::PushStyleVarY(ImGuiStyleVar_FramePadding, kHeaderPaddingY);
         drawMenuBar(canSaveScene);
         ImGui::PopStyleVar();
     }
-    const bool openingProject = projectOpening();
-    if (!openingProject) {
+    const bool busy = sceneBusy();
+    if (!busy) {
         const std::size_t physicsWorlds = state.showPhysicsSettings && state.play.active()
             ? state.play.physicsWorldCount() : 0;
         const auto settingsRevision = state.scene.editRevision();
@@ -84,7 +84,7 @@ void EditorSession::drawInterface(bool canSaveScene) {
 
     ImGui::End();
 
-    if (openingProject) { return; }
+    if (busy) { return; }
     drawPanels();
     drawNewProjectModal(state.openNewProjectModal, state.newProjectParent, state.newProjectName,
         sizeof(state.newProjectName), &EditorSession::createProjectThunk, this);

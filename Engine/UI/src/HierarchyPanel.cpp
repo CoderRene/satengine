@@ -64,10 +64,10 @@ struct HierarchyPanel::Impl {
     std::vector<Links> m_links;
     std::vector<std::size_t> m_branchEnds;
 
-    enum class Action { None, Remove, Duplicate, AddChild, Group, Reparent, AddMesh };
+    enum class Action { None, Remove, Duplicate, AddChild, Group, Reparent, MoveBefore, MoveAfter, AddMesh };
     Action m_action = Action::None;
     EntityId m_target = kInvalidEntityId;
-    EntityId m_parent = kInvalidEntityId;
+    EntityId m_destination = kInvalidEntityId;
     std::string m_droppedMeshPath;
     std::string m_meshDropError;
     std::string m_duplicateError;
@@ -211,10 +211,32 @@ struct HierarchyPanel::Impl {
         }
     }
 
-    void queue(Action action, EntityId target, EntityId parent = kInvalidEntityId) {
+    void queue(Action action, EntityId target, EntityId destination = kInvalidEntityId) {
         m_action = action;
         m_target = target;
-        m_parent = parent;
+        m_destination = destination;
+    }
+
+    void moveSelection() {
+        if (m_action == Action::Reparent) {
+            if (!canDrop(m_target, m_destination)) {
+                return;
+            }
+            for (const EntityId id : selectionRoots(m_target)) {
+                (void)m_scene->setParent(id, m_destination);
+            }
+        } else if (!m_scene->moveEntitiesBeside(selectionRoots(m_target), m_destination,
+                       m_action == Action::MoveAfter)) {
+            return;
+        }
+
+        if (!m_selected.contains(m_target)) {
+            selectOnly(m_target);
+        } else {
+            m_primary = m_target;
+            m_selectionActivated = true;
+        }
+        m_reveal = m_target;
     }
 
     void removeSelection() {
@@ -312,8 +334,7 @@ struct HierarchyPanel::Impl {
     }
 
     void applyQueuedAction() {
-        // Apply structural edits after traversal, since removal can swap indices
-        // and creation can invalidate references into the scene.
+        // Apply structural edits after traversal to keep links and entity references valid while drawing.
         switch (m_action) {
         case Action::Remove:
             removeSelection();
@@ -349,18 +370,9 @@ struct HierarchyPanel::Impl {
             break;
         }
         case Action::Reparent:
-            if (canDrop(m_target, m_parent)) {
-                for (const EntityId id : selectionRoots(m_target)) {
-                    (void)m_scene->setParent(id, m_parent);
-                }
-                if (!m_selected.contains(m_target)) {
-                    selectOnly(m_target);
-                } else {
-                    m_primary = m_target;
-                    m_selectionActivated = true;
-                }
-                m_reveal = m_target;
-            }
+        case Action::MoveBefore:
+        case Action::MoveAfter:
+            moveSelection();
             break;
         case Action::AddMesh:
             addDroppedMesh();
@@ -404,7 +416,7 @@ struct HierarchyPanel::Impl {
 
         auto& root = m_scene->createEntity(std::move(name));
         const EntityId rootId = root.id();
-        (void)m_scene->setParent(rootId, m_parent);
+        (void)m_scene->setParent(rootId, m_destination);
         if (!settings.preserveNodeHierarchy) {
             root.hasMesh = true;
             root.mesh.meshPath = path;
@@ -427,34 +439,87 @@ struct HierarchyPanel::Impl {
         selectOnly(rootId);
     }
 
-    void acceptDrop(EntityId parent) {
+    void acceptEntityDrop(EntityId child, const Entity* row) {
+        const EntityId rowId = row ? row->id() : kInvalidEntityId;
+        if (row) {
+            const ImVec2 top = ImGui::GetItemRectMin();
+            const ImVec2 bottom = ImGui::GetItemRectMax();
+            const float edge = (bottom.y - top.y) * 0.25f;
+            const float mouseY = ImGui::GetMousePos().y;
+            const bool before = mouseY < top.y + edge;
+            if (before || mouseY >= bottom.y - edge) {
+                if (child == rowId || (m_selected.contains(child) && m_selected.contains(rowId)) ||
+                    !canDrop(child, row->parentId())) {
+                    return;
+                }
+                const auto* payload = ImGui::AcceptDragDropPayload(kEntityPayload,
+                    ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
+                if (payload && payload->IsPreview()) {
+                    const float y = before ? top.y : bottom.y;
+                    ImGui::GetWindowDrawList()->AddLine({top.x, y}, {bottom.x, y},
+                        ImGui::GetColorU32(ImGuiCol_DragDropTarget), 2.0f);
+                }
+                if (payload && payload->IsDelivery()) {
+                    queue(before ? Action::MoveBefore : Action::MoveAfter, child, rowId);
+                }
+                return;
+            }
+        }
+        if (canDrop(child, rowId) && ImGui::AcceptDragDropPayload(kEntityPayload)) {
+            queue(Action::Reparent, child, rowId);
+        }
+    }
+
+    void acceptDrop(const Entity* row) {
         if (!ImGui::BeginDragDropTarget()) {
             return;
         }
-        const EntityId child = draggedEntity();
-        if (canDrop(child, parent)) {
-            if (ImGui::AcceptDragDropPayload(kEntityPayload)) {
-                queue(Action::Reparent, child, parent);
+        if (const EntityId child = draggedEntity(); child != kInvalidEntityId) {
+            acceptEntityDrop(child, row);
+        } else {
+            const auto path = draggedContentPath(ImGui::GetDragDropPayload());
+            if (isMeshAssetPath(path) && ImGui::AcceptDragDropPayload(kContentFilePayload)) {
+                m_droppedMeshPath = path;
+                queue(Action::AddMesh, kInvalidEntityId, row ? row->id() : kInvalidEntityId);
             }
-        }
-        const auto path = draggedContentPath(ImGui::GetDragDropPayload());
-        if (isMeshAssetPath(path) && ImGui::AcceptDragDropPayload(kContentFilePayload)) {
-            m_droppedMeshPath = path;
-            queue(Action::AddMesh, kInvalidEntityId, parent);
         }
         ImGui::EndDragDropTarget();
     }
 
-    bool drawEntity(const Entity& entity, bool hasChildren, bool readOnly) {
+    void expandBranch(std::size_t root) {
+        const auto& entities = m_scene->entities();
+        auto* storage = ImGui::GetStateStorage();
+        std::vector<std::size_t> branches{root};
+        for (std::size_t i = 0; i < branches.size(); ++i) {
+            const std::size_t index = branches[i];
+            pushEntityId(entities[index].id());
+            const ImGuiID treeId = ImGui::GetID(kTreeNode);
+            if (storage->GetInt(treeId) == 0) {
+                storage->SetInt(treeId, 1);
+            }
+            ImGui::PopID();
+
+            for (std::size_t child = m_links[index].firstChild; child != kNoIndex;
+                 child = m_links[child].nextSibling) {
+                if (m_links[child].firstChild != kNoIndex) {
+                    branches.push_back(child);
+                }
+            }
+        }
+    }
+
+    bool drawEntity(std::size_t index, bool readOnly) {
+        const Entity& entity = m_scene->entities()[index];
+        const bool hasChildren = m_links[index].firstChild != kNoIndex;
         const EntityId id = entity.id();
         pushEntityId(id);
         bool open = false;
         if (!readOnly && m_renaming == id) {
-            open = hasChildren && ImGui::GetStateStorage()->GetInt(ImGui::GetID(kTreeNode), 1) != 0;
+            open = hasChildren && ImGui::GetStateStorage()->GetInt(ImGui::GetID(kTreeNode)) != 0;
             drawRename();
         } else {
             ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_NoTreePushOnOpen |
-                ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_DefaultOpen;
+                ImGuiTreeNodeFlags_SpanAvailWidth;
             if (!hasChildren) {
                 flags |= ImGuiTreeNodeFlags_Leaf;
             }
@@ -462,9 +527,16 @@ struct HierarchyPanel::Impl {
                 flags |= ImGuiTreeNodeFlags_Selected;
             }
             open = ImGui::TreeNodeEx(kTreeNode, flags, "%s", entity.name.c_str());
+            const auto& io = ImGui::GetIO();
+            const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+            if (clicked && io.KeyAlt && hasChildren) {
+                m_clicked = kInvalidEntityId;
+                ImGui::PopID();
+                expandBranch(index);
+                return true;
+            }
             if (!readOnly) {
-                const auto& io = ImGui::GetIO();
-                if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+                if (clicked && !ImGui::IsItemToggledOpen()) {
                     if (io.KeyShift || io.KeyCtrl) {
                         m_rowSelection = id;
                     } else if (m_selected.size() <= 1 && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -488,7 +560,7 @@ struct HierarchyPanel::Impl {
                     }
                     ImGui::EndDragDropSource();
                 }
-                acceptDrop(id);
+                acceptDrop(&entity);
 
                 if (ImGui::BeginPopupContextItem("EntityContext")) {
                     if (!m_selected.contains(id)) {
@@ -556,7 +628,7 @@ struct HierarchyPanel::Impl {
             const auto& links = m_links[index];
             m_visible.push_back(entities[index].id());
             drewRename |= entities[index].id() == renaming;
-            if (drawEntity(entities[index], links.firstChild != kNoIndex, readOnly) && links.firstChild != kNoIndex) {
+            if (drawEntity(index, readOnly) && links.firstChild != kNoIndex) {
                 m_branchEnds.push_back(links.nextSibling);
                 ImGui::Indent();
                 index = links.firstChild;
@@ -670,11 +742,11 @@ void HierarchyPanel::onImGuiRender(bool readOnly) {
 
     if (draggedEntity() != kInvalidEntityId) {
         ImGui::Selectable("Drop here to move to root");
-        impl.acceptDrop(kInvalidEntityId);
+        impl.acceptDrop(nullptr);
     } else if (isMeshAssetPath(draggedContentPath(ImGui::GetDragDropPayload()))) {
         const float height = std::max(ImGui::GetFrameHeight(), ImGui::GetContentRegionAvail().y);
         ImGui::Selectable("Drop here to add mesh at root", false, ImGuiSelectableFlags_None, ImVec2(0, height));
-        impl.acceptDrop(kInvalidEntityId);
+        impl.acceptDrop(nullptr);
     }
 
     if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&

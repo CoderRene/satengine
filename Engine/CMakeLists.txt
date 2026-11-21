@@ -387,6 +387,10 @@ target_link_libraries(SatEditor PUBLIC SatRuntime)
 target_link_libraries(SatEditor PRIVATE d3d11 ole32 uuid shell32)
 
 if(BUILD_TESTING)
+    add_executable(SceneCameraSpeedTests UI/tests/SceneCameraSpeedTests.cpp)
+    target_include_directories(SceneCameraSpeedTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/UI/src/module")
+    add_test(NAME SceneCameraSpeed COMMAND SceneCameraSpeedTests)
+
     add_executable(HierarchyDropTests UI/tests/HierarchyDropTests.cpp)
     target_include_directories(HierarchyDropTests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/UI/src/module"

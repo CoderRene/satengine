@@ -36,7 +36,7 @@ foreach(source IN LISTS project_shaders)
     list(APPEND project_shader_args "${path}")
 endforeach()
 add_custom_command(OUTPUT "${pak_output}" "${pak_output}.parts"
-    COMMAND $<TARGET_FILE:SatPakBuilder> "${SAT_GAME_PROJECT}" "${pak_output}" "${pak_keys}" "${CMAKE_BINARY_DIR}/Shaders" "${project_shader_dir}" ${project_shader_args}
+    COMMAND $<TARGET_FILE:SatPakBuilder> "${SAT_GAME_PROJECT}" "${pak_output}" "${pak_keys}" "${SAT_GAME_SHADER_ROOT}/Shaders" "${project_shader_dir}" ${project_shader_args}
     DEPENDS SatShaders ${SAT_SHADER_OUTPUTS} ${project_shader_outputs} SatPakBuilder "${pak_provider}" "${pak_keys}/scripts.bin" "${pak_keys}/textures.bin"
         "${pak_keys}/audio.bin" "${pak_keys}/assets.bin" ${pak_inputs} "${SAT_GAME_PROJECT}/Scene.sat"
         "${CMAKE_CURRENT_BINARY_DIR}/Pak.manifest"

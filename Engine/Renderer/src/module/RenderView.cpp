@@ -181,6 +181,8 @@ void RenderSession::renderOffscreenView(
     context->RSSetViewports(1, &viewport);
     context->OMSetRenderTargets(1, &view.rtv, view.dsv);
 
+    if (!m_state->shaders.hasEditorShaders() || (!drawList.drawGrid && !drawList.drawEditorOverlay)) { return; }
+
     if (drawList.drawGrid && ensureDebugLines()) {
         const auto program = m_state->shaders.program(ShaderId::Grid);
         D3D11_MAPPED_SUBRESOURCE mapped{};

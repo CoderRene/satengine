@@ -13,7 +13,9 @@ generated layout hash before creating the D3D11 programs.
 
 The editor stages loose files under `Shaders/` next to `SatEngine.exe`.
 The editor also stages a separate ImGui shader pair under `EditorShaders/Shaders/` for its DX11 backend.
-GamePlayer reads the renderer entries from the encrypted `.assets.pak` group.
+GamePlayer reads its runtime shader set from the encrypted `.assets.pak` group.
+The grid, camera frustum, transform gizmo, and selection outline passes are
+built only when the editor is enabled and shipped only with the editor.
 Rebuild the executable and archives together when changing a shader layout.
 
 ## Development reload

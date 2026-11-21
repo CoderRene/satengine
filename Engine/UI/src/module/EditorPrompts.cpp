@@ -12,7 +12,7 @@ namespace sat {
 bool EditorSession::requestClose() {
     auto& state = *m_state;
     if (state.closeApproved) { return true; }
-    if (projectOpening() || state.play.decisionPending()) { return false; }
+    if (sceneBusy() || state.play.decisionPending()) { return false; }
     if (state.play.active()) {
         stopPlay();
         if (state.play.decisionPending()) {
@@ -38,8 +38,8 @@ bool EditorSession::requestClose() {
 }
 
 void EditorSession::drawPrompts() {
-    if (projectOpening()) {
-        drawProjectProgress();
+    if (sceneBusy()) {
+        drawSceneProgress();
         return;
     }
     auto& state = *m_state;
@@ -104,28 +104,33 @@ void EditorSession::drawPrompts() {
         }
         ImGui::EndPopup();
     }
-    if (projectOpening()) { drawProjectProgress(); }
+    if (sceneBusy()) { drawSceneProgress(); }
 }
 
-void EditorSession::drawProjectProgress() {
+void EditorSession::drawSceneProgress() {
     auto& state = *m_state;
-    constexpr auto kPopup = "Opening Project";
-    if (!ImGui::IsPopupOpen(kPopup)) {
-        ImGui::OpenPopup(kPopup);
+    const bool startingPlay = state.playPreparation.valid();
+    const char* popup = startingPlay ? "Starting Play" : "Opening Project";
+    if (!ImGui::IsPopupOpen(popup)) {
+        ImGui::OpenPopup(popup);
     }
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    if (ImGui::BeginPopupModal(kPopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        const char* step = !state.preparingProject ? "Loading scene..." :
+    if (ImGui::BeginPopupModal(popup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        const char* step = startingPlay ? "Preparing scene..." : !state.preparingProject ? "Loading scene..." :
             (state.project.isOpen() ? "Saving scene and preparing project..." : "Preparing project...");
         ImGui::TextUnformatted(step);
         ImGui::ProgressBar(-static_cast<float>(ImGui::GetTime()), ImVec2(360.0f, 0.0f), "");
         // Present a frame of progress before consuming even an immediately ready job.
-        const bool ready = state.projectProgressShown &&
-            state.projectOpen.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
-        state.projectProgressShown = true;
-        if (ready) {
-            finishProjectOpen();
-            if (!projectOpening()) { ImGui::CloseCurrentPopup(); }
+        if (state.sceneProgressShown) {
+            constexpr auto kPoll = std::chrono::seconds(0);
+            if (startingPlay && state.playPreparation.wait_for(kPoll) == std::future_status::ready) {
+                finishPlayPreparation();
+            } else if (!startingPlay && state.projectOpen.wait_for(kPoll) == std::future_status::ready) {
+                finishProjectOpen();
+            }
+            if (!sceneBusy()) { ImGui::CloseCurrentPopup(); }
+        } else {
+            state.sceneProgressShown = true;
         }
         ImGui::EndPopup();
     }

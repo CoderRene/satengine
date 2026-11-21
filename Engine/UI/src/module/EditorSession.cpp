@@ -130,12 +130,12 @@ void EditorSession::paceEditor() {
 }
 
 bool EditorSession::canSaveScene() const {
-    return !projectOpening() && m_state->project.isOpen() &&
+    return !sceneBusy() && m_state->project.isOpen() &&
         !m_state->play.active() && !m_state->play.decisionPending();
 }
 
-bool EditorSession::projectOpening() const {
-    return m_state->projectOpen.valid();
+bool EditorSession::sceneBusy() const {
+    return m_state->projectOpen.valid() || m_state->playPreparation.valid();
 }
 
 bool EditorSession::hasUnsavedChanges() const {
@@ -164,13 +164,17 @@ bool EditorSession::saveScene() {
     if (!m_state->project.isOpen()) { return true; }
     if (m_state->viewport && m_state->viewport->transformActive()) { resetViewportInteraction(); }
     if (!m_state->project.saveScene(m_state->scene, m_state->sceneError)) { return false; }
+    recordSavedScene();
+    return true;
+}
+
+void EditorSession::recordSavedScene() {
     auto& state = *m_state;
     const auto selection = state.sceneSelection();
     state.history.capture(state.scene, state.play.decisionPending() ? "Play Edits" : "Scene Edit", 0, std::nullopt,
         state.play.decisionPending() ? &state.prePlaySelection : nullptr, &selection);
     state.history.markSaved();
     m_state->hasSavedScene = true;
-    return true;
 }
 
 void EditorSession::tickScripts(float deltaSeconds) {
@@ -214,19 +218,35 @@ void EditorSession::startPlay() {
 
 void EditorSession::startPlayNow() {
     auto& state = *m_state;
-    if (state.play.active() || state.play.decisionPending() || !state.project.isOpen()) {
+    if (sceneBusy() || state.play.active() || state.play.decisionPending() || !state.project.isOpen()) {
         return;
     }
     resetViewportInteraction();
-    if (!saveScene()) {
+    state.sceneProgressShown = false;
+    try {
+        state.playPreparation = preparePlayScene(state.project, state.scene, hasUnsavedChanges());
+    } catch (const std::exception& error) {
+        state.sceneError = std::string("Could not start preparing Play: ") + error.what();
+    }
+}
+
+void EditorSession::finishPlayPreparation() {
+    auto& state = *m_state;
+    PlayPreparation prepared;
+    try {
+        prepared = state.playPreparation.get();
+    } catch (const std::exception& error) {
+        state.sceneError = std::string("Could not prepare Play: ") + error.what();
         return;
     }
+    state.sceneError = std::move(prepared.error);
+    if (!prepared.scenes) { return; }
+    recordSavedScene();
     state.prePlaySelection = state.sceneSelection();
     state.content->stopAudioPreview();
-    resetViewportInteraction();
     state.gameUi = std::make_unique<GameUi>(state.renderer->uiRenderInterface(), fileAssetReader(state.project.root()));
     state.gameUi->enableHotReload();
-    if (!state.play.start(state.scene, state.project.root(), state.gameUi.get())) {
+    if (!state.play.start(std::move(*prepared.scenes), state.project.root(), state.gameUi.get())) {
         state.gameUi.reset();
         resetViewportInteraction();
     }
@@ -238,11 +258,11 @@ void EditorSession::openProject(const std::filesystem::path& folder) {
 
 void EditorSession::openProjectNow(const std::filesystem::path& folder) {
     auto& state = *m_state;
-    if (projectOpening()) { return; }
+    if (sceneBusy()) { return; }
     resetViewportInteraction();
     state.projectOpenFolder = folder;
     state.preparingProject = false;
-    state.projectProgressShown = false;
+    state.sceneProgressShown = false;
     try {
         state.projectOpen = loadEditorProject(folder, state.project.root());
     } catch (const std::exception& error) {
@@ -254,7 +274,7 @@ void EditorSession::prepareProjectSwitch(ProjectOpenResult opened) {
     auto& state = *m_state;
     resetViewportInteraction();
     state.preparingProject = true;
-    state.projectProgressShown = false;
+    state.sceneProgressShown = false;
     try {
         state.projectOpen = prepareEditorProject(std::move(opened), state.project, state.scene);
     } catch (const std::exception& error) {
@@ -359,7 +379,8 @@ bool EditorSession::createProjectThunk(void* context) {
 }
 
 void EditorSession::prepareClose() {
-    if (projectOpening()) { m_state->projectOpen.wait(); }
+    if (m_state->projectOpen.valid()) { m_state->projectOpen.wait(); }
+    if (m_state->playPreparation.valid()) { m_state->playPreparation.wait(); }
     resetViewportInteraction();
     stopPlay();
     if (m_state->play.decisionPending()) { discardPlayEdits(); }

@@ -3,6 +3,7 @@
 #include "GameUi.hpp"
 
 #include "Input.hpp"
+#include "Project.hpp"
 
 #include <algorithm>
 #include <ranges>
@@ -101,6 +102,17 @@ void applyEntityEdits(const Entity& before, const Entity& after, Entity& live, L
 
 } // namespace
 
+std::future<PlayPreparation> preparePlayScene(const Project& project, const Scene& authored, bool save) {
+    return std::async(std::launch::async, [project, &authored, save] {
+        PlayPreparation result;
+        if (save && !project.saveScene(authored, result.error)) {
+            return result;
+        }
+        result.scenes.emplace(authored, authored);
+        return result;
+    });
+}
+
 PlaySession::PlaySession(const Input& input)
     : m_physics(m_game), m_audio(m_game), m_animation(m_game),
       m_scripts(m_game, &input, &m_log, &m_physics, &m_audio, &m_animation) {}
@@ -178,16 +190,15 @@ std::function<void()> PlaySession::takePendingAction() {
     return std::exchange(m_afterDecision, {});
 }
 
-bool PlaySession::start(Scene& authored, const std::filesystem::path& projectRoot, GameUi* ui) {
-    m_prePlay = authored;
-    m_applied = authored;
-    m_game = authored;
+bool PlaySession::start(PlayScenes prepared, const std::filesystem::path& projectRoot, GameUi* ui) {
+    m_prePlay = std::move(prepared.original);
+    m_game = std::move(prepared.game);
     m_log.clear();
     m_active = true;
     m_gameUi = ui;
     m_scripts.setGameUi(ui);
     if (!m_scripts.start(projectRoot)) {
-        stop(authored);
+        stop(*m_prePlay);
         return false;
     }
     m_focusGame = true;
@@ -195,17 +206,20 @@ bool PlaySession::start(Scene& authored, const std::filesystem::path& projectRoo
 }
 
 void PlaySession::applyEdits(Scene& authored, std::string& error) {
-    if (!m_active || authored.editRevision() == m_applied->editRevision()) { return; }
+    if (!m_active) { return; }
+    // The original is also the last applied state until the first editor edit.
+    const Scene& applied = m_applied ? *m_applied : *m_prePlay;
+    if (authored.editRevision() == applied.editRevision()) { return; }
 
-    if (authored.destructionRevision() != m_applied->destructionRevision()) {
-        for (const Entity& before : m_applied->entities()) {
+    if (authored.destructionRevision() != applied.destructionRevision()) {
+        for (const Entity& before : applied.entities()) {
             if (!authored.entityById(before.id())) {
                 (void)m_game.destroyEntity(before.id());
             }
         }
     }
     for (const Entity& after : authored.entities()) {
-        const Entity* before = m_applied->entityById(after.id());
+        const Entity* before = applied.entityById(after.id());
         if (!before) {
             m_game.addEntityCopy(after);
         } else if (before->parentId() != after.parentId() && m_game.entityById(after.id())) {
@@ -215,7 +229,7 @@ void PlaySession::applyEdits(Scene& authored, std::string& error) {
         }
     }
     for (const Entity& after : authored.entities()) {
-        const Entity* before = m_applied->entityById(after.id());
+        const Entity* before = applied.entityById(after.id());
         Entity* live = m_game.entityById(after.id());
         if (!live) {
             continue;
@@ -257,7 +271,7 @@ void PlaySession::applyEdits(Scene& authored, std::string& error) {
         }
     }
     if (m_audio.running()) {
-        const auto& before = m_applied->audioSettings;
+        const auto& before = applied.audioSettings;
         const auto& after = authored.audioSettings;
         if (before.masterVolume != after.masterVolume) {
             m_audio.setMasterVolume(after.masterVolume);
@@ -268,7 +282,7 @@ void PlaySession::applyEdits(Scene& authored, std::string& error) {
             }
         }
     }
-    const auto& ambientBefore = m_applied->lightingSettings;
+    const auto& ambientBefore = applied.lightingSettings;
     const auto& ambientAfter = authored.lightingSettings;
     auto& ambientLive = m_game.lightingSettings;
     for (int i = 0; i < 3; ++i) {
@@ -284,7 +298,7 @@ void PlaySession::applyEdits(Scene& authored, std::string& error) {
     applyEdit(ambientBefore.shadowSplitLambda, ambientAfter.shadowSplitLambda, ambientLive.shadowSplitLambda);
     applyEdit(ambientBefore.bloom, ambientAfter.bloom, ambientLive.bloom);
     m_game.markEdited();
-    *m_applied = authored;
+    m_applied = authored;
 }
 
 } // namespace sat

@@ -93,7 +93,7 @@ void ShaderLibrary::release() {
     m_programs = {};
     m_compute = {};
     m_projectShaders.clear();
-    m_ready = m_failed = false;
+    m_ready = m_failed = m_hasEditorShaders = false;
 }
 
 ShaderProgram ShaderLibrary::program(ShaderId id) const {
@@ -152,13 +152,18 @@ bool ShaderLibrary::ensure(ID3D11Device* device) {
     };
     std::string manifest;
     if (!read("Shaders/ShaderManifest", manifest)) { return fail(error); }
-    std::string expected = "SatShaders 1\n";
-    expected += kShaderLayoutHash;
-    expected += '\n';
-    for (const auto* name : kShaderNames) {
-        expected += std::string(name) + ".vs.dxbc\n" + name + ".ps.dxbc\n";
-    }
-    for (const auto* name : kComputeShaderNames) { expected += std::string(name) + ".cs.dxbc\n"; }
+    const auto expectedManifest = [](bool includeEditorShaders) {
+        std::string expected = "SatShaders 1\n";
+        expected += kShaderLayoutHash;
+        expected += '\n';
+        for (std::size_t i = 0; i < kShaderNames.size(); ++i) {
+            if (!includeEditorShaders && isEditorShader(static_cast<ShaderId>(i))) { continue; }
+            const auto* name = kShaderNames[i];
+            expected += std::string(name) + ".vs.dxbc\n" + name + ".ps.dxbc\n";
+        }
+        for (const auto* name : kComputeShaderNames) { expected += std::string(name) + ".cs.dxbc\n"; }
+        return expected;
+    };
     // CMake can write CRLF on Windows. Keep the manifest comparison strict
     // after normalizing line endings.
     std::size_t length = 0;
@@ -167,8 +172,12 @@ bool ShaderLibrary::ensure(ID3D11Device* device) {
         manifest[length++] = manifest[i];
     }
     manifest.resize(length);
-    if (manifest != expected) { return fail("Shader archive does not match this build"); }
+    m_hasEditorShaders = manifest == expectedManifest(true);
+    if (!m_hasEditorShaders && manifest != expectedManifest(false)) {
+        return fail("Shader archive does not match this build");
+    }
     for (std::size_t i = 0; i < kShaderNames.size(); ++i) {
+        if (!m_hasEditorShaders && isEditorShader(static_cast<ShaderId>(i))) { continue; }
         const auto prefix = std::string("Shaders/") + kShaderNames[i];
         std::string vs, ps;
         if (!read(prefix + ".vs.dxbc", vs) || !read(prefix + ".ps.dxbc", ps)) { return fail(error); }

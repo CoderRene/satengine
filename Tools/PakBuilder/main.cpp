@@ -7,6 +7,7 @@
 #include "AnimationSystem.hpp"
 #include "Scene.hpp"
 #include "SceneFile.hpp"
+#include "module/FbxImport.hpp"
 #include "module/Pak/PakCrypto.hpp"
 #include <lua.hpp>
 #include <algorithm>
@@ -147,12 +148,15 @@ int main(int argc, char** argv) {
                 const auto sourcePath = root / std::filesystem::path(std::u8string(source.begin(), source.end()));
                 if (!std::filesystem::is_regular_file(sourcePath)) { throw std::runtime_error("Orphan import metadata: " + name); }
             }
-            if ((sat::isMeshAssetPath(name) && assets.mesh(name) == nullptr) ||
+            if (sat::isShaderAssetPath(name)) { continue; }
+            std::string bytes = read(path);
+            // FBX can supply animation takes without geometry. Scene mesh references
+            // have already been validated by the strict mesh importer.
+            if ((sat::isMeshAssetPath(name) && assets.mesh(name) == nullptr &&
+                    !(sat::isFbxAssetPath(name) && sat::isFbxAnimationOnly(bytes))) ||
                 (sat::isTextureAssetPath(name) && assets.texture(name) == nullptr)) {
                 throw std::runtime_error(assets.errors().back());
             }
-            if (sat::isShaderAssetPath(name)) { continue; }
-            std::string bytes = read(path);
             if (sat::isAnimationClipAssetPath(name)) {
                 sat::AnimationClipAsset clip; std::string error;
                 if (!sat::decodeAnimationClip(bytes, clip, error)) { throw std::runtime_error(name + ": " + error); }

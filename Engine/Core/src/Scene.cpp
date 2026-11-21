@@ -234,6 +234,70 @@ bool Scene::setParent(EntityId childId, EntityId parentId) {
     return true;
 }
 
+bool Scene::moveEntitiesBeside(std::span<const EntityId> ids, EntityId siblingId, bool after) {
+    const auto siblingIndex = entityIndex(siblingId);
+    if (ids.empty() || !siblingIndex) {
+        return false;
+    }
+    const EntityId parentId = m_entities[*siblingIndex].parentId();
+    const Entity* parent = entityById(parentId);
+    std::vector<std::size_t> moved;
+    moved.reserve(ids.size());
+    for (const EntityId id : ids) {
+        const auto index = entityIndex(id);
+        if (!index || *index == *siblingIndex || !canSetParent(m_entities[*index], parent)) {
+            return false;
+        }
+        moved.push_back(*index);
+    }
+    std::sort(moved.begin(), moved.end());
+    moved.erase(std::unique(moved.begin(), moved.end()), moved.end());
+
+    const std::size_t first = std::min(moved.front(), *siblingIndex);
+    const std::size_t last = std::max(moved.back(), *siblingIndex);
+    std::vector<EntityId> order;
+    order.reserve(last - first + 1);
+    const auto appendMoved = [&] {
+        for (const std::size_t index : moved) {
+            order.push_back(m_entities[index].id());
+        }
+    };
+    auto nextMoved = moved.begin();
+    for (std::size_t index = first; index <= last; ++index) {
+        if (nextMoved != moved.end() && index == *nextMoved) {
+            ++nextMoved;
+            continue;
+        }
+        if (index == *siblingIndex && !after) {
+            appendMoved();
+        }
+        order.push_back(m_entities[index].id());
+        if (index == *siblingIndex && after) {
+            appendMoved();
+        }
+    }
+
+    for (const std::size_t index : moved) {
+        (void)setParent(m_entities[index].id(), parentId);
+    }
+    bool orderChanged = false;
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        const std::size_t index = first + i;
+        Entity& current = m_entities[index];
+        if (current.id() != order[i]) {
+            auto destination = m_entityIndices.find(order[i]);
+            auto displaced = m_entityIndices.find(current.id());
+            std::swap(current, m_entities[destination->second]);
+            std::swap(destination->second, displaced->second);
+            orderChanged = true;
+        }
+    }
+    if (orderChanged) {
+        markEdited();
+    }
+    return true;
+}
+
 bool Scene::moveEntity(EntityId id, DVec3 position) {
     const Entity* root = entityById(id);
     if (!root) {
