@@ -319,6 +319,10 @@ Rml::TextureHandle UiPass::LoadTexture(Rml::Vector2i& dimensions, const Rml::Str
         std::clog << "Game UI: cannot load " << source << ' ' << error << '\n';
         return 0;
     }
+    if (texture.pixels.empty()) {
+        std::clog << "Game UI: expected an RGBA8 image for " << source << '\n';
+        return 0;
+    }
     auto& pixels = texture.pixels;
     for (std::size_t i = 0; i < pixels.size(); i += 4) {
         const unsigned alpha = pixels[i + 3];

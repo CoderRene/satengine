@@ -2,6 +2,7 @@
 #include "AssetImporter.hpp"
 #include "AssetImportSettings.hpp"
 #include "AssetLibrary.hpp"
+#include "CookedTexture.hpp"
 #include "AnimationAsset.hpp"
 #include "AnimationGraph.hpp"
 #include "AnimationSystem.hpp"
@@ -164,16 +165,25 @@ int main(int argc, char** argv) {
                 if (sat::isMeshAssetPath(path)) {
                     sat::PreparedAssetImport asset;
                     const sat::AssetReader track = [&](std::string_view dependency, std::string& data, std::string& reason) {
-                        if (dependency != sidecar) { add(dependency, path); }
-                        return readAsset(dependency, data, reason);
+                        const auto result = readAsset(dependency, data, reason);
+                        if (dependency != sidecar &&
+                            (!sat::isMaterialAssetPath(dependency) || result == sat::AssetReadResult::Found)) {
+                            add(dependency, path);
+                        }
+                        return result;
                     };
                     const auto filePath = root / std::filesystem::path(std::u8string(path.begin(), path.end()));
                     if (!sat::decodeAssetImport(track, path, nullptr, asset, error) &&
                         !(sat::isFbxAssetPath(path) && sat::isFbxAnimationOnly(read(filePath)))) {
                         throw std::runtime_error(path + ": " + error);
                     }
-                    for (const auto& material : asset.mesh.materials) {
-                        materialDependencies(material, path, asset.mesh.embeddedImages);
+                    for (std::size_t slot = 0; slot < asset.mesh.materials.size(); ++slot) {
+                        const auto& links = asset.mesh.materialAssetPaths;
+                        if (!links.empty() && !links[slot].empty()) {
+                            materialDependencies(asset.mesh.materials[slot], links[slot]);
+                        } else {
+                            materialDependencies(asset.mesh.materials[slot], path, asset.mesh.embeddedImages);
+                        }
                     }
                 } else if (sat::isMaterialAssetPath(path)) {
                     sat::MaterialData material;
@@ -261,10 +271,30 @@ int main(int argc, char** argv) {
             std::string bytes = read(path);
             // FBX can supply animation takes without geometry. Scene mesh references
             // have already been validated by the strict mesh importer.
-            if ((sat::isMeshAssetPath(name) && assets.mesh(name) == nullptr &&
-                    !(sat::isFbxAssetPath(name) && sat::isFbxAnimationOnly(bytes))) ||
-                (sat::isTextureAssetPath(name) && assets.texture(name) == nullptr)) {
-                throw std::runtime_error(assets.errors().back());
+            if (sat::isMeshAssetPath(name)) {
+                const auto* mesh = assets.mesh(name);
+                if (!mesh && !(sat::isFbxAssetPath(name) && sat::isFbxAnimationOnly(bytes))) {
+                    throw std::runtime_error(assets.errors().back());
+                }
+                if (mesh) {
+                    for (const auto& image : mesh->embeddedImages) {
+                        sat::TextureData texture;
+                        std::string cooked, preview, error;
+                        if (sat::importTexture(image.bytes, sat::embeddedTextureSettings(*mesh, image.path), texture, error) &&
+                            sat::cookTexture(texture, cooked, preview)) {
+                            entries.push_back({sat::cookedEmbeddedTexturePath(name, image.path), std::move(cooked)});
+                        }
+                    }
+                }
+            }
+            if (sat::isTextureAssetPath(name)) {
+                const auto* texture = assets.texture(name);
+                if (!texture) { throw std::runtime_error(assets.errors().back()); }
+                std::string cooked, preview;
+                if (sat::cookTexture(*texture, cooked, preview)) {
+                    entries.push_back({sat::cookedTexturePath(name, false), std::move(cooked)});
+                    if (!preview.empty()) { entries.push_back({sat::cookedTexturePath(name, true), std::move(preview)}); }
+                }
             }
             if (sat::isAnimationClipAssetPath(name)) {
                 sat::AnimationClipAsset clip; std::string error;
@@ -404,7 +434,9 @@ int main(int argc, char** argv) {
             for (auto& entry : entries) {
                 if (entry.name.empty()) { continue; }
                 std::string category = entry.name.starts_with("Shaders/") ? "assets" : "scripts";
-                if (entry.name.starts_with("Assets/")) {
+                if (entry.name.starts_with("CookedTextures/")) {
+                    category = "textures";
+                } else if (entry.name.starts_with("Assets/")) {
                     auto extension = std::filesystem::path(entry.name).extension().string();
                     std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
                     const std::string imageTypes = ".png .jpg .jpeg .bmp .tga .dds .ktx .ktx2 .hdr .exr .webp";

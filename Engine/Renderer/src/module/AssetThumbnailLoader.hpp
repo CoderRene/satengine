@@ -18,7 +18,7 @@ namespace sat {
 
 class MeshPass;
 
-// Owned by the render thread. The worker decodes textures and prepares meshes
+// Owned by the render thread. Workers decode textures and prepare meshes
 // without using the immediate context. Clearing drops obsolete results.
 class AssetThumbnailLoader {
 public:
@@ -31,13 +31,15 @@ public:
 
     using PrepareMesh = std::function<std::shared_ptr<MeshPass>(const AssetReader&, std::string_view)>;
 
-    // The reader and preparation callback run on the worker.
+    enum class Kind { Texture, Mesh };
+
+    // The reader must support concurrent calls. Mesh preparation runs serially.
     void setReader(AssetReader reader, PrepareMesh prepareMesh = {});
     void clear();
     void stop();
     // Returns whether the loader handles this request, even if the queue is full.
     [[nodiscard]] bool request(std::string_view path);
-    [[nodiscard]] std::optional<Result> takeReady();
+    [[nodiscard]] std::optional<Result> takeReady(Kind kind);
 
 private:
     struct Source {
@@ -47,15 +49,22 @@ private:
     struct Job {
         std::string path;
         std::optional<Result> result;
+        bool started = false;
     };
 
-    void run(std::stop_token stop);
+    using Queue = std::deque<std::shared_ptr<Job>>;
+    void run(std::stop_token stop, Kind kind);
+    [[nodiscard]] Queue& queue(Kind kind);
 
     std::mutex m_mutex;
     std::condition_variable_any m_wake;
     std::shared_ptr<const Source> m_source;
-    std::deque<std::shared_ptr<Job>> m_jobs;
-    std::jthread m_worker; // Joins before the queue and synchronization objects are destroyed.
+    Queue m_textureJobs;
+    Queue m_meshJobs;
+    // Joins before the queues and synchronization objects are destroyed.
+    std::jthread m_textureWorker;
+    std::jthread m_secondTextureWorker;
+    std::jthread m_meshWorker;
 };
 
 }

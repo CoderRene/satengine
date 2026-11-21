@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdint>
 #include <fstream>
+#include <new>
 #include <system_error>
 #include <utility>
 
@@ -17,7 +18,7 @@ std::size_t cost(const MeshData& mesh) {
     auto bytes = mesh.vertices.size() * sizeof(MeshVertex) + mesh.indices.size() * sizeof(std::uint32_t) +
         mesh.sections.size() * sizeof(MeshSection) + mesh.materials.size() * sizeof(MaterialData) + mesh.materialWarning.size();
     bytes += mesh.nodes.size() * sizeof(MeshNode) + mesh.nodeSections.size() * sizeof(MeshSection) +
-        mesh.nodeIndices.size() * sizeof(std::uint32_t);
+        mesh.nodeIndices.size() * sizeof(std::uint32_t) + mesh.lights.size() * sizeof(MeshLight);
     bytes += mesh.skinVertices.size() * sizeof(MeshSkinVertex) + mesh.jointBounds.size() * sizeof(AnimationBounds) + mesh.restPalette.size() * sizeof(Mat4);
     for (const auto& node : mesh.nodes) { bytes += node.name.size(); }
     for (const auto& material : mesh.materials) {
@@ -27,13 +28,16 @@ std::size_t cost(const MeshData& mesh) {
             material.clearcoatRoughnessTexture.size() + material.clearcoatNormalTexture.size() + material.shaderPath.size();
     }
     for (const auto& image : mesh.embeddedImages) { bytes += sizeof(GltfImage) + image.path.size() + image.bytes.size(); }
+    for (const auto& path : mesh.materialAssetPaths) { bytes += sizeof(std::string) + path.size(); }
     for (const auto& name : mesh.materialNames) { bytes += sizeof(std::string) + name.size(); }
     for (const auto& path : mesh.dependencies) { bytes += sizeof(std::string) + path.size(); }
     return bytes;
 }
 std::size_t cost(const TextureData& texture) {
-    std::size_t bytes = texture.pixels.size();
-    for (const auto& mip : texture.mips) { bytes += mip.pixels.size(); }
+    std::size_t bytes = texture.pixels.size() + texture.hdrPixels.size() * sizeof(float);
+    for (const auto& mip : texture.mips) {
+        bytes += mip.pixels.size() + mip.hdrPixels.size() * sizeof(float);
+    }
     return bytes;
 }
 }
@@ -68,8 +72,8 @@ AssetReadResult openAssetFile(const std::filesystem::path& root, std::string_vie
     file.open(candidate, std::ios::binary | std::ios::ate);
     if (!file) { error = "Cannot open asset"; return AssetReadResult::Error; }
     size = file.tellg();
-    const std::size_t limit = shader ? 1024 * 1024 : metadata ? 4096 :
-        isMaterialAssetPath(assetPath) ? 8192 : isShaderAssetPath(assetPath) ? 1024 * 1024 : kMaxAssetBytes;
+    const std::size_t limit = shader ? 1024 * 1024 : metadata ? kMaxImportSettingsBytes :
+        isMaterialAssetPath(assetPath) ? 8192 : isShaderAssetPath(assetPath) ? 1024 * 1024 : assetSourceByteLimit(assetPath);
     if (size < 0 || size > static_cast<std::streamoff>(limit)) { error = "Asset exceeds read limit"; return AssetReadResult::Error; }
     file.seekg(0);
     if (!file) { error = "Cannot seek asset"; return AssetReadResult::Error; }
@@ -165,7 +169,7 @@ const MaterialData* AssetLibrary::material(std::string_view path) {
     return entry.valid ? &entry.data : nullptr;
 }
 bool decodeAssetImport(const AssetReader& reader, std::string_view path, const AssetImportSettings* overrides,
-    PreparedAssetImport& prepared, std::string& error) {
+    PreparedAssetImport& prepared, std::string& error) try {
     error.clear();
     const bool isMesh = isMeshAssetPath(path);
     if (!isMesh && !isTextureAssetPath(path)) { error = "Unsupported or invalid asset path"; return false; }
@@ -187,7 +191,11 @@ bool decodeAssetImport(const AssetReader& reader, std::string_view path, const A
         if (error.empty()) { error = result == AssetReadResult::Missing ? "Asset not found" : "Asset reader failed"; }
         return false;
     }
-    if (bytes.size() > kMaxAssetBytes) { error = "Asset exceeds 64 MiB"; return false; }
+    const auto limit = assetSourceByteLimit(path);
+    if (bytes.size() > limit) {
+        error = "Asset exceeds " + std::to_string(limit / (1024 * 1024)) + " MiB";
+        return false;
+    }
     if (isMesh) {
         std::vector<std::string> dependencies;
         const AssetReader readDependency = [&](std::string_view dependency, std::string& output, std::string& readError) {
@@ -201,12 +209,15 @@ bool decodeAssetImport(const AssetReader& reader, std::string_view path, const A
     } else if (!importTexture(bytes, candidate.settings, candidate.texture, error)) {
         return false;
     }
-    if ((isMesh ? cost(candidate.mesh) : cost(candidate.texture)) > kMaxCacheBytes) {
-        error = "Decoded asset exceeds 256 MiB";
+    if (!isMesh && cost(candidate.texture) > kMaxCacheBytes) {
+        error = "Decoded texture exceeds 256 MiB";
         return false;
     }
     prepared = std::move(candidate);
     return true;
+} catch (const std::bad_alloc&) {
+    error = "Out of memory while importing asset";
+    return false;
 }
 
 bool AssetLibrary::hasSpaceFor(std::string_view path, bool isMesh) const {
@@ -227,8 +238,10 @@ bool AssetLibrary::reserveImport(PreparedAssetImport& prepared, std::string& err
     if (prepared.path.empty()) { error = "No decoded asset to publish"; return false; }
     if (!hasSpaceFor(prepared.path, prepared.isMesh)) { error = "Asset cache limit exceeded (4096 paths)"; return false; }
     prepared.reservedNew = prepared.isMesh ? !m_meshes.contains(prepared.path) : !m_textures.contains(prepared.path);
-    const auto newBytes = prepared.isMesh ? cost(prepared.mesh) : cost(prepared.texture);
-    if (newBytes > kMaxCacheBytes) { error = "Decoded asset exceeds 256 MiB"; return false; }
+    if (!prepared.isMesh && cost(prepared.texture) > kMaxCacheBytes) {
+        error = "Decoded texture exceeds 256 MiB";
+        return false;
+    }
     if (prepared.isMesh) { reserveDecoded(m_meshes, prepared); }
     else { reserveDecoded(m_textures, prepared); }
     return true;
@@ -283,7 +296,9 @@ void AssetLibrary::commitDecoded(DecodedEntry<T>& entry, T&& data) {
     m_recency.splice(m_recency.begin(), m_recency, entry.recency);
     m_cachedBytes -= cost(entry.data);
     const auto newBytes = cost(data);
-    while (newBytes > kMaxCacheBytes - m_cachedBytes) { evictOldest(); }
+    // Let one oversized mesh occupy the cache on its own.
+    const auto availableForOthers = std::max(kMaxCacheBytes, newBytes) - newBytes;
+    while (m_cachedBytes > availableForOthers) { evictOldest(); }
     entry.data = std::move(data);
     m_cachedBytes += newBytes;
     entry.valid = true;

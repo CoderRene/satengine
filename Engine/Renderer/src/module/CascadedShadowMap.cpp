@@ -39,13 +39,6 @@ bool CascadedShadowMap::ensureResources(ID3D11DeviceContext* context, unsigned r
     ComPtr<ID3D11Device> device;
     context->GetDevice(device.GetAddressOf());
 
-    D3D11_SAMPLER_DESC sampler{};
-    sampler.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
-    sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-    sampler.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
-    sampler.MaxAnisotropy = 1;
-    sampler.MaxLOD = D3D11_FLOAT32_MAX;
-
     D3D11_RASTERIZER_DESC rasterizer{};
     rasterizer.FillMode = D3D11_FILL_SOLID;
     rasterizer.CullMode = D3D11_CULL_BACK;
@@ -67,10 +60,6 @@ bool CascadedShadowMap::ensureResources(ID3D11DeviceContext* context, unsigned r
         return false;
     };
     HRESULT hr = S_OK;
-    if (!m_sampler) {
-        hr = device->CreateSamplerState(&sampler, m_sampler.GetAddressOf());
-        if (FAILED(hr)) { return fail(hr); }
-    }
     if (!m_rasterizer) {
         hr = device->CreateRasterizerState(&rasterizer, m_rasterizer.GetAddressOf());
         if (FAILED(hr)) { return fail(hr); }

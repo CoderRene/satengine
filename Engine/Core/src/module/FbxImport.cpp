@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -69,6 +70,44 @@ Mat4 matrixOf(const ufbx_matrix& source) {
         for (int row = 0; row < 3; ++row) { matrix.m[column * 4 + row] = float(source.v[column * 3 + row]); }
     }
     return matrix;
+}
+
+void appendFbxLight(const ufbx_node& node, ufbx_real unitMeters, MeshNode& part, MeshData& mesh) {
+    const auto& source = *node.light;
+    MeshLight imported;
+    auto& light = imported.light;
+    switch (source.type) {
+    case UFBX_LIGHT_DIRECTIONAL: light.type = LightType::Directional; break;
+    case UFBX_LIGHT_POINT: light.type = LightType::Point; break;
+    case UFBX_LIGHT_SPOT: light.type = LightType::Spot; break;
+    default: return;
+    }
+    const ufbx_real color[] = {source.color.x, source.color.y, source.color.z};
+    for (int channel = 0; channel < 3; ++channel) {
+        if (std::isfinite(color[channel])) {
+            light.color[channel] = static_cast<float>(std::clamp(color[channel], ufbx_real(0), ufbx_real(1)));
+        }
+    }
+    // Imported components start active and retain any usable authored intensity.
+    if (source.intensity >= std::numeric_limits<float>::min() &&
+        source.intensity <= std::numeric_limits<float>::max()) {
+        light.intensity = static_cast<float>(source.intensity);
+    }
+    light.castShadow = source.cast_shadows;
+    if (light.type != LightType::Directional && ufbx_find_bool(&source.props, "EnableFarAttenuation", false)) {
+        const auto range = ufbx_find_real(&source.props, "FarAttenuationEnd", 0) * unitMeters;
+        if (range >= std::numeric_limits<float>::min() && range <= std::numeric_limits<float>::max()) {
+            light.range = static_cast<float>(range);
+        }
+    }
+    if (light.type == LightType::Spot && std::isfinite(source.inner_angle) && std::isfinite(source.outer_angle)) {
+        const auto maxAngle = static_cast<ufbx_real>(std::nextafter(90.0f, 0.0f));
+        light.outerConeDegrees = static_cast<float>(std::clamp(source.outer_angle / 2, ufbx_real(0), maxAngle));
+        light.innerConeDegrees = static_cast<float>(std::clamp(source.inner_angle / 2, ufbx_real(0), ufbx_real(light.outerConeDegrees)));
+    }
+    imported.direction = vectorOf(ufbx_transform_direction(&node.node_to_world, source.local_direction));
+    part.lightIndex = static_cast<std::uint32_t>(mesh.lights.size());
+    mesh.lights.push_back(imported);
 }
 
 AnimationPose poseOf(const ufbx_transform& transform) {
@@ -413,6 +452,7 @@ bool decodeFbxMesh(std::string_view path, std::string_view bytes, const AssetRea
         part.origin[0] = float(origin.x);
         part.origin[1] = float(origin.y);
         part.origin[2] = float(origin.z);
+        if (node.light) { appendFbxLight(node, scene->settings.unit_meters, part, candidate); }
         AnimationBounds bounds;
         if (!appendGeometry(model, node, flipV, candidate, bitangents, bounds, error)) { return false; }
         part.sectionCount = static_cast<std::uint32_t>(candidate.sections.size()) - part.firstSection;
@@ -423,8 +463,10 @@ bool decodeFbxMesh(std::string_view path, std::string_view bytes, const AssetRea
         }
         candidate.nodes.push_back(std::move(part));
     }
-    if (candidate.indices.empty()) { return fail(error, "No triangles found in FBX scene"); }
-    meshGeometry::finalizeMesh(candidate, bitangents);
+    if (candidate.indices.empty() && candidate.lights.empty()) {
+        return fail(error, "No triangles or supported lights found in FBX scene");
+    }
+    if (!candidate.indices.empty()) { meshGeometry::finalizeMesh(candidate, bitangents); }
     readMaterials(*scene, path, reader, candidate);
     mesh = std::move(candidate);
     error.clear();

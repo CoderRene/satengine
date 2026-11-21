@@ -716,7 +716,7 @@ struct ViewportPanel::Impl {
                             hoveredHandle = pickTransformGizmo(gizmo(*visibleSelection, visibleScene), view, projection, viewW, viewH, mouseX, mouseY);
                         }
                         if (!gizmoDrag.active() && leftClicked) {
-                            if (selected && visibleSelection && hoveredHandle.handle >= 0) {
+                            if (!io.KeyAlt && selected && visibleSelection && hoveredHandle.handle >= 0) {
                                 dragPivot = pivot(*visibleSelection, visibleScene);
                                 if (captureTargets(visibleScene) && gizmoDrag.begin(selected->id(), dragPivot, tool, space(), hoveredHandle,
                                         view, projection, viewW, viewH, mouseX, mouseY, cam.position,
@@ -752,8 +752,9 @@ struct ViewportPanel::Impl {
                                     }
                                 }
                                 selectionActivated = true;
-                                toggleSelection = io.KeyCtrl;
-                                const auto authoredIndex = scene->entityIndex(scene->selectionRootId(bestEntity));
+                                toggleSelection = io.KeyAlt;
+                                const EntityId pickedId = toggleSelection ? bestEntity : scene->selectionRootId(bestEntity);
+                                const auto authoredIndex = scene->entityIndex(pickedId);
                                 selectedIndex = authoredIndex ? static_cast<int>(*authoredIndex) : -1;
                             }
                         }

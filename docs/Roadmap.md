@@ -105,7 +105,7 @@ orbits, planet-sized colliders, and networked physics.
 
 ---
 
-## Next — bigger projects & visuals
+## Done — bigger projects & visuals
 
 **Bigger projects:** as folders grow, waiting on manual reimport and fully
 in-memory packs gets annoying. Planned improvements include watching assets for

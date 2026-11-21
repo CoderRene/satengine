@@ -1,5 +1,7 @@
 #include "AssetImportSettings.hpp"
 
+#include "AssetData.hpp"
+
 #include <cmath>
 #include <fstream>
 #include <iomanip>
@@ -7,6 +9,7 @@
 #include <locale>
 #include <sstream>
 #include <system_error>
+#include <utility>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -18,7 +21,7 @@
 namespace sat {
 bool parseImportSettings(std::string_view text, AssetImportSettings& settings, std::string& error) {
     error.clear();
-    if (text.size() > 4096) { error = "Import metadata exceeds 4096 bytes"; return false; }
+    if (text.size() > kMaxImportSettingsBytes) { error = "Import metadata exceeds 1 MiB"; return false; }
     std::istringstream input{std::string(text)};
     input.imbue(std::locale::classic());
     std::string magic;
@@ -26,8 +29,8 @@ bool parseImportSettings(std::string_view text, AssetImportSettings& settings, s
     int filter = 0;
     int wrap = 0;
     AssetImportSettings candidate;
-    if (text.size() > 4096 || !(input >> magic >> version >> candidate.scale >> candidate.rightHanded >> candidate.flipV
-        >> candidate.maximumSize >> filter >> wrap >> candidate.mipmaps) || magic != "SatImport" || (version < 1 || version > 4) ||
+    if (!(input >> magic >> version >> candidate.scale >> candidate.rightHanded >> candidate.flipV
+        >> candidate.maximumSize >> filter >> wrap >> candidate.mipmaps) || magic != "SatImport" || (version < 1 || version > 5) ||
         !std::isfinite(candidate.scale) || candidate.scale <= 0 || candidate.maximumSize < 32 || candidate.maximumSize > 4096 ||
         (candidate.maximumSize & (candidate.maximumSize - 1)) != 0 || filter < 0 || filter > 2 || wrap < 0 || wrap > 1) {
         error = "Invalid SatImport settings or unsupported version";
@@ -49,11 +52,23 @@ bool parseImportSettings(std::string_view text, AssetImportSettings& settings, s
         error = "Invalid node hierarchy import setting";
         return false;
     }
+    if (version >= 5) {
+        while (input >> std::ws && !input.eof()) {
+            std::int64_t index = 0;
+            std::string path;
+            if (!(input >> index >> std::quoted(path)) || index < 0 ||
+                index >= std::numeric_limits<std::uint32_t>::max() || !isMaterialAssetPath(path) ||
+                !candidate.materialLinks.try_emplace(static_cast<std::uint32_t>(index), std::move(path)).second) {
+                error = "Invalid mesh material link";
+                return false;
+            }
+        }
+    }
     input >> std::ws;
     if (!input.eof()) { error = "Unexpected data after import settings"; return false; }
     candidate.filter = static_cast<TextureFilter>(filter);
     candidate.wrap = static_cast<TextureWrap>(wrap);
-    settings = candidate;
+    settings = std::move(candidate);
     return true;
 }
 std::string serializeImportSettings(const AssetImportSettings& settings) {
@@ -62,6 +77,7 @@ std::string serializeImportSettings(const AssetImportSettings& settings) {
     int version = settings.audioLoadMode != AudioLoadMode::Auto ? 2 : 1;
     if (settings.mergeGeometry) { version = 3; }
     if (settings.preserveNodeHierarchy) { version = 4; }
+    if (!settings.materialLinks.empty()) { version = 5; }
     output << "SatImport " << version << '\n' << std::setprecision(std::numeric_limits<float>::max_digits10)
         << settings.scale << ' ' << settings.rightHanded << ' ' << settings.flipV << '\n'
         << settings.maximumSize << ' ' << static_cast<int>(settings.filter) << ' '
@@ -69,6 +85,9 @@ std::string serializeImportSettings(const AssetImportSettings& settings) {
     if (version >= 2) { output << static_cast<int>(settings.audioLoadMode) << '\n'; }
     if (version >= 3) { output << settings.mergeGeometry << '\n'; }
     if (version >= 4) { output << settings.preserveNodeHierarchy << '\n'; }
+    for (const auto& [index, path] : settings.materialLinks) {
+        output << index << ' ' << std::quoted(path) << '\n';
+    }
     return output.str();
 }
 bool loadImportSettings(const std::filesystem::path& source, AssetImportSettings& settings, std::string& error) {
@@ -81,7 +100,7 @@ bool loadImportSettings(const std::filesystem::path& source, AssetImportSettings
     if (ec) { error = ec.message(); return false; }
     if (!std::filesystem::is_regular_file(path, ec) || ec) { error = "Import metadata is not a readable regular file"; return false; }
     std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file || file.tellg() < 0 || file.tellg() > 4096) { error = "Cannot read bounded import metadata"; return false; }
+    if (!file || file.tellg() < 0 || file.tellg() > static_cast<std::streamoff>(kMaxImportSettingsBytes)) { error = "Cannot read bounded import metadata"; return false; }
     std::string text(static_cast<std::size_t>(file.tellg()), '\0');
     file.seekg(0);
     if (!file.read(text.data(), static_cast<std::streamsize>(text.size()))) { error = "Cannot read import metadata"; return false; }

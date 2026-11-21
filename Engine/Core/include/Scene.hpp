@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioTypes.hpp"
+#include "LightComponent.hpp"
 #include "Math.hpp"
 #include "PhysicsTypes.hpp"
 #include "ScriptFields.hpp"
@@ -56,22 +57,6 @@ struct CameraComponent {
     float clearColor[4] = {0.12f, 0.16f, 0.24f, 1.0f};
     bool isMain = false;
     bool operator==(const CameraComponent&) const = default;
-
-};
-
-enum class LightType { Directional, Point, Spot };
-
-// Direction follows the entity rotation's +Z axis. Range is in world units.
-// Spot cone angles are half-angles in degrees. Colors and intensity are linear.
-struct LightComponent {
-    LightType type = LightType::Directional;
-    float color[3] = {1.0f, 1.0f, 1.0f};
-    float intensity = 1.0f;
-    float range = 10.0f;
-    float innerConeDegrees = 20.0f;
-    float outerConeDegrees = 35.0f;
-    bool castShadow = false;
-    bool operator==(const LightComponent&) const = default;
 
 };
 

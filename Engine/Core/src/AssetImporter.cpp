@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -16,6 +18,26 @@ namespace {
 bool valid(const AssetImportSettings& settings, std::string& error) {
     AssetImportSettings checked;
     return parseImportSettings(serializeImportSettings(settings), checked, error);
+}
+void applyMaterialLinks(const AssetReader& reader, const AssetImportSettings& settings,
+    const std::vector<std::uint32_t>& sourceMaterialIndices, MeshData& mesh) {
+    if (!reader || settings.materialLinks.empty()) { return; }
+
+    std::string bytes, error;
+    for (std::size_t i = 0; i < mesh.materials.size(); ++i) {
+        const auto sourceIndex = sourceMaterialIndices.empty() ? static_cast<std::uint32_t>(i) : sourceMaterialIndices[i];
+        const auto link = settings.materialLinks.find(sourceIndex);
+        if (link == settings.materialLinks.end()) { continue; }
+        MaterialData material;
+        if (reader(link->second, bytes, error) != AssetReadResult::Found || !decodeMaterial(bytes, material, error)) {
+            if (!mesh.materialWarning.empty()) { mesh.materialWarning += '\n'; }
+            mesh.materialWarning += "Cannot load linked material " + link->second;
+            continue;
+        }
+        if (mesh.materialAssetPaths.empty()) { mesh.materialAssetPaths.resize(mesh.materials.size()); }
+        mesh.materialAssetPaths[i] = link->second;
+        mesh.materials[i] = std::move(material);
+    }
 }
 // Group opaque and alpha-masked ranges in first-use order. Retain blended
 // ranges for sorting and volume ranges for their baked thickness scales.
@@ -66,21 +88,53 @@ void mergeMeshSections(MeshData& mesh) {
     mesh.sections = std::move(merged);
 }
 
-std::vector<unsigned char> resize(const std::vector<unsigned char>& source, int width, int height, int outWidth, int outHeight) {
-    std::vector<unsigned char> output(static_cast<std::size_t>(outWidth) * outHeight * 4);
+template <typename Pixel>
+std::vector<Pixel> resize(const std::vector<Pixel>& source, int width, int height, int outWidth, int outHeight) {
+    std::vector<Pixel> output(static_cast<std::size_t>(outWidth) * outHeight * 4);
+    // Whole-pixel boxes are common for power-of-two textures and mip levels.
+    if (width % outWidth == 0 && height % outHeight == 0) {
+        const int stepX = width / outWidth;
+        const int stepY = height / outHeight;
+        const auto area = static_cast<unsigned>(stepX * stepY);
+        using Sum = std::conditional_t<std::is_same_v<Pixel, unsigned char>, std::uint32_t, double>;
+        for (int y = 0; y < outHeight; ++y) {
+            for (int x = 0; x < outWidth; ++x) {
+                Sum channels[4]{};
+                for (int sy = 0; sy < stepY; ++sy) {
+                    const auto offset = (static_cast<std::size_t>(y * stepY + sy) * width + x * stepX) * 4;
+                    const auto* row = source.data() + offset;
+                    for (int sx = 0; sx < stepX * 4; sx += 4) {
+                        for (int channel = 0; channel < 4; ++channel) { channels[channel] += row[sx + channel]; }
+                    }
+                }
+                const auto offset = (static_cast<std::size_t>(y) * outWidth + x) * 4;
+                for (int channel = 0; channel < 4; ++channel) {
+                    if constexpr (std::is_same_v<Pixel, unsigned char>) {
+                        output[offset + channel] = static_cast<Pixel>((channels[channel] + area / 2) / area);
+                    } else {
+                        output[offset + channel] = static_cast<Pixel>(channels[channel] / area);
+                    }
+                }
+            }
+        }
+        return output;
+    }
+
     // Area-weighted box filter includes the full image, including odd edges.
     const double scaleX = static_cast<double>(width) / outWidth;
     const double scaleY = static_cast<double>(height) / outHeight;
     for (int y = 0; y < outHeight; ++y) {
         const double top = y * scaleY;
         const double bottom = (y + 1) * scaleY;
+        const int lastY = std::min(height, static_cast<int>(std::ceil(bottom)));
         for (int x = 0; x < outWidth; ++x) {
             const double left = x * scaleX;
             const double right = (x + 1) * scaleX;
+            const int lastX = std::min(width, static_cast<int>(std::ceil(right)));
             double channels[4]{};
-            for (int sy = static_cast<int>(top); sy < std::min(height, static_cast<int>(std::ceil(bottom))); ++sy) {
+            for (int sy = static_cast<int>(top); sy < lastY; ++sy) {
                 const double weightY = std::min(bottom, static_cast<double>(sy + 1)) - std::max(top, static_cast<double>(sy));
-                for (int sx = static_cast<int>(left); sx < std::min(width, static_cast<int>(std::ceil(right))); ++sx) {
+                for (int sx = static_cast<int>(left); sx < lastX; ++sx) {
                     const double weight = weightY * (std::min(right, static_cast<double>(sx + 1)) - std::max(left, static_cast<double>(sx)));
                     const auto offset = (static_cast<std::size_t>(sy) * width + sx) * 4;
                     for (int channel = 0; channel < 4; ++channel) { channels[channel] += source[offset + channel] * weight; }
@@ -88,7 +142,12 @@ std::vector<unsigned char> resize(const std::vector<unsigned char>& source, int 
             }
             const auto offset = (static_cast<std::size_t>(y) * outWidth + x) * 4;
             for (int channel = 0; channel < 4; ++channel) {
-                output[offset + channel] = static_cast<unsigned char>(std::clamp(std::round(channels[channel] / (scaleX * scaleY)), 0.0, 255.0));
+                const double average = channels[channel] / (scaleX * scaleY);
+                if constexpr (std::is_same_v<Pixel, unsigned char>) {
+                    output[offset + channel] = static_cast<Pixel>(std::clamp(std::round(average), 0.0, 255.0));
+                } else {
+                    output[offset + channel] = static_cast<Pixel>(average);
+                }
             }
         }
     }
@@ -99,13 +158,23 @@ bool importMesh(std::string_view path, std::string_view bytes, const AssetReader
     const AssetImportSettings& settings, MeshData& mesh, std::string& error) {
     if (!valid(settings, error)) { return false; }
     MeshData candidate;
+    std::vector<std::uint32_t> sourceMaterialIndices;
     if (isFbxAssetPath(path)) {
         if (!decodeFbxMesh(path, bytes, reader, settings.flipV, candidate, error)) { return false; }
     } else if (isGltfAssetPath(path)) {
-        if (!decodeGltf(bytes, path, reader, candidate, error)) { return false; }
-    } else if (!decodeObj(bytes, candidate, error, settings.rightHanded, settings.flipV)) {
-        return false;
+        auto* indices = settings.materialLinks.empty() ? nullptr : &sourceMaterialIndices;
+        if (!decodeGltf(bytes, path, reader, candidate, error, indices)) { return false; }
+    } else {
+        std::vector<ObjMaterial> materials;
+        if (!settings.materialLinks.empty()) {
+            // Retain geometry if a material library has gone missing.
+            (void)decodeObjMaterials(bytes, path, reader, materials, candidate.materialWarning);
+        }
+        auto warning = std::move(candidate.materialWarning);
+        if (!decodeObj(bytes, candidate, error, settings.rightHanded, settings.flipV, materials)) { return false; }
+        candidate.materialWarning = std::move(warning);
     }
+    applyMaterialLinks(reader, settings, sourceMaterialIndices, candidate);
     for (auto& vertex : candidate.vertices) {
         vertex.x *= settings.scale;
         vertex.y *= settings.scale;
@@ -125,6 +194,18 @@ bool importMesh(std::string_view path, std::string_view bytes, const AssetReader
                 return false;
             }
         }
+    }
+    for (auto& imported : candidate.lights) {
+        if (imported.light.type == LightType::Directional) { continue; }
+        imported.light.range *= settings.scale;
+        if (!std::isfinite(imported.light.range) || imported.light.range <= 0) {
+            error = "Mesh import produced an invalid light range";
+            return false;
+        }
+    }
+    if (candidate.vertices.empty()) {
+        mesh = std::move(candidate);
+        return true;
     }
     for (auto& palette : candidate.restPalette) {
         palette.m[12] *= settings.scale; palette.m[13] *= settings.scale; palette.m[14] *= settings.scale;
@@ -173,29 +254,37 @@ bool importTexture(std::string_view bytes, const AssetImportSettings& settings, 
     TextureData candidate;
     if (!decodeTexture(bytes, candidate, error)) { return false; }
     const auto info = textureImportInfo(candidate.width, candidate.height, settings);
-    if (candidate.width != info.width || candidate.height != info.height) {
-        candidate.pixels = resize(candidate.pixels, candidate.width, candidate.height, info.width, info.height);
-        candidate.width = info.width;
-        candidate.height = info.height;
-    }
-    candidate.filter = settings.filter;
-    candidate.wrap = settings.wrap;
-    if (settings.mipmaps) {
-        int width = candidate.width;
-        int height = candidate.height;
-        const std::vector<unsigned char>* pixels = &candidate.pixels;
-        // Reserve so pointers to previously generated levels remain stable.
+    const auto buildLevels = [&](auto TextureData::* basePixels, auto TextureMip::* mipPixels) {
+        auto& base = candidate.*basePixels;
+        if (candidate.width != info.width || candidate.height != info.height) {
+            base = resize(base, candidate.width, candidate.height, info.width, info.height);
+        }
+        int width = info.width;
+        int height = info.height;
+        const auto* pixels = &base;
         candidate.mips.reserve(static_cast<std::size_t>(info.mipLevels - 1));
-        while (width > 1 || height > 1) {
+        for (int level = 1; level < info.mipLevels; ++level) {
             const int nextWidth = std::max(1, width / 2);
             const int nextHeight = std::max(1, height / 2);
             auto next = resize(*pixels, width, height, nextWidth, nextHeight);
-            candidate.mips.push_back({nextWidth, nextHeight, std::move(next)});
-            pixels = &candidate.mips.back().pixels;
+            auto& mip = candidate.mips.emplace_back();
+            mip.width = nextWidth;
+            mip.height = nextHeight;
+            mip.*mipPixels = std::move(next);
+            pixels = &(mip.*mipPixels);
             width = nextWidth;
             height = nextHeight;
         }
+    };
+    if (candidate.hdrPixels.empty()) {
+        buildLevels(&TextureData::pixels, &TextureMip::pixels);
+    } else {
+        buildLevels(&TextureData::hdrPixels, &TextureMip::hdrPixels);
     }
+    candidate.width = info.width;
+    candidate.height = info.height;
+    candidate.filter = settings.filter;
+    candidate.wrap = settings.wrap;
     texture = std::move(candidate);
     return true;
 }

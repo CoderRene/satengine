@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AssetImportSettings.hpp"
+#include "LightComponent.hpp"
 #include "Math.hpp"
 
 #include <array>
@@ -32,6 +33,10 @@ using AssetReader = std::function<AssetReadResult(std::string_view, std::string&
 [[nodiscard]] bool isMaterialAssetPath(std::string_view path);
 [[nodiscard]] bool isAudioAssetPath(std::string_view path);
 inline constexpr std::size_t kMaxAssetBytes = 64 * 1024 * 1024;
+inline constexpr std::size_t kMaxGltfBytes = 256 * 1024 * 1024;
+// D3D11 buffer byte widths are unsigned 32-bit values. Devices may impose smaller limits.
+inline constexpr std::size_t kMaxMeshBufferBytes = (std::numeric_limits<std::uint32_t>::max)();
+[[nodiscard]] std::size_t assetSourceByteLimit(std::string_view path);
 
 // Left-handed positions, +Y up, +Z forward. UV origin is top-left.
 struct MeshVertex {
@@ -122,6 +127,11 @@ struct MeshSection {
     std::uint32_t materialIndex = kNoMeshMaterial; // Index into MeshData::materials.
     Vec3 thicknessScale{1, 1, 1}; // Scale baked into the vertices during import.
 };
+inline constexpr auto kNoMeshLight = (std::numeric_limits<std::uint32_t>::max)();
+struct MeshLight {
+    LightComponent light;
+    Vec3 direction{0, 0, 1}; // Asset space, left-handed.
+};
 struct MeshNode {
     std::string name;
     std::uint32_t id = 0; // Stable one-based source node identifier.
@@ -131,6 +141,7 @@ struct MeshNode {
     float origin[3]{};
     float minimum[3]{};
     float maximum[3]{};
+    std::uint32_t lightIndex = kNoMeshLight; // Index into MeshData::lights.
 };
 inline constexpr std::size_t kMaxAnimationJoints = 256;
 inline constexpr std::size_t kMaxAnimationKeys = 1000000;
@@ -188,10 +199,12 @@ struct MeshData {
     std::vector<MeshSection> sections;
     // Parent-first traversal. Nodes reference original ranges when the main mesh is merged.
     std::vector<MeshNode> nodes;
+    std::vector<MeshLight> lights;
     std::vector<MeshSection> nodeSections;
     std::vector<std::uint32_t> nodeIndices;
     bool mergeNodeDraws = false;
     std::vector<MaterialData> materials;
+    std::vector<std::string> materialAssetPaths; // Mesh slots backed by external materials.
     std::vector<std::string> materialNames; // Source order, when available.
     std::vector<GltfImage> embeddedImages;
     std::string materialWarning;
@@ -205,15 +218,19 @@ struct TextureMip {
     int width = 0;
     int height = 0;
     std::vector<unsigned char> pixels;
+    std::vector<float> hdrPixels;
 };
 struct TextureData {
     int width = 0;
     int height = 0;
-    // Row-major RGBA8, top row first.
+    // Row-major RGBA8 or BC7 blocks, top row first.
+    bool blockCompressed = false;
     std::vector<unsigned char> pixels;
     std::vector<TextureMip> mips; // Lower levels only; pixels above owns level zero.
     TextureFilter filter = TextureFilter::Bilinear;
     TextureWrap wrap = TextureWrap::Repeat;
+    // Linear RGBA32F for Radiance HDR, held in place of RGBA8.
+    std::vector<float> hdrPixels;
 };
 
 struct TextureInfo {
@@ -226,12 +243,13 @@ struct TextureInfo {
 // source coordinates; flips V. Fan-triangulates convex polygon faces.
 // Failures preserve the destination and provide line-number context.
 [[nodiscard]] bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error);
-// Importer overload applies source conventions directly, avoiding lossy UV undo.
-[[nodiscard]] bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool rightHanded, bool flipV);
 struct ObjMaterial {
     std::string name;
     MaterialData material;
 };
+// Importer overload applies source conventions directly, avoiding lossy UV undo.
+[[nodiscard]] bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool rightHanded, bool flipV,
+    std::span<const ObjMaterial> materials = {});
 // Reads definitions in OBJ library order. Repeated definitions replace earlier ones.
 [[nodiscard]] bool decodeObjMaterials(std::string_view bytes, std::string_view path, const AssetReader& reader,
     std::vector<ObjMaterial>& materials, std::string& error);
@@ -240,7 +258,7 @@ struct ObjMaterial {
 // Static glTF 2.0 scene flattened into a single left-handed mesh. The reader
 // resolves companion files. Decoder outputs are replaced only on success.
 [[nodiscard]] bool decodeGltf(std::string_view bytes, std::string_view path, const AssetReader& reader,
-    MeshData& mesh, std::string& error);
+    MeshData& mesh, std::string& error, std::vector<std::uint32_t>* sourceMaterialIndices = nullptr);
 [[nodiscard]] bool decodeGltfAnimation(std::string_view bytes, std::string_view path,
     const AssetReader& reader, AnimationData& animation, std::string& error);
 // Lists material names and optional texture labels in source index order without reading companion files.
@@ -251,7 +269,7 @@ struct ObjMaterial {
 // Decodes all materials in source order and returns each shared embedded image once.
 [[nodiscard]] bool decodeGltfMaterials(std::string_view bytes, std::string_view path, const AssetReader& reader,
     std::vector<MaterialData>& materials, std::vector<GltfImage>& embedded, std::string& error);
-// PNG/JPEG decoded to RGBA8; bounded to 4096x4096 and 64 MiB decoded data.
+// PNG/JPEG to RGBA8 and Radiance HDR to linear RGBA32F. Source images are bounded to 4096x4096.
 [[nodiscard]] bool decodeTexture(std::string_view bytes, TextureData& texture, std::string& error);
 // Reads the PNG/JPEG header from a seekable stream positioned at the start.
 [[nodiscard]] bool readTextureDimensions(std::istream& stream, int& width, int& height, std::string& error);

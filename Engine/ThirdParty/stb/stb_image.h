@@ -7219,7 +7219,10 @@ static float *stbi__hdr_load(stbi__context *s, int *x, int *y, int *comp, int re
          for (i=0; i < width; ++i) {
             stbi_uc rgbe[4];
            main_decode_loop:
-            stbi__getn(s, rgbe, 4);
+            if (!stbi__getn(s, rgbe, 4)) {
+               STBI_FREE(hdr_data);
+               return stbi__errpf("truncated HDR pixels", "Corrupt HDR image");
+            }
             stbi__hdr_convert(hdr_data + j * width * req_comp + i * req_comp, rgbe, req_comp);
          }
       }
@@ -7228,9 +7231,15 @@ static float *stbi__hdr_load(stbi__context *s, int *x, int *y, int *comp, int re
       scanline = NULL;
 
       for (j = 0; j < height; ++j) {
-         c1 = stbi__get8(s);
-         c2 = stbi__get8(s);
-         len = stbi__get8(s);
+         stbi_uc header[4];
+         if (!stbi__getn(s, header, 4)) {
+            STBI_FREE(scanline);
+            STBI_FREE(hdr_data);
+            return stbi__errpf("truncated HDR scanline", "Corrupt HDR image");
+         }
+         c1 = header[0];
+         c2 = header[1];
+         len = header[2];
          if (c1 != 2 || c2 != 2 || (len & 0x80)) {
             // not run-length encoded, so we have to actually use THIS data as a decoded
             // pixel (note this can't be a valid pixel--one of RGB must be >= 128)
@@ -7238,7 +7247,12 @@ static float *stbi__hdr_load(stbi__context *s, int *x, int *y, int *comp, int re
             rgbe[0] = (stbi_uc) c1;
             rgbe[1] = (stbi_uc) c2;
             rgbe[2] = (stbi_uc) len;
-            rgbe[3] = (stbi_uc) stbi__get8(s);
+            if (j != 0) {
+               STBI_FREE(scanline);
+               STBI_FREE(hdr_data);
+               return stbi__errpf("invalid HDR scanline", "Corrupt HDR image");
+            }
+            rgbe[3] = header[3];
             stbi__hdr_convert(hdr_data, rgbe, req_comp);
             i = 1;
             j = 0;
@@ -7246,7 +7260,7 @@ static float *stbi__hdr_load(stbi__context *s, int *x, int *y, int *comp, int re
             goto main_decode_loop; // yes, this makes no sense
          }
          len <<= 8;
-         len |= stbi__get8(s);
+         len |= header[3];
          if (len != width) { STBI_FREE(hdr_data); STBI_FREE(scanline); return stbi__errpf("invalid decoded scanline length", "corrupt HDR"); }
          if (scanline == NULL) {
             scanline = (stbi_uc *) stbi__malloc_mad2(width, 4, 0);
@@ -7263,16 +7277,21 @@ static float *stbi__hdr_load(stbi__context *s, int *x, int *y, int *comp, int re
                count = stbi__get8(s);
                if (count > 128) {
                   // Run
-                  value = stbi__get8(s);
                   count -= 128;
-                  if ((count == 0) || (count > nleft)) { STBI_FREE(hdr_data); STBI_FREE(scanline); return stbi__errpf("corrupt", "bad RLE data in HDR"); }
+                  if ((count > nleft) || !stbi__getn(s, &value, 1)) { STBI_FREE(hdr_data); STBI_FREE(scanline); return stbi__errpf("corrupt", "bad RLE data in HDR"); }
                   for (z = 0; z < count; ++z)
                      scanline[i++ * 4 + k] = value;
                } else {
                   // Dump
                   if ((count == 0) || (count > nleft)) { STBI_FREE(hdr_data); STBI_FREE(scanline); return stbi__errpf("corrupt", "bad RLE data in HDR"); }
-                  for (z = 0; z < count; ++z)
-                     scanline[i++ * 4 + k] = stbi__get8(s);
+                  for (z = 0; z < count; ++z) {
+                     if (!stbi__getn(s, &value, 1)) {
+                        STBI_FREE(hdr_data);
+                        STBI_FREE(scanline);
+                        return stbi__errpf("truncated HDR scanline", "Corrupt HDR image");
+                     }
+                     scanline[i++ * 4 + k] = value;
+                  }
                }
             }
          }

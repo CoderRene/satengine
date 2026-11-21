@@ -156,8 +156,12 @@ bool isSceneModelAssetPath(std::string_view path) {
 bool isGltfAssetPath(std::string_view path) {
     return isValidAssetPath(path) && (extensionIs(path, ".gltf") || extensionIs(path, ".glb"));
 }
+std::size_t assetSourceByteLimit(std::string_view path) {
+    return isGltfAssetPath(path) || extensionIs(path, ".bin") ? kMaxGltfBytes : kMaxAssetBytes;
+}
 bool isTextureAssetPath(std::string_view path) {
-    return isValidAssetPath(path) && (extensionIs(path, ".png") || extensionIs(path, ".jpg") || extensionIs(path, ".jpeg"));
+    return isValidAssetPath(path) && (extensionIs(path, ".png") || extensionIs(path, ".jpg") || extensionIs(path, ".jpeg") ||
+        extensionIs(path, ".hdr"));
 }
 
 bool isShaderAssetPath(std::string_view path) {
@@ -332,7 +336,8 @@ bool decodeObjMaterials(std::string_view bytes, std::string_view path, const Ass
 bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error) {
     return decodeObj(bytes, mesh, error, true, true);
 }
-bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool rightHanded, bool flipV) {
+bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool rightHanded, bool flipV,
+    std::span<const ObjMaterial> materials) {
     error.clear();
     std::size_t lineNumber = 0;
     const auto fail = [&](std::string_view message) {
@@ -347,6 +352,12 @@ bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool 
     std::vector<Vec3> normals;
     std::vector<Vec3> bitangents;
     MeshData candidate;
+    std::unordered_map<std::string_view, std::uint32_t> materialIndices;
+    for (const auto& material : materials) {
+        materialIndices.emplace(material.name, static_cast<std::uint32_t>(candidate.materials.size()));
+        candidate.materials.push_back(material.material);
+    }
+    auto materialIndex = kNoMeshMaterial;
     std::unordered_map<std::uint64_t, std::uint32_t> vertices;
     while (!bytes.empty()) {
         ++lineNumber;
@@ -443,12 +454,21 @@ bool decodeObj(std::string_view bytes, MeshData& mesh, std::string& error, bool 
                     v.nx = faceNormal.x; v.ny = faceNormal.y; v.nz = faceNormal.z;
                 }
             }
+            if (!materials.empty()) {
+                if (candidate.sections.empty() || candidate.sections.back().materialIndex != materialIndex) {
+                    candidate.sections.push_back({static_cast<std::uint32_t>(candidate.indices.size()), 0, materialIndex});
+                }
+                candidate.sections.back().indexCount += static_cast<std::uint32_t>((count - 2) * 3);
+            }
             for (std::size_t i = 1; i + 1 < count; ++i) {
                 accumulateTangent(candidate, bitangents, face[0], face[i], face[i + 1]);
                 if (rightHanded) { candidate.indices.insert(candidate.indices.end(), {face[0], face[i + 1], face[i]}); }
                 else { candidate.indices.insert(candidate.indices.end(), {face[0], face[i], face[i + 1]}); }
             }
-        } else if (kind != "o" && kind != "g" && kind != "s" && kind != "mtllib" && kind != "usemtl") {
+        } else if (kind == "usemtl") {
+            const auto material = materialIndices.find(trimObjValue(line));
+            materialIndex = material == materialIndices.end() ? kNoMeshMaterial : material->second;
+        } else if (kind != "o" && kind != "g" && kind != "s" && kind != "mtllib") {
             return fail("Unsupported record (static polygon OBJ required)");
         }
     }
@@ -475,8 +495,8 @@ const char* gltfResult(cgltf_result result) {
 GltfDocument parseGltf(std::string_view bytes, const cgltf_options& options, std::string& error) {
     error.clear();
     cgltf_data* parsed = nullptr;
-    if (bytes.empty() || bytes.size() > kMaxAssetBytes) {
-        error = "glTF source is empty or exceeds 64 MiB";
+    if (bytes.empty() || bytes.size() > kMaxGltfBytes) {
+        error = "glTF source is empty or exceeds 256 MiB";
     } else if (const auto result = cgltf_parse(&options, bytes.data(), bytes.size(), &parsed);
                result != cgltf_result_success) {
         error = std::string("Cannot parse glTF: ") + gltfResult(result);
@@ -517,8 +537,12 @@ cgltf_result readGltfBuffer(const cgltf_memory_options*, const cgltf_file_option
                 (error.empty() ? (result == AssetReadResult::Missing ? "file not found" : "reader failed") : error);
             return cgltf_result_io_error;
         }
-        if (bytes.size() < *size || bytes.size() > kMaxAssetBytes) {
-            context.error = std::string("glTF buffer is truncated or exceeds 64 MiB: ") + path;
+        if (bytes.size() < *size) {
+            context.error = std::string("glTF buffer is truncated: ") + path;
+            return cgltf_result_io_error;
+        }
+        if (bytes.size() > kMaxGltfBytes) {
+            context.error = std::string("glTF buffer exceeds 256 MiB: ") + path;
             return cgltf_result_io_error;
         }
         void* buffer = std::malloc(*size);
@@ -605,8 +629,9 @@ GltfDocument loadGltf(std::string_view bytes, std::string_view path, GltfReadCon
     std::size_t bufferBytes = 0;
     for (std::size_t i = 0; i < data->buffers_count; ++i) {
         auto& buffer = data->buffers[i];
-        if (!buffer.size || buffer.size > kMaxAssetBytes - bufferBytes) {
-            return fail("glTF buffer data is empty or exceeds 64 MiB in total");
+        if (!buffer.size) { return fail("glTF buffer has zero byte length"); }
+        if (buffer.size > kMaxGltfBytes - bufferBytes) {
+            return fail("glTF buffer data exceeds 256 MiB in total");
         }
         bufferBytes += buffer.size;
         if (buffer.uri) {
@@ -886,8 +911,13 @@ bool appendGltfPrimitive(const cgltf_primitive& primitive, const cgltf_data& dat
     const auto indexCount = primitive.indices ? primitive.indices->count : count;
     auto& mesh = builder.mesh;
     if (indexCount % 3 != 0) { return fail("glTF triangle index count must be a multiple of three"); }
-    if (indexCount > kMaxIndices - mesh.indices.size() || count > kMaxVertices) {
-        return fail("glTF mesh exceeds the vertex or index limit");
+    constexpr auto kVertexCapacity = kMaxMeshBufferBytes / sizeof(MeshVertex);
+    constexpr auto kIndexCapacity = kMaxMeshBufferBytes / sizeof(std::uint32_t);
+    if (indexCount > kIndexCapacity - mesh.indices.size()) {
+        return fail("glTF mesh index data exceeds the GPU buffer size range");
+    }
+    if (count > kVertexCapacity) {
+        return fail("glTF POSITION count exceeds the supported vertex buffer size range");
     }
 
     const Vec3 x{world[0], world[1], world[2]}, y{world[4], world[5], world[6]}, z{world[8], world[9], world[10]};
@@ -904,8 +934,8 @@ bool appendGltfPrimitive(const cgltf_primitive& primitive, const cgltf_data& dat
     const auto colorType = color && color->type == cgltf_type_vec3 ? cgltf_type_vec3 : cgltf_type_vec4;
     const auto colorComponents = cgltf_num_components(colorType);
     const bool flat = !normal || determinant == 0;
-    if ((flat ? indexCount : count) > kMaxVertices - mesh.vertices.size()) {
-        return fail("glTF mesh exceeds the vertex limit");
+    if ((flat ? indexCount : count) > kVertexCapacity - mesh.vertices.size()) {
+        return fail("glTF mesh vertex data exceeds the GPU buffer size range");
     }
     if (!readAttribute(position, cgltf_type_vec3, count, builder.positions) ||
         !readAttribute(normal, cgltf_type_vec3, count, builder.normals) ||
@@ -987,10 +1017,37 @@ bool appendGltfPrimitive(const cgltf_primitive& primitive, const cgltf_data& dat
     return mesh.restPalette.empty() || appendSkin(node, primitive, data, first, count,
         flat ? std::span<const std::uint32_t>(indices) : std::span<const std::uint32_t>{}, mesh, skinSlots, error);
 }
+void appendGltfLight(const cgltf_light& source, const float (&world)[16], MeshNode& part, MeshData& mesh) {
+    MeshLight imported;
+    auto& light = imported.light;
+    switch (source.type) {
+    case cgltf_light_type_directional: light.type = LightType::Directional; break;
+    case cgltf_light_type_point: light.type = LightType::Point; break;
+    case cgltf_light_type_spot: light.type = LightType::Spot; break;
+    default: return;
+    }
+    for (int channel = 0; channel < 3; ++channel) {
+        if (std::isfinite(source.color[channel])) { light.color[channel] = std::clamp(source.color[channel], 0.0f, 1.0f); }
+    }
+    if (source.intensity > 0.0f && std::isfinite(source.intensity)) { light.intensity = source.intensity; }
+    if (light.type != LightType::Directional && std::isfinite(source.range) && source.range > 0) {
+        light.range = source.range;
+    }
+    if (light.type == LightType::Spot && std::isfinite(source.spot_inner_cone_angle) &&
+        std::isfinite(source.spot_outer_cone_angle)) {
+        light.outerConeDegrees = std::clamp(source.spot_outer_cone_angle / kDegToRad, 0.0f, std::nextafter(90.0f, 0.0f));
+        light.innerConeDegrees = std::clamp(source.spot_inner_cone_angle / kDegToRad, 0.0f, light.outerConeDegrees);
+    }
+    // glTF lights point along local -Z. Reflect the world direction into SatEngine space.
+    imported.direction = {-world[8], -world[9], world[10]};
+    part.lightIndex = static_cast<std::uint32_t>(mesh.lights.size());
+    mesh.lights.push_back(imported);
+}
+
 } // namespace
 
 bool decodeGltf(std::string_view bytes, std::string_view path, const AssetReader& reader,
-    MeshData& mesh, std::string& error) {
+    MeshData& mesh, std::string& error, std::vector<std::uint32_t>* sourceMaterialIndices) {
     GltfReadContext context{reader, error};
     const auto data = loadGltf(bytes, path, context);
     if (!data) { return false; }
@@ -1041,6 +1098,7 @@ bool decodeGltf(std::string_view bytes, std::string_view path, const AssetReader
         part.origin[0] = world[12];
         part.origin[1] = world[13];
         part.origin[2] = -world[14];
+        if (node->light) { appendGltfLight(*node->light, world, part, builder.mesh); }
         const Vec3 nodeScale{
             length({world[0], world[1], world[2]}),
             length({world[4], world[5], world[6]}),
@@ -1080,17 +1138,27 @@ bool decodeGltf(std::string_view bytes, std::string_view path, const AssetReader
         }
         builder.mesh.nodes.push_back(std::move(part));
     }
-    if (builder.mesh.indices.empty()) { error = "No triangles found in glTF scene"; return false; }
+    if (builder.mesh.indices.empty() && builder.mesh.lights.empty()) {
+        error = "No triangles or supported lights found in glTF scene";
+        return false;
+    }
     for (const auto& vertex : builder.mesh.vertices) {
         if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y) || !std::isfinite(vertex.z)) {
             error = "glTF node transform produced nonfinite coordinates";
             return false;
         }
     }
-    finalizeMesh(builder.mesh, builder.bitangents);
+    if (!builder.mesh.indices.empty()) { finalizeMesh(builder.mesh, builder.bitangents); }
     builder.mesh.materials.resize(materialSources.size());
     if (!decodeGltfMaterialSources(*data, path, reader, materialSources, builder.mesh.materials,
         builder.mesh.embeddedImages, builder.mesh.materialWarning, false)) { return false; }
+    if (sourceMaterialIndices) {
+        sourceMaterialIndices->clear();
+        sourceMaterialIndices->reserve(materialSources.size());
+        for (const auto* material : materialSources) {
+            sourceMaterialIndices->push_back(static_cast<std::uint32_t>(material - data->materials));
+        }
+    }
     mesh = std::move(builder.mesh);
     return true;
 }

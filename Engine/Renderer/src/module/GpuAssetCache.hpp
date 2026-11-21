@@ -21,6 +21,7 @@ struct GpuMaterial {
     ID3D11ShaderResourceView* views[4]{};
     ID3D11SamplerState* samplers[10]{};
     ID3D11ShaderResourceView* extraViews[6]{}; // Occlusion, transmission, thickness, and three clearcoat maps.
+    bool texturesPending = false;
     bool doubleSided = false;
     bool transmissive = false;
     bool volume = false;
@@ -35,8 +36,11 @@ public:
     void setReader(AssetReader reader, bool asynchronous = false);
     void refresh(ID3D11Device* device, const std::unordered_set<std::string>& paths);
     [[nodiscard]] bool pollUpload(ID3D11Device* device, bool allowReload);
-    [[nodiscard]] bool hasPendingAssets() const;
-    void releaseDecodedAssets();
+    // Prepares a standalone preview on the thumbnail worker using only the D3D device.
+    void prepareThumbnail(ID3D11Device* device, AssetReader reader, std::string_view path);
+    // Render-thread only. Reuses uploaded geometry and waits for its materials.
+    [[nodiscard]] bool prepareResidentThumbnail(ID3D11Device* device, std::string_view path,
+        std::vector<std::string>& dependencies);
     void invalidateMaterial(std::string_view path);
     void invalidateAsset(std::string_view path);
     [[nodiscard]] const GpuMaterial* material(std::string_view path, bool fallback = true) const;

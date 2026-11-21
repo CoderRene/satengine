@@ -1,8 +1,10 @@
 #include "GpuAssetCache.hpp"
 
 #include "AssetImporter.hpp"
+#include "CookedTexture.hpp"
 #include "Math.hpp"
 #include "ShaderLayout.hpp"
+#include "module/RenderBenchmark.hpp"
 
 #include <wrl/client.h>
 
@@ -18,9 +20,9 @@
 #include <future>
 #include <iterator>
 #include <list>
-#include <limits>
 #include <mutex>
 #include <numeric>
+#include <span>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -142,6 +144,7 @@ struct MeshResource {
     Vec3 minimum, maximum;
     Textures embeddedTextures;
     std::vector<MaterialData> sourceMaterials;
+    std::vector<std::string> materialAssetPaths;
     std::vector<std::string> dependencies;
     std::vector<MaterialResource> materials;
     bool materialsReady = false;
@@ -156,20 +159,25 @@ HRESULT createRawView(ID3D11Device& device, ID3D11Buffer* buffer, UINT bytes, ID
 }
 
 bool createMesh(ID3D11Device* device, ID3D11DeviceContext* context, GeometryPool& vertexPool,
-    GeometryPool& indexPool, const MeshData& data, MeshResource& resource, std::string& error) {
-    std::vector<std::uint32_t> combined;
-    if (!data.nodeIndices.empty()) {
-        combined.reserve(data.indices.size() + data.nodeIndices.size());
-        combined.insert(combined.end(), data.indices.begin(), data.indices.end());
-        combined.insert(combined.end(), data.nodeIndices.begin(), data.nodeIndices.end());
-    }
-    const auto& indices = combined.empty() ? data.indices : combined;
-    constexpr auto kMaxBufferBytes = std::numeric_limits<UINT>::max();
-    if (data.vertices.empty() || indices.empty() || data.vertices.size() > kMaxBufferBytes / sizeof(MeshVertex) ||
-        indices.size() > kMaxBufferBytes / sizeof(std::uint32_t)) {
+    GeometryPool& indexPool, const MeshData& data, MeshResource& resource, std::string& error, bool thumbnail) {
+    // A whole-model thumbnail only draws the main index ranges.
+    const auto nodeIndices = thumbnail ? std::span<const std::uint32_t>{} : std::span(data.nodeIndices);
+    const auto nodeSections = thumbnail ? std::span<const MeshSection>{} : std::span(data.nodeSections);
+    const auto nodes = thumbnail ? std::span<const MeshNode>{} : std::span(data.nodes);
+    constexpr auto kIndexCapacity = kMaxMeshBufferBytes / sizeof(std::uint32_t);
+    if (data.vertices.empty() || (data.indices.empty() && nodeIndices.empty()) ||
+        data.vertices.size() > kMaxMeshBufferBytes / sizeof(MeshVertex) ||
+        data.indices.size() > kIndexCapacity || nodeIndices.size() > kIndexCapacity - data.indices.size()) {
         error = "Invalid GPU mesh buffer size";
         return false;
     }
+    std::vector<std::uint32_t> combined;
+    if (!nodeIndices.empty()) {
+        combined.reserve(data.indices.size() + nodeIndices.size());
+        combined.insert(combined.end(), data.indices.begin(), data.indices.end());
+        combined.insert(combined.end(), nodeIndices.begin(), nodeIndices.end());
+    }
+    const auto& indices = combined.empty() ? data.indices : combined;
     const auto vertexCount = static_cast<UINT>(data.vertices.size());
     const auto vertexBytes = static_cast<UINT>(data.vertices.size() * sizeof(MeshVertex));
     const auto indexCount = static_cast<UINT>(indices.size());
@@ -236,20 +244,25 @@ bool createMesh(ID3D11Device* device, ID3D11DeviceContext* context, GeometryPool
     resource.view.indexFormat = DXGI_FORMAT_R32_UINT;
     resource.view.mainSectionCount = static_cast<UINT>(data.sections.size());
     resource.view.mergeNodeDraws = data.mergeNodeDraws;
-    resource.view.sections.reserve(data.sections.size() + data.nodeSections.size());
+    resource.view.sections.reserve(data.sections.size() + nodeSections.size());
     // Cache each section's distinct vertex count at upload time.
-    std::vector<std::uint32_t> lastSection(data.sections.empty() ? 0 : data.vertices.size());
+    std::vector<std::uint32_t> lastSection;
+    if (!thumbnail && (!data.sections.empty() || !nodeSections.empty())) {
+        lastSection.resize(data.vertices.size());
+    }
     const auto appendSections = [&](
-        const std::vector<MeshSection>& ranges, const std::vector<std::uint32_t>& indices, UINT offset) {
+        std::span<const MeshSection> ranges, std::span<const std::uint32_t> indices, UINT offset) {
         for (const auto& range : ranges) {
             auto& section = resource.view.sections.emplace_back(GpuMeshSection{range});
             section.range.firstIndex += offset;
-            const auto sectionId = static_cast<std::uint32_t>(resource.view.sections.size());
-            for (std::uint32_t i = range.firstIndex, end = range.firstIndex + range.indexCount; i < end; ++i) {
-                auto& last = lastSection[indices[i]];
-                if (last != sectionId) {
-                    last = sectionId;
-                    ++section.vertexCount;
+            if (!lastSection.empty()) {
+                const auto sectionId = static_cast<std::uint32_t>(resource.view.sections.size());
+                for (std::uint32_t i = range.firstIndex, end = range.firstIndex + range.indexCount; i < end; ++i) {
+                    auto& last = lastSection[indices[i]];
+                    if (last != sectionId) {
+                        last = sectionId;
+                        ++section.vertexCount;
+                    }
                 }
             }
             if (range.indexCount == 0 || range.materialIndex >= data.materials.size() ||
@@ -269,10 +282,10 @@ bool createMesh(ID3D11Device* device, ID3D11DeviceContext* context, GeometryPool
         }
     };
     appendSections(data.sections, data.indices, 0);
-    appendSections(data.nodeSections, data.nodeIndices, resource.view.indexCount);
-    const UINT sectionOffset = data.nodeSections.empty() ? 0 : resource.view.mainSectionCount;
-    resource.view.nodes.reserve(data.nodes.size());
-    for (const auto& source : data.nodes) {
+    appendSections(nodeSections, nodeIndices, resource.view.indexCount);
+    const UINT sectionOffset = nodeSections.empty() ? 0 : resource.view.mainSectionCount;
+    resource.view.nodes.reserve(nodes.size());
+    for (const auto& source : nodes) {
         if (source.sectionCount == 0) { continue; }
         auto& node = resource.view.nodes.emplace_back();
         node.id = source.id;
@@ -306,38 +319,49 @@ bool createTexture(ID3D11Device* device, const TextureData& data, TextureResourc
     desc.Height = static_cast<UINT>(data.height);
     desc.MipLevels = static_cast<UINT>(data.mips.size() + 1);
     desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
+    const bool hdr = !data.hdrPixels.empty();
+    const UINT bytesPerPixel = hdr ? 16 : 4;
+    desc.Format = data.blockCompressed ? DXGI_FORMAT_BC7_TYPELESS :
+        hdr ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R8G8B8A8_TYPELESS;
     desc.SampleDesc.Count = 1;
     desc.Usage = D3D11_USAGE_IMMUTABLE;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     std::vector<D3D11_SUBRESOURCE_DATA> initial(desc.MipLevels);
-    initial[0].pSysMem = data.pixels.data();
-    initial[0].SysMemPitch = static_cast<UINT>(data.width) * 4;
+    initial[0].pSysMem = hdr ? static_cast<const void*>(data.hdrPixels.data()) : data.pixels.data();
+    const auto rowPitch = [&](int width) {
+        return data.blockCompressed ? static_cast<UINT>((width + 3) / 4) * 16 : static_cast<UINT>(width) * bytesPerPixel;
+    };
+    initial[0].SysMemPitch = rowPitch(data.width);
     for (std::size_t i = 0; i < data.mips.size(); ++i) {
-        initial[i + 1].pSysMem = data.mips[i].pixels.data();
-        initial[i + 1].SysMemPitch = static_cast<UINT>(data.mips[i].width) * 4;
+        const auto& mip = data.mips[i];
+        initial[i + 1].pSysMem = hdr ? static_cast<const void*>(mip.hdrPixels.data()) : mip.pixels.data();
+        initial[i + 1].SysMemPitch = rowPitch(mip.width);
     }
     ComPtr<ID3D11Texture2D> texture;
     HRESULT hr = device->CreateTexture2D(&desc, initial.data(), texture.GetAddressOf());
     D3D11_SHADER_RESOURCE_VIEW_DESC view{};
-    view.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    view.Format = data.blockCompressed ? DXGI_FORMAT_BC7_UNORM : hdr ? desc.Format : DXGI_FORMAT_R8G8B8A8_UNORM;
     view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
     view.Texture2D.MipLevels = desc.MipLevels;
     if (SUCCEEDED(hr)) { hr = device->CreateShaderResourceView(texture.Get(), &view, resource.view.GetAddressOf()); }
     if (FAILED(hr)) { error = "Cannot create GPU texture (HRESULT " + std::to_string(hr) + ")"; return false; }
+    if (hdr) { resource.srgb = resource.view; } // The HDR view already samples in linear space.
     resource.sampler = static_cast<std::size_t>(data.filter) * 2 + static_cast<std::size_t>(data.wrap);
     return true;
 }
 }
 struct GpuAssetCache::Impl {
     AssetLibrary library;
+    AssetReader thumbnailReader; // Set only while preparing a standalone thumbnail.
+    static constexpr int kThumbnailTextureSize = 128;
     GeometryPool vertexPool, indexPool;
     std::unordered_map<std::string, MeshResource, StringHash, std::equal_to<>> meshes;
     Textures textures;
     std::array<ComPtr<ID3D11SamplerState>, 6> samplers;
     std::array<ComPtr<ID3D11SamplerState>, 3 * 3 * 16> materialSamplers;
     std::unordered_map<std::string, MaterialResource, StringHash, std::equal_to<>> materials;
-    std::array<TextureResource, 3> defaults;
+    static constexpr std::size_t kMissingBaseColor = 3;
+    std::array<TextureResource, kMissingBaseColor + 1> defaults;
     bool defaultsReady = false;
     bool defaultsFailed = false;
     std::vector<std::string> errors;
@@ -348,68 +372,135 @@ struct GpuAssetCache::Impl {
         PreparedAssetImport asset;
         std::vector<std::string> dependencies;
         std::string error;
+        bool preview = false;
+        bool measured = false;
+        RenderBenchmark::Clock::duration readTime{};
+        RenderBenchmark::Clock::duration decodeTime{};
     };
+    struct DecodeJob {
+        std::string path;
+        std::future<DecodeResult> result;
+        bool discard = false;
+    };
+
+    static constexpr unsigned kMaxDecodeWorkers = 3;
+    static constexpr auto kUploadBudget = std::chrono::milliseconds(2);
     AssetReader workerReader;
     std::deque<std::string> requests;
     std::unordered_set<std::string, StringHash, std::equal_to<>> scheduled;
     std::unordered_map<std::string, std::vector<std::string>, StringHash, std::equal_to<>> failedDependencies;
-    std::string decoding;
     std::unordered_set<std::string, StringHash, std::equal_to<>> reloads;
-    bool discardDecode = false;
-    std::future<DecodeResult> decode;
+    std::unordered_set<std::string, StringHash, std::equal_to<>> refinements;
+    // The render thread owns request and result state. Each job occupies one
+    // slot until consumed, bounding both active work and decoded results.
+    std::deque<DecodeJob> inFlight;
     std::mutex workerMutex;
     std::condition_variable_any workerReady;
-    std::packaged_task<DecodeResult()> task;
-    // Joins before the task, synchronization, and reader state are released.
-    std::jthread worker;
+    std::deque<std::packaged_task<DecodeResult()>> workerTasks;
+    // Joins before the queue, synchronization, and reader state are released.
+    std::vector<std::jthread> workers;
 
     void enqueue(std::string_view path) {
         if (scheduled.size() < 4096 && scheduled.emplace(path).second) { requests.emplace_back(path); }
     }
     void cancel(std::string_view path) {
-        if (decoding == path) { discardDecode = true; }
+        for (auto& job : inFlight) {
+            if (job.path == path) { job.discard = true; }
+        }
         std::erase(requests, path);
+        if (const auto found = refinements.find(path); found != refinements.end()) { refinements.erase(found); }
         if (const auto found = reloads.find(path); found != reloads.end()) { reloads.erase(found); }
         if (const auto found = scheduled.find(path); found != scheduled.end()) { scheduled.erase(found); }
     }
-    void startDecode(bool allowReload) {
-        if (decode.valid()) { return; }
-        const auto next = std::ranges::find_if(requests, [&](const std::string& path) {
-            return allowReload || !reloads.contains(path);
-        });
-        if (next == requests.end()) { return; }
-        decoding = std::move(*next);
-        requests.erase(next);
-        discardDecode = false;
-        if (!worker.joinable()) {
-            worker = std::jthread([this](std::stop_token stop) {
-                std::unique_lock lock(workerMutex);
-                while (workerReady.wait(lock, stop, [this] { return task.valid(); })) {
-                    if (stop.stop_requested()) { break; }
-                    auto work = std::move(task);
-                    lock.unlock();
-                    work();
-                    lock.lock();
-                }
-            });
-        }
-        std::packaged_task<DecodeResult()> work([reader = workerReader, path = decoding] {
-            DecodeResult result;
-            const AssetReader track = [&](std::string_view dependency, std::string& bytes, std::string& error) {
-                if (dependency != path) { result.dependencies.emplace_back(dependency); }
-                return reader(dependency, bytes, error);
-            };
-            if (!decodeAssetImport(track, path, nullptr, result.asset, result.error) && result.error.empty()) {
-                result.error = "Cannot decode asset";
+    void startDecodes(bool allowReload) {
+        if (requests.empty()) { return; }
+        if (workers.empty()) {
+            const unsigned cores = std::max(2u, std::thread::hardware_concurrency());
+            const unsigned count = std::min(kMaxDecodeWorkers, cores - 1);
+            workers.reserve(count);
+            for (unsigned i = 0; i < count; ++i) {
+                workers.emplace_back([this](std::stop_token stop) {
+                    std::unique_lock lock(workerMutex);
+                    while (workerReady.wait(lock, stop, [this] { return !workerTasks.empty(); })) {
+                        if (stop.stop_requested()) { break; }
+                        auto work = std::move(workerTasks.front());
+                        workerTasks.pop_front();
+                        lock.unlock();
+                        work();
+                        lock.lock();
+                    }
+                });
             }
-            return result;
-        });
-        decode = work.get_future();
-        {
-            const std::lock_guard lock(workerMutex);
-            task = std::move(work);
         }
-        workerReady.notify_one();
+
+        auto next = requests.begin();
+        while (inFlight.size() < workers.size()) {
+            const auto eligible = [&](const std::string& path) {
+                return allowReload || !reloads.contains(path);
+            };
+            // Geometry gets the next available worker even when texture
+            // refinements from previously loaded objects are queued.
+            next = std::find_if(requests.begin(), requests.end(), [&](const std::string& path) {
+                return isMeshAssetPath(path) && eligible(path);
+            });
+            if (next == requests.end()) {
+                next = std::find_if(requests.begin(), requests.end(), [&](const std::string& path) {
+                    return !refinements.contains(path) && eligible(path);
+                });
+            }
+            if (next == requests.end()) { next = std::find_if(requests.begin(), requests.end(), eligible); }
+            if (next == requests.end()) { break; }
+            const bool tryPreview = !refinements.contains(*next) && !reloads.contains(*next);
+            const bool measure = RenderBenchmark::captureAssets() && isTextureAssetPath(*next);
+            std::packaged_task<DecodeResult()> work([reader = workerReader, path = *next, tryPreview, measure] {
+                using Clock = RenderBenchmark::Clock;
+                DecodeResult result;
+                result.measured = measure;
+                const auto start = measure ? Clock::now() : Clock::time_point{};
+                const auto read = [&](std::string_view path, std::string& bytes, std::string& error) {
+                    const auto before = measure ? Clock::now() : Clock::time_point{};
+                    const auto status = reader(path, bytes, error);
+                    if (measure) { result.readTime += Clock::now() - before; }
+                    return status;
+                };
+                if (isTextureAssetPath(path)) {
+                    std::string bytes;
+                    const auto readCooked = [&](bool preview) {
+                        return read(cookedTexturePath(path, preview), bytes, result.error) == AssetReadResult::Found &&
+                            decodeCookedTexture(bytes, result.asset.texture, result.error);
+                    };
+                    result.preview = tryPreview && readCooked(true);
+                    if (result.preview || readCooked(false)) {
+                        result.asset.path = path;
+                        if (measure) { result.decodeTime = Clock::now() - start - result.readTime; }
+                        return result;
+                    }
+                }
+                const AssetReader track = [&](std::string_view dependency, std::string& bytes, std::string& error) {
+                    if (dependency != path) { result.dependencies.emplace_back(dependency); }
+                    return read(dependency, bytes, error);
+                };
+                if (!decodeAssetImport(track, path, nullptr, result.asset, result.error)) {
+                    if (result.error.empty()) { result.error = "Cannot decode asset"; }
+                } else if (result.asset.isMesh) {
+                    prepareEmbeddedTextures(reader, path, result.asset);
+                }
+                if (measure) { result.decodeTime = Clock::now() - start - result.readTime; }
+                return result;
+            });
+            {
+                const std::lock_guard lock(workerMutex);
+                inFlight.push_back({*next, work.get_future()});
+                try {
+                    workerTasks.push_back(std::move(work));
+                } catch (...) {
+                    inFlight.pop_back();
+                    throw;
+                }
+            }
+            next = requests.erase(next);
+            workerReady.notify_one();
+        }
     }
     void reportImportError(std::string_view path, const std::string& error) {
         std::erase_if(errors, [path](const std::string& message) {
@@ -471,29 +562,56 @@ struct GpuAssetCache::Impl {
         }
         return sampler.Get();
     }
+    static void prepareEmbeddedTextures(const AssetReader& reader, std::string_view mesh, PreparedAssetImport& asset) {
+        // A single mesh may contain many large images. Bound the extra decoded
+        // data kept in a worker result; the rest use the existing upload path.
+        constexpr std::size_t kMaxPreparedImageBytes = 96 * 1024 * 1024;
+        std::size_t available = kMaxPreparedImageBytes;
+        for (const auto& image : asset.mesh.embeddedImages) {
+            PreparedEmbeddedTexture prepared;
+            {
+                std::string bytes;
+                if (reader(cookedEmbeddedTexturePath(mesh, image.path), bytes, prepared.error) == AssetReadResult::Found) {
+                    (void)decodeCookedTexture(bytes, prepared.data, prepared.error);
+                }
+            }
+            if (prepared.data.width == 0 &&
+                !importTexture(image.bytes, embeddedTextureSettings(asset.mesh, image.path), prepared.data, prepared.error)) {
+                asset.embeddedTextures.push_back(std::move(prepared));
+                continue;
+            }
+            const auto bytesOf = [](const auto& mip) { return mip.pixels.size() + mip.hdrPixels.size() * sizeof(float); };
+            auto bytes = bytesOf(prepared.data);
+            for (const auto& mip : prepared.data.mips) { bytes += bytesOf(mip); }
+            if (bytes > available) { break; }
+            available -= bytes;
+            asset.embeddedTextures.push_back(std::move(prepared));
+        }
+    }
     bool createMeshAsset(ID3D11Device* device, ID3D11DeviceContext* context, const MeshData& data, MeshResource& resource,
-        std::string& error, std::vector<std::string>& diagnostics) {
-        if (!createMesh(device, context, vertexPool, indexPool, data, resource, error)) { return false; }
+        std::string& error, std::vector<std::string>& diagnostics, std::span<const PreparedEmbeddedTexture> prepared = {}) {
+        // Light-only models have no geometry buffers to upload.
+        const bool lightOnly = data.vertices.empty() && data.indices.empty() && data.nodeIndices.empty() && !data.lights.empty();
+        if (!lightOnly && !createMesh(device, context, vertexPool, indexPool, data, resource, error,
+            static_cast<bool>(thumbnailReader))) { return false; }
         resource.sourceMaterials = data.materials;
+        resource.materialAssetPaths = data.materialAssetPaths;
         resource.dependencies = data.dependencies;
         if (!data.materialWarning.empty()) { diagnostics.push_back(data.materialWarning); }
-        std::unordered_set<std::string_view> glassRoughnessMaps;
-        for (const auto& material : data.materials) {
-            if (material.transmission > 0.0f && !material.metallicRoughnessTexture.empty() &&
-                material.textureSampling[1].mipmaps) {
-                glassRoughnessMaps.insert(material.metallicRoughnessTexture);
-            }
-        }
-        for (const auto& image : data.embeddedImages) {
+        for (std::size_t i = 0; i < data.embeddedImages.size(); ++i) {
+            const auto& image = data.embeddedImages[i];
             auto& texture = resource.embeddedTextures.try_emplace(image.path).first->second;
             TextureData decoded;
             std::string imageError;
-            AssetImportSettings settings;
-            if (glassRoughnessMaps.contains(image.path)) {
-                settings.mipmaps = true;
-                settings.filter = TextureFilter::Trilinear;
+            if (i < prepared.size()) {
+                imageError = prepared[i].error;
+            } else {
+                auto settings = embeddedTextureSettings(data, image.path);
+                if (thumbnailReader) { settings.maximumSize = kThumbnailTextureSize; }
+                (void)importTexture(image.bytes, settings, decoded, imageError);
             }
-            if (!importTexture(image.bytes, settings, decoded, imageError) || !createTexture(device, decoded, texture, imageError)) {
+            const auto& pixels = i < prepared.size() ? prepared[i].data : decoded;
+            if (pixels.width == 0 || !createTexture(device, pixels, texture, imageError)) {
                 diagnostics.push_back(image.path + ": " + imageError);
             }
         }
@@ -522,10 +640,29 @@ struct GpuAssetCache::Impl {
         if (textures.contains(path) || !hasSpace()) { return; }
         auto& destination = textures.try_emplace(std::string(path)).first->second;
         if (workerReader) { enqueue(path); return; }
-        const auto* data = library.texture(path);
-        if (data == nullptr) { reportCpuErrors(); return; }
-        TextureResource candidate;
+        TextureData preview;
+        const TextureData* data = nullptr;
         std::string error;
+        if (thumbnailReader) {
+            AssetImportSettings settings;
+            std::string bytes;
+            const auto metadata = thumbnailReader(std::string(path) + ".satimport", bytes, error);
+            if (metadata != AssetReadResult::Error &&
+                (metadata != AssetReadResult::Found || parseImportSettings(bytes, settings, error)) &&
+                thumbnailReader(path, bytes, error) == AssetReadResult::Found) {
+                settings.maximumSize = std::min(settings.maximumSize, kThumbnailTextureSize);
+                if (importTexture(bytes, settings, preview, error)) { data = &preview; }
+            }
+            if (!data) {
+                if (error.empty()) { error = "Cannot read thumbnail texture"; }
+                errors.push_back(std::string(path) + ": " + error);
+                return;
+            }
+        } else {
+            data = library.texture(path);
+            if (!data) { reportCpuErrors(); return; }
+        }
+        TextureResource candidate;
         if (!createTexture(device, *data, candidate, error) || !ensureSampler(device, candidate.sampler, error)) {
             errors.push_back(std::string(path) + ": " + error); return;
         }
@@ -533,7 +670,10 @@ struct GpuAssetCache::Impl {
     }
     bool ensureDefaults(ID3D11Device* device) {
         if (defaultsReady || defaultsFailed) { return defaultsReady; }
-        const unsigned char pixels[3][4] = {{255, 255, 255, 255}, {128, 128, 255, 255}, {0, 0, 0, 255}};
+        constexpr unsigned char pixels[][4] = {
+            {255, 255, 255, 255}, {128, 128, 255, 255}, {0, 0, 0, 255}, {255, 0, 255, 255}
+        };
+        static_assert(std::size(pixels) == std::tuple_size_v<decltype(defaults)>);
         std::string error;
         TextureData data;
         data.width = data.height = 1;
@@ -553,7 +693,7 @@ struct GpuAssetCache::Impl {
         if (!texture.srgb) {
             D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
             texture.view->GetDesc(&desc);
-            desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+            desc.Format = desc.Format == DXGI_FORMAT_BC7_UNORM ? DXGI_FORMAT_BC7_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
             ComPtr<ID3D11Resource> resource;
             texture.view->GetResource(resource.GetAddressOf());
             if (FAILED(device->CreateShaderResourceView(resource.Get(), &desc, texture.srgb.GetAddressOf()))) {
@@ -566,7 +706,8 @@ struct GpuAssetCache::Impl {
         MaterialResource& material, Textures* embedded = nullptr) {
         constexpr std::size_t kDefaultSampler = 4;
         ID3D11ShaderResourceView* views[] = {
-            defaults[0].view.Get(), defaults[0].view.Get(), defaults[1].view.Get(), defaults[2].view.Get(),
+            defaults[data.baseColorTexture.empty() ? 0 : kMissingBaseColor].view.Get(),
+            defaults[0].view.Get(), defaults[1].view.Get(), defaults[2].view.Get(),
             defaults[0].view.Get(), defaults[0].view.Get(), defaults[0].view.Get(),
             defaults[0].view.Get(), defaults[0].view.Get(), defaults[1].view.Get()
         };
@@ -576,6 +717,7 @@ struct GpuAssetCache::Impl {
         ID3D11SamplerState* boundSamplers[std::size(paths)]{};
         std::array<std::size_t, std::size(paths)> samplerIndices;
         samplerIndices.fill(kDefaultSampler);
+        bool texturesPending = false;
         bool hasEmissiveTexture = false;
         bool hasOcclusionTexture = false;
         bool hasClearcoatNormal = false;
@@ -589,6 +731,7 @@ struct GpuAssetCache::Impl {
                 material.textures.push_back(*paths[i]);
                 loadTexture(device, *paths[i]);
                 if (const auto found = textures.find(*paths[i]); found != textures.end()) { texture = &found->second; }
+                if ((!texture || !texture->view) && scheduled.contains(*paths[i])) { texturesPending = true; }
             }
             if (!texture || !texture->view) { continue; }
             auto* view = i == 0 || i == 3 ? colorView(device, *texture) : texture->view.Get();
@@ -645,6 +788,7 @@ struct GpuAssetCache::Impl {
             return;
         }
         auto& gpu = material.view;
+        gpu.texturesPending = texturesPending;
         gpu.alphaMode = data.alphaMode;
         gpu.shaderPath = data.shaderPath;
         gpu.constants = material.constants.Get();
@@ -667,27 +811,35 @@ struct GpuAssetCache::Impl {
         if (mesh.materialsReady || mesh.sourceMaterials.empty() || !ensureDefaults(device)) { return; }
         mesh.materials.resize(mesh.sourceMaterials.size());
         for (std::size_t i = 0; i < mesh.sourceMaterials.size(); ++i) {
-            createMaterial(device, path, mesh.sourceMaterials[i], mesh.materials[i], &mesh.embeddedTextures);
+            if (!mesh.materialAssetPaths.empty() && !mesh.materialAssetPaths[i].empty()) {
+                createMaterial(device, mesh.materialAssetPaths[i], mesh.sourceMaterials[i], mesh.materials[i]);
+            } else {
+                createMaterial(device, path, mesh.sourceMaterials[i], mesh.materials[i], &mesh.embeddedTextures);
+            }
         }
+        mesh.view.texturesPending = false;
         for (auto& section : mesh.view.sections) {
             const auto index = section.range.materialIndex;
             if (index < mesh.materials.size() && mesh.materials[index].constants) {
                 section.material = &mesh.materials[index].view;
+                mesh.view.texturesPending |= section.material->texturesPending;
             }
         }
         mesh.materialsReady = true;
     }
-    void invalidateTextureMaterials(std::string_view changed) {
+    bool invalidateTextureMaterials(std::string_view changed) {
         const auto uses = [changed](const MaterialResource& material) {
             return std::ranges::find(material.textures, changed) != material.textures.end();
         };
-        std::erase_if(materials, [&](const auto& entry) { return uses(entry.second); });
+        bool invalidated = std::erase_if(materials, [&](const auto& entry) { return uses(entry.second); }) != 0;
         for (auto& [path, mesh] : meshes) {
             if (!mesh.materialsReady || !std::ranges::any_of(mesh.materials, uses)) { continue; }
             for (auto& section : mesh.view.sections) { section.material = nullptr; }
             mesh.materials.clear();
             mesh.materialsReady = false;
+            invalidated = true;
         }
+        return invalidated;
     }
 };
 GpuAssetCache::GpuAssetCache() : m_impl(std::make_unique<Impl>()) {}
@@ -695,9 +847,10 @@ GpuAssetCache::~GpuAssetCache() = default;
 void GpuAssetCache::setReader(AssetReader reader, bool asynchronous) {
     m_impl->requests.clear();
     m_impl->reloads.clear();
+    m_impl->refinements.clear();
     m_impl->scheduled.clear();
     m_impl->failedDependencies.clear();
-    m_impl->discardDecode = true;
+    for (auto& job : m_impl->inFlight) { job.discard = true; }
     m_impl->workerReader = asynchronous ? reader : AssetReader{};
     m_impl->materials.clear(); m_impl->defaults = {};
     m_impl->defaultsReady = m_impl->defaultsFailed = false;
@@ -711,34 +864,80 @@ void GpuAssetCache::setReader(AssetReader reader, bool asynchronous) {
 bool GpuAssetCache::pollUpload(ID3D11Device* device, bool allowReload) {
     auto& cache = *m_impl;
     bool published = false;
-    // At most one decoded asset waits for the render thread and one upload is committed per frame.
-    if (cache.decode.valid() && cache.decode.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-        try {
-            auto result = cache.decode.get();
-            if (!cache.discardDecode && !allowReload && cache.reloads.contains(cache.decoding)) {
-                cache.requests.push_back(cache.decoding);
-                cache.discardDecode = true;
+    if (!cache.inFlight.empty()) {
+        const auto deadline = std::chrono::steady_clock::now() + Impl::kUploadBudget;
+        for (auto job = cache.inFlight.begin(); job != cache.inFlight.end();) {
+            if (job->result.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                ++job;
+                continue;
             }
-            if (!cache.discardDecode) {
-                if (result.error.empty()) {
-                    published = commitImport(device, result.asset, {}, result.error);
-                }
-                if (!published) { cache.failedDependencies[cache.decoding] = std::move(result.dependencies); }
-                else if (const auto found = cache.failedDependencies.find(cache.decoding); found != cache.failedDependencies.end()) {
-                    cache.failedDependencies.erase(found);
-                }
-                if (!published) { cache.reportImportError(cache.decoding, result.error); }
+            if (!job->discard && !allowReload && cache.reloads.contains(job->path)) {
+                cache.requests.push_back(job->path);
+                job->discard = true;
             }
-        } catch (const std::exception& error) {
-            if (!cache.discardDecode) { cache.reportImportError(cache.decoding, error.what()); }
+            if (!job->discard) {
+                bool uploaded = false;
+                bool refine = false;
+                try {
+                    auto result = job->result.get();
+                    if (result.error.empty() && result.asset.isMesh) {
+                        // Start external maps as soon as geometry decoding finishes,
+                        // before the next scene prepare discovers its materials.
+                        for (std::size_t i = 0; i < result.asset.mesh.materials.size(); ++i) {
+                            const auto& mesh = result.asset.mesh;
+                            const auto& material = mesh.materials[i];
+                            const bool linked = i < mesh.materialAssetPaths.size() && !mesh.materialAssetPaths[i].empty();
+                            for (const auto* path : {&material.baseColorTexture, &material.metallicRoughnessTexture,
+                                &material.normalTexture, &material.emissiveTexture, &material.occlusionTexture,
+                                &material.transmissionTexture, &material.thicknessTexture, &material.clearcoatTexture,
+                                &material.clearcoatRoughnessTexture, &material.clearcoatNormalTexture}) {
+                                if (path->empty()) { continue; }
+                                if (!linked && std::ranges::find(mesh.embeddedImages, *path, &GltfImage::path) !=
+                                    mesh.embeddedImages.end()) { continue; }
+                                cache.loadTexture(device, *path);
+                            }
+                        }
+                    }
+                    using Clock = RenderBenchmark::Clock;
+                    const auto start = result.measured ? Clock::now() : Clock::time_point{};
+                    uploaded = result.error.empty() && commitImport(device, result.asset, {}, result.error);
+                    if (result.measured) {
+                        RenderBenchmark::recordTexture(result.preview, uploaded, result.readTime, result.decodeTime,
+                            Clock::now() - start);
+                    }
+                    if (uploaded) {
+                        published = true;
+                        refine = result.preview;
+                        cache.failedDependencies.erase(job->path);
+                    } else {
+                        cache.failedDependencies[job->path] = std::move(result.dependencies);
+                        cache.reportImportError(job->path, result.error);
+                    }
+                } catch (const std::exception& error) {
+                    cache.reportImportError(job->path, error.what());
+                }
+                cache.scheduled.erase(job->path);
+                cache.reloads.erase(job->path);
+                cache.refinements.erase(job->path);
+                if (!uploaded) {
+                    const auto texture = cache.textures.find(job->path);
+                    if (texture != cache.textures.end() && !texture->second.view) {
+                        // Settle materials waiting on a failed first load so they can use their error fallback.
+                        published |= cache.invalidateTextureMaterials(job->path);
+                    }
+                }
+                if (refine) {
+                    cache.enqueue(job->path);
+                    cache.refinements.insert(job->path);
+                }
+            }
+            job = cache.inFlight.erase(job);
+            // An individual upload can't be split. Stop before the next one
+            // once the frame's budget has been spent.
+            if (std::chrono::steady_clock::now() >= deadline) { break; }
         }
-        if (!cache.discardDecode) {
-            cache.scheduled.erase(cache.decoding);
-            cache.reloads.erase(cache.decoding);
-        }
-        cache.decoding.clear();
     }
-    cache.startDecode(allowReload);
+    cache.startDecodes(allowReload);
     return published;
 }
 
@@ -756,9 +955,10 @@ void GpuAssetCache::refresh(ID3D11Device* device, const std::unordered_set<std::
         cache.enqueue(path);
         cache.reloads.insert(path);
     };
-    if (!cache.decoding.empty() && !cache.discardDecode &&
-        (changed(cache.decoding) || isGltfAssetPath(cache.decoding))) {
-        schedule(cache.decoding);
+    for (const auto& job : cache.inFlight) {
+        if (!job.discard && (changed(job.path) || isGltfAssetPath(job.path))) {
+            schedule(job.path);
+        }
     }
     for (const auto& [path, mesh] : cache.meshes) {
         const auto failed = cache.failedDependencies.find(path);
@@ -790,13 +990,44 @@ void GpuAssetCache::refresh(ID3D11Device* device, const std::unordered_set<std::
     }
 }
 
-bool GpuAssetCache::hasPendingAssets() const {
-    return m_impl->decode.valid() || !m_impl->requests.empty();
+void GpuAssetCache::prepareThumbnail(ID3D11Device* device, AssetReader reader, std::string_view path) {
+    setReader(reader);
+    auto& cache = *m_impl;
+    cache.thumbnailReader = std::move(reader);
+    cache.loadMaterial(device, {});
+    if (isMeshAssetPath(path)) {
+        cache.loadMesh(device, nullptr, path);
+        const auto found = cache.meshes.find(path);
+        if (found != cache.meshes.end()) { cache.loadMeshMaterials(device, path, found->second); }
+    } else {
+        cache.loadMaterial(device, path);
+    }
+    // The prepared pass crosses to the render thread without retaining the reader
+    // (which borrows the worker's job) or the full decoded model.
+    cache.thumbnailReader = {};
+    cache.library.setReader({});
+    cache.reportedCpuErrors = 0;
 }
 
-void GpuAssetCache::releaseDecodedAssets() {
-    m_impl->library.setReader({});
-    m_impl->reportedCpuErrors = 0;
+bool GpuAssetCache::prepareResidentThumbnail(ID3D11Device* device, std::string_view path,
+    std::vector<std::string>& dependencies) {
+    auto& cache = *m_impl;
+    const auto found = cache.meshes.find(path);
+    if (found == cache.meshes.end() || !found->second.view.valid() || cache.scheduled.contains(path)) {
+        return false;
+    }
+    auto& mesh = found->second;
+    cache.loadMaterial(device, {});
+    cache.loadMeshMaterials(device, path, mesh);
+    if (mesh.view.texturesPending || !material({}, false)) { return false; }
+
+    dependencies = mesh.dependencies;
+    for (const auto& material : mesh.materials) {
+        dependencies.insert(dependencies.end(), material.textures.begin(), material.textures.end());
+    }
+    return std::ranges::none_of(dependencies, [&](const std::string& dependency) {
+        return cache.scheduled.contains(dependency);
+    });
 }
 void GpuAssetCache::prepare(ID3D11Device* device, const SceneDrawList& drawList, ID3D11DeviceContext* context) {
     if (device == nullptr) { return; }
@@ -881,7 +1112,9 @@ bool GpuAssetCache::publishPrepared(ID3D11Device* device, PreparedAssetImport& p
     if (prepared.isMesh) {
         ComPtr<ID3D11DeviceContext> context;
         device->GetImmediateContext(context.GetAddressOf());
-        if (!m_impl->createMeshAsset(device, context.Get(), prepared.mesh, mesh, error, diagnostics)) { return cancel(); }
+        if (!m_impl->createMeshAsset(device, context.Get(), prepared.mesh, mesh, error, diagnostics, prepared.embeddedTextures)) {
+            return cancel();
+        }
         m_impl->meshes.try_emplace(prepared.path);
     } else {
         if (!createTexture(device, prepared.texture, texture, error) || !m_impl->ensureSampler(device, texture.sampler, error)) { return cancel(); }
@@ -971,7 +1204,7 @@ bool GpuAssetCache::bounds(std::string_view path, Vec3& minimum, Vec3& maximum, 
     }
     const auto* mesh = decodedMesh(path);
     m_impl->reportCpuErrors();
-    if (!mesh) { return false; }
+    if (!mesh || mesh->vertices.empty()) { return false; }
     if (meshNode != 0) {
         const auto node = std::ranges::find(mesh->nodes, meshNode, &MeshNode::id);
         if (node == mesh->nodes.end() || node->sectionCount == 0) { return false; }

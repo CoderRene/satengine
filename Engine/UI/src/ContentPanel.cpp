@@ -93,14 +93,20 @@ void copyDroppedPath(const fs::path& source, const fs::path& folder, std::error_
     }
 }
 
+bool pathEqualsIgnoringCase(std::string_view path, std::string_view name) {
+    return std::ranges::equal(path, name, [](char a, char b) {
+        const auto lower = [](char ch) { return ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch; };
+        return lower(a) == lower(b);
+    });
+}
+
 bool isProtectedFile(std::string_view path) {
-    const auto equals = [path](std::string_view name) {
-        return std::ranges::equal(path, name, [](char a, char b) {
-            const auto lower = [](char ch) { return ch >= 'A' && ch <= 'Z' ? ch + ('a' - 'A') : ch; };
-            return lower(a) == lower(b);
-        });
-    };
-    return equals("SatEngineProject.sat") || equals("Scene.sat");
+    return pathEqualsIgnoringCase(path, "SatEngineProject.sat") || pathEqualsIgnoringCase(path, "Scene.sat");
+}
+
+bool isPathOrChild(std::string_view path, std::string_view parent) {
+    return path == parent ||
+        (path.size() > parent.size() && path.starts_with(parent) && path[parent.size()] == '/');
 }
 
 float lerp(float a, float b, float t) {
@@ -143,7 +149,8 @@ bool isLuaFile(const fs::path& name) {
 }
 
 bool isProtectedDirectory(std::string_view path) {
-    return path == "Assets" || path == "Scripts" || path == "Assets/UI";
+    return pathEqualsIgnoringCase(path, "Assets") || pathEqualsIgnoringCase(path, "Scripts") ||
+        pathEqualsIgnoringCase(path, "Assets/UI");
 }
 
 bool isToolingEntry(std::string_view fileName) {
@@ -291,47 +298,74 @@ void ContentPanel::drawAudioControls() {
 }
 
 void ContentPanel::acceptFileDrops(std::span<const FileDrop> fileDrops) {
-    if (fileDrops.empty() || ImGui::GetTopMostPopupModal() != nullptr) { return; }
+    if (fileDrops.empty() || m_dropImport.valid() || m_delete.valid() ||
+        ImGui::GetTopMostPopupModal() != nullptr) { return; }
     auto* panel = ImGui::GetCurrentWindow();
     if (!ImGui::IsWindowContentHoverable(panel)) { return; }
 
-    fs::path destination;
-    std::size_t failed = 0;
-    std::string firstError;
+    std::vector<fs::path> paths;
     for (const auto& drop : fileDrops) {
         const ImVec2 position(static_cast<float>(drop.position.x), static_cast<float>(drop.position.y));
         if (!panel->OuterRectClipped.Contains(position)) { continue; }
         ImGuiWindow* hovered = nullptr;
         ImGui::FindHoveredWindowEx(position, true, &hovered, nullptr);
         if (hovered != panel) { continue; }
+        paths.insert(paths.end(), drop.paths.begin(), drop.paths.end());
+    }
+    if (paths.empty()) { return; }
 
-        if (destination.empty()) {
-            std::error_code error;
-            const auto root = fs::canonical(m_project->root(), error);
-            if (!error) { destination = fs::canonical(root / m_relative, error); }
-            if (error || !fs::is_directory(destination, error) || !isWithin(destination, root)) {
-                m_dropStatus = "Cannot copy files into this folder. Open a folder inside the project.";
-                if (error) { m_dropStatus += " " + error.message(); }
-                return;
-            }
-        }
-
-        for (const auto& source : drop.paths) {
-            std::error_code error;
-            copyDroppedPath(source, destination, error);
-            if (error) {
-                ++failed;
-                if (firstError.empty()) {
-                    firstError = pathText(source.filename()) + ": " + error.message();
+    m_dropStatus.clear();
+    try {
+        m_importRoot = m_trackedRoot;
+        m_dropImport = std::async(std::launch::async,
+            [projectRoot = m_importRoot, folder = m_relative, paths = std::move(paths)] {
+                std::error_code error;
+                const auto root = fs::canonical(projectRoot, error);
+                const auto destination = error ? fs::path{} : fs::canonical(root / folder, error);
+                if (error || !fs::is_directory(destination, error) || !isWithin(destination, root)) {
+                    std::string message = "Cannot copy files into this folder. Open a folder inside the project.";
+                    if (error) { message += " " + error.message(); }
+                    return message;
                 }
-            }
-        }
-    }
 
-    if (!destination.empty()) {
-        m_dropStatus = failed == 0 ? std::string{} :
-            "Failed to copy " + std::to_string(failed) + ". " + firstError;
+                std::size_t failed = 0;
+                std::string firstError;
+                for (const auto& source : paths) {
+                    error.clear();
+                    copyDroppedPath(source, destination, error);
+                    if (error) {
+                        ++failed;
+                        if (firstError.empty()) {
+                            firstError = pathText(source.filename()) + ": " + error.message();
+                        }
+                    }
+                }
+                return failed == 0 ? std::string{} :
+                    "Failed to copy " + std::to_string(failed) + ". " + firstError;
+            });
+    } catch (const std::exception& error) {
+        m_dropStatus = "Could not start import: " + std::string(error.what());
     }
+}
+
+void ContentPanel::drawImportProgress() {
+    if (!m_dropImport.valid()) { return; }
+    constexpr char kPopup[] = "Importing items";
+    if (!ImGui::IsPopupOpen(kPopup)) { ImGui::OpenPopup(kPopup); }
+    if (!ImGui::BeginPopupModal(kPopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) { return; }
+    ImGui::ProgressBar(-static_cast<float>(ImGui::GetTime()), ImVec2(320.0f, 0.0f), "Copying files...");
+    if (!ImGui::IsWindowAppearing() &&
+        m_dropImport.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        std::string status;
+        try {
+            status = m_dropImport.get();
+        } catch (const std::exception& error) {
+            status = "Import failed: " + std::string(error.what());
+        }
+        if (m_importRoot == m_trackedRoot) { m_dropStatus = std::move(status); }
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 bool ContentPanel::moveFile(std::string_view relativePath, const fs::path& targetFolder) {
@@ -442,12 +476,15 @@ void ContentPanel::moveFiles(std::string_view paths, const fs::path& targetFolde
 
 void ContentPanel::deletePendingFiles() {
     m_dropStatus.clear();
-    if (std::ranges::find(m_pendingDelete, m_selectedAsset) != m_pendingDelete.end()) {
+    if (std::ranges::any_of(m_pendingDelete, [this](const std::string& path) {
+        return m_pendingDeleteFolder ? isPathOrChild(m_selectedAsset, path) : m_selectedAsset == path;
+    })) {
         stopAudioPreview();
     }
     try {
         m_deleteRoot = m_trackedRoot;
-        m_delete = std::async(std::launch::async, [rootPath = m_deleteRoot, paths = std::move(m_pendingDelete)]() mutable {
+        m_delete = std::async(std::launch::async, [rootPath = m_deleteRoot,
+            paths = std::move(m_pendingDelete), directory = m_pendingDeleteFolder]() mutable {
             DeleteResult result;
             result.deleted.reserve(paths.size());
             std::error_code rootError;
@@ -456,11 +493,36 @@ void ContentPanel::deletePendingFiles() {
                 const fs::path relative(std::u8string(path.begin(), path.end()));
                 auto error = rootError;
                 const auto folder = error ? fs::path{} : fs::canonical(root / relative.parent_path(), error);
-                if (!error && (!isWithin(folder, root) ||
-                    (folder == root && isProtectedFile(pathText(relative.filename()))))) {
+                const auto name = relative.filename();
+                if (!error && (!isWithin(folder, root) || name.empty() || name == "." || name == ".." ||
+                    (folder == root && isProtectedFile(pathText(name))))) {
                     error = std::make_error_code(std::errc::operation_not_permitted);
                 }
-                const auto file = folder / relative.filename();
+                const auto file = folder / name;
+                if (directory) {
+                    if (!error) {
+                        const auto status = fs::symlink_status(file, error);
+                        if (!error && !fs::is_directory(status)) {
+                            error = std::make_error_code(std::errc::not_a_directory);
+                        }
+                    }
+                    if (!error) {
+                        const auto resolved = fs::canonical(file, error);
+                        const auto encoded = resolved.lexically_relative(root).generic_u8string();
+                        const std::string projectPath(encoded.begin(), encoded.end());
+                        if (!error && (resolved == root || !isWithin(resolved, root) ||
+                            isProtectedDirectory(projectPath))) {
+                            error = std::make_error_code(std::errc::operation_not_permitted);
+                        }
+                    }
+                    if (!error) {
+                        // A failed recursive delete can still have removed some assets.
+                        result.affectedFolder = path;
+                        fs::remove_all(file, error);
+                    }
+                    if (error) { result.error = "Could not delete folder " + path + ": " + error.message(); }
+                    continue;
+                }
                 if (!error) {
                     const auto status = fs::symlink_status(file, error);
                     if (!error && !fs::is_regular_file(status)) {
@@ -501,6 +563,19 @@ void ContentPanel::finishDelete() {
         if (!currentProject) { return; }
         m_dropStatus = std::move(result.error);
         bool clearedInspector = false;
+        if (!result.affectedFolder.empty()) {
+            const auto affected = [&result](std::string_view path) {
+                return isPathOrChild(path, result.affectedFolder);
+            };
+            m_renderer->setProjectAssetRoot(m_project->root());
+            std::erase_if(m_selectedFiles, affected);
+            std::erase_if(m_revealedReferences, affected);
+            if (affected(m_selectionAnchor)) { m_selectionAnchor.clear(); }
+            if (affected(m_selectedAsset)) {
+                setSelectedAsset({});
+                clearedInspector = true;
+            }
+        }
         for (const auto& path : result.deleted) {
             m_renderer->invalidateAsset(path);
             std::erase(m_selectedFiles, path);
@@ -625,20 +700,22 @@ void ContentPanel::onImGuiRender(bool playMode, std::span<const FileDrop> fileDr
         stopAudioPreview();
     }
 
-    if (!ImGui::Begin("Content")) {
+    const bool visible = ImGui::Begin("Content");
+    if (visible && m_project->isOpen() && !playMode) { acceptFileDrops(fileDrops); }
+    drawImportProgress();
+    if (!visible) {
         ImGui::End();
         return;
     }
     if (m_project->isOpen()) {
-        if (!playMode) { acceptFileDrops(fileDrops); }
-        if (m_delete.valid() && m_deleteRoot == m_trackedRoot) { ImGui::TextUnformatted("Deleting files…"); }
+        if (m_delete.valid() && m_deleteRoot == m_trackedRoot) { ImGui::TextUnformatted("Deleting items…"); }
         drawBreadcrumb();
         ImGui::Separator();
         if (!m_dropStatus.empty()) { ImGui::TextWrapped("%s", m_dropStatus.c_str()); }
         ImGui::BeginDisabled(playMode);
         drawAudioControls();
         ImGui::EndDisabled();
-        const bool allowMove = !playMode && canMoveFiles && !m_delete.valid();
+        const bool allowMove = !playMode && canMoveFiles && !m_delete.valid() && !m_dropImport.valid();
         const auto* activePayload = ImGui::GetDragDropPayload();
         if (allowMove && activePayload && activePayload->IsDataType(kContentFilePayload)) {
             ImGui::Selectable("Drop here to move into this folder", false);
@@ -653,12 +730,16 @@ void ContentPanel::onImGuiRender(bool playMode, std::span<const FileDrop> fileDr
         }
         drawFolderList(allowMove, !playMode);
         drawRenameDialog(allowMove);
-        constexpr char kDeletePopup[] = "Delete selected files?";
+        constexpr char kDeletePopup[] = "Delete items?";
         if (!m_pendingDelete.empty() && !ImGui::IsPopupOpen(kDeletePopup)) {
             ImGui::OpenPopup(kDeletePopup);
         }
         if (ImGui::BeginPopupModal(kDeletePopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            if (m_pendingDelete.size() == 1) {
+            if (m_pendingDelete.empty()) {
+                ImGui::CloseCurrentPopup();
+            } else if (m_pendingDeleteFolder) {
+                ImGui::TextWrapped("Permanently delete %s and all its contents?", m_pendingDelete.front().c_str());
+            } else if (m_pendingDelete.size() == 1) {
                 ImGui::Text("Permanently delete %s?", m_pendingDelete.front().c_str());
             } else {
                 ImGui::Text("Permanently delete %zu files?", m_pendingDelete.size());
@@ -812,6 +893,7 @@ void ContentPanel::drawFolderList(bool canMoveFiles, bool canReferenceAssets) {
         return std::string(encoded.begin(), encoded.end());
     };
     const auto selectFile = [&](const Entry& entry, const std::string& path) {
+        if (canReferenceAssets && isMeshAssetPath(path)) { m_renderer->prefetchMeshAsset(path); }
         const auto& io = ImGui::GetIO();
         if (io.KeyShift && !m_selectionAnchor.empty()) {
             const auto anchor = std::find_if(entries.begin(), entries.end(), [&](const Entry& candidate) {
@@ -911,6 +993,7 @@ void ContentPanel::drawFolderList(bool canMoveFiles, bool canReferenceAssets) {
                 }
                 ImGui::SetDragDropPayload(kContentFilePayload, paths.data(), paths.size(), ImGuiCond_Once);
             }
+            if (canReferenceAssets && isMeshAssetPath(assetPath)) { m_renderer->prefetchMeshAsset(assetPath); }
             ImGui::TextUnformatted(name.c_str());
             ImGui::EndDragDropSource();
         }
@@ -918,8 +1001,8 @@ void ContentPanel::drawFolderList(bool canMoveFiles, bool canReferenceAssets) {
 
     const auto drawItemMenu = [&](const Entry& entry, const std::string& path) {
         if (entry.name == ".." || !ImGui::BeginPopupContextItem("ItemContext")) { return; }
-        const bool canRename = canMoveFiles && !isProtectedFile(path) && !isProtectedDirectory(path);
-        if (ImGui::MenuItem("Rename", nullptr, false, canRename)) {
+        const bool canEdit = canMoveFiles && !isProtectedFile(path) && !isProtectedDirectory(path);
+        if (ImGui::MenuItem("Rename", nullptr, false, canEdit)) {
             const auto name = pathText(entry.isDirectory ? entry.name : entry.name.stem());
             m_renamePath = path;
             m_renameDirectory = entry.isDirectory;
@@ -930,8 +1013,9 @@ void ContentPanel::drawFolderList(bool canMoveFiles, bool canReferenceAssets) {
             m_renameName[length] = '\0';
             m_renameRequested = true;
         }
-        if (!entry.isDirectory && ImGui::MenuItem("Delete", nullptr, false, canMoveFiles && !isProtectedFile(path))) {
-            if (std::find(m_selectedFiles.begin(), m_selectedFiles.end(), path) == m_selectedFiles.end()) {
+        if (ImGui::MenuItem("Delete", nullptr, false, canEdit)) {
+            m_pendingDeleteFolder = entry.isDirectory;
+            if (entry.isDirectory || std::find(m_selectedFiles.begin(), m_selectedFiles.end(), path) == m_selectedFiles.end()) {
                 m_pendingDelete.assign(1, path);
             } else {
                 m_pendingDelete = m_selectedFiles;

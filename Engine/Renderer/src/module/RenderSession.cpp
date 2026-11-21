@@ -1,6 +1,7 @@
 #include "RenderState.hpp"
 
 #include "AssetData.hpp"
+#include "CookedTexture.hpp"
 #include "GameUi.hpp"
 
 #include <GLFW/glfw3.h>
@@ -148,20 +149,7 @@ void RenderSession::setAssetReader(AssetReader reader) {
     m_state->thumbnailLoader.setReader(reader, [device](const AssetReader& source, std::string_view path) {
         auto pass = std::make_shared<MeshPass>();
         if (!pass->ensure(device.Get())) { return std::shared_ptr<MeshPass>{}; }
-        pass->setAssetReader(source);
-        MeshInstance mesh;
-        if (isMeshAssetPath(path)) {
-            mesh.meshPath = path;
-        } else {
-            mesh.materialPath = path;
-        }
-        SceneDrawList draw;
-        draw.meshes = &mesh;
-        draw.meshCount = 1;
-        pass->prepareAssets(device.Get(), draw);
-        // Drop file readers and decoded CPU cache entries before handing over
-        // the pass. Only prepared GPU resources are needed for the draw.
-        pass->releaseDecodedAssets();
+        pass->prepareThumbnail(device.Get(), source, path);
         return pass;
     });
     m_state->thumbnailsDirty = true;
@@ -170,7 +158,16 @@ void RenderSession::setAssetReader(AssetReader reader) {
 }
 
 void RenderSession::setProjectAssetRoot(const std::filesystem::path& root) {
-    setAssetReader(fileAssetReader(root));
+    setAssetReader(projectRenderAssetReader(root));
+}
+
+void RenderSession::prefetchMeshAsset(std::string_view path) {
+    MeshInstance mesh;
+    mesh.meshPath = path;
+    SceneDrawList draw;
+    draw.meshes = &mesh;
+    draw.meshCount = 1;
+    m_state->meshPass.prepareAssets(m_state->device, draw);
 }
 
 void RenderSession::setProjectShaderSource(AssetReader reader) {
@@ -242,6 +239,7 @@ void RenderSession::newFrame(bool allowAssetReload) {
     }
     if (m_state->thumbnailsDirty || m_state->thumbnailShaderRevision != m_state->shaders.revision()) {
         m_state->thumbnailLoader.clear();
+        m_state->residentThumbnailRequest.clear();
         m_state->thumbnails.clear();
         m_state->thumbnailsDirty = false;
         m_state->thumbnailShaderRevision = m_state->shaders.revision();
@@ -251,7 +249,7 @@ void RenderSession::newFrame(bool allowAssetReload) {
         return;
     }
     beginGpuFrameTiming();
-    if (!uploaded && allowAssetReload) { uploadReadyThumbnails(); }
+    uploadReadyThumbnails(!uploaded && allowAssetReload);
 
     int width = 0;
     int height = 0;

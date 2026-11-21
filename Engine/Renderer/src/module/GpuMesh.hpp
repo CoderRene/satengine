@@ -67,6 +67,7 @@ struct GpuMesh {
     float boundsRadius = 0.0f;
     UINT mainSectionCount = 0;
     bool mergeNodeDraws = false;
+    bool texturesPending = false;
     std::vector<GpuMeshSection> sections;
     std::vector<GpuMeshNode> nodes; // Sorted by source node ID.
 

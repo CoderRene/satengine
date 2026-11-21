@@ -15,8 +15,11 @@ public:
     [[nodiscard]] bool compileProjectPixel(std::string_view path, std::string_view source, std::string& bytecode);
     void poll(ID3D11Device* device, ShaderLibrary& library);
 private:
+    static constexpr std::array kSharedShaderNames{
+        "Common", "Brdf", "Lighting", "Material", "MeshFragment", "Skinning", "GpuInstance", "Fullscreen", "IblSampling"
+    };
     Microsoft::WRL::ComPtr<slang::IGlobalSession> m_session;
-    std::array<std::filesystem::file_time_type, kShaderNames.size() + kComputeShaderNames.size() + 8> m_times{};
+    std::array<std::filesystem::file_time_type, kShaderNames.size() + kComputeShaderNames.size() + kSharedShaderNames.size()> m_times{};
     std::chrono::steady_clock::time_point m_nextPoll{};
     bool m_initialized = false;
 };

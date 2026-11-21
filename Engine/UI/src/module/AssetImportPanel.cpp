@@ -5,6 +5,7 @@
 #include "CursorWrap.hpp"
 
 #include "AssetLibrary.hpp"
+#include "CookedTexture.hpp"
 #include "Project.hpp"
 #include "Renderer.hpp"
 
@@ -15,6 +16,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string_view>
 #include <system_error>
 #include <unordered_map>
@@ -55,7 +57,8 @@ void readMeshMaterialNames(std::string_view bytes, std::string_view path, const 
 void readFbxMaterialInfo(const MeshData& mesh, std::vector<std::string>& names,
     std::vector<std::string>& textures, std::string& warning) {
     names = mesh.materialNames;
-    textures = mesh.dependencies;
+    textures.clear();
+    std::ranges::copy_if(mesh.dependencies, std::back_inserter(textures), isTextureAssetPath);
     for (const auto& image : mesh.embeddedImages) { textures.push_back(image.path); }
     warning = mesh.materialWarning;
 }
@@ -67,8 +70,9 @@ bool fileEntryExists(const std::filesystem::path& file, std::error_code& error) 
 }
 AssetImportPanel::AssetImportPanel(Project& project, Renderer& renderer) : m_project(project), m_renderer(renderer) {}
 std::string AssetImportPanel::updateMaterialReferences(std::string_view oldPath, std::string_view newPath, bool directory) {
-    if (directory ? !oldPath.starts_with("Assets/") :
-            !isTextureAssetPath(oldPath) && !isShaderAssetPath(oldPath)) { return {}; }
+    const bool moveMaterial = directory || isMaterialAssetPath(oldPath);
+    const bool moveTextureOrShader = directory || isTextureAssetPath(oldPath) || isShaderAssetPath(oldPath);
+    if ((directory && !oldPath.starts_with("Assets/")) || (!moveMaterial && !moveTextureOrShader)) { return {}; }
     const std::string prefix = directory ? std::string(oldPath) + '/' : std::string{};
     const auto reader = fileAssetReader(m_project.root());
     const auto assets = m_project.root() / "Assets";
@@ -79,7 +83,31 @@ std::string AssetImportPanel::updateMaterialReferences(std::string_view oldPath,
         if (!std::filesystem::is_regular_file(it->symlink_status(ec))) { continue; }
         const auto encoded = it->path().lexically_relative(m_project.root()).generic_u8string();
         const std::string path(encoded.begin(), encoded.end());
-        if (!isMaterialAssetPath(path)) { continue; }
+        if (moveMaterial && path.ends_with(".satimport")) {
+            const auto model = path.substr(0, path.size() - std::string_view(".satimport").size());
+            if (!isMeshAssetPath(model)) { continue; }
+            const auto modelFile = assetFile(m_project, model);
+            AssetImportSettings settings;
+            std::string error;
+            if (!loadImportSettings(modelFile, settings, error)) {
+                if (firstError.empty()) { firstError = "Could not check material links in " + path + ": " + error; }
+                continue;
+            }
+            bool changed = false;
+            for (auto& link : settings.materialLinks) {
+                auto& reference = link.second;
+                if (reference == oldPath || (directory && reference.starts_with(prefix))) {
+                    reference.replace(0, oldPath.size(), newPath);
+                    changed = true;
+                }
+            }
+            if (changed) {
+                if (saveImportSettings(modelFile, settings, error)) { m_renderer.invalidateAsset(model); }
+                else if (firstError.empty()) { firstError = std::move(error); }
+            }
+            continue;
+        }
+        if (!moveTextureOrShader || !isMaterialAssetPath(path)) { continue; }
 
         std::string bytes;
         std::string error;
@@ -248,7 +276,7 @@ void AssetImportPanel::startImport(bool reimport) {
     m_error.clear();
     try {
         m_import = std::async(std::launch::async,
-            [reader = fileAssetReader(m_project.root()), source = assetFile(m_project, m_path),
+            [reader = fileAssetReader(m_project.root()), root = m_project.root(), source = assetFile(m_project, m_path),
              path = m_path, settings = m_edited, material = m_material, reimport] {
                 ImportResult result;
                 if (isMaterialAssetPath(path)) {
@@ -256,6 +284,21 @@ void AssetImportPanel::startImport(bool reimport) {
                     MaterialData validated;
                     if (decodeMaterial(bytes, validated, result.error) && writeAsset(source, path, bytes, result.error)) {
                         result.material = std::move(validated);
+                    }
+                } else if (isTextureAssetPath(path)) {
+                    std::uint64_t sourceHash = 0;
+                    const AssetReader track = [&](std::string_view requested, std::string& bytes, std::string& error) {
+                        const auto read = reader(requested, bytes, error);
+                        if (read == AssetReadResult::Found && requested == path) {
+                            sourceHash = cookedTextureSourceHash(bytes);
+                        }
+                        return read;
+                    };
+                    if (decodeAssetImport(track, path, reimport ? nullptr : &settings, result.asset, result.error)) {
+                        // The cache is optional. A failed cache write must not block an import.
+                        try {
+                            cacheCookedTexture(root, path, sourceHash, result.asset.settings, result.asset.texture);
+                        } catch (const std::exception&) {}
                     }
                 } else if (decodeAssetImport(reader, path, reimport ? nullptr : &settings, result.asset, result.error) &&
                     reimport && isMeshAssetPath(path)) {
@@ -289,7 +332,7 @@ bool AssetImportPanel::finishImport() {
     }
     if (result.material) {
         m_savedMaterial = m_material = std::move(*result.material);
-        m_renderer.invalidateMaterial(m_path);
+        m_renderer.invalidateAsset(m_path);
         m_valid = true;
         return true;
     }
@@ -462,6 +505,7 @@ void AssetImportPanel::requestMaterialExtraction(bool all) {
             for (auto& material : objMaterials) { extraction.materials.push_back(std::move(material.material)); }
         }
     } else {
+        extraction.firstSourceIndex = static_cast<std::uint32_t>(m_materialIndex);
         extraction.paths.push_back(std::move(paths[m_materialIndex]));
         if (gltf) {
             extraction.materials.resize(1);
@@ -497,6 +541,16 @@ void AssetImportPanel::requestMaterialExtraction(bool all) {
     saveMaterialExtraction(extraction);
 }
 void AssetImportPanel::saveMaterialExtraction(MaterialExtraction& extraction) {
+    const auto source = assetFile(m_project, m_path);
+    AssetImportSettings settings;
+    if (!loadImportSettings(source, settings, m_materialStatus)) { return; }
+    auto linked = settings;
+    for (std::size_t i = 0; i < extraction.paths.size(); ++i) {
+        linked.materialLinks[extraction.firstSourceIndex + static_cast<std::uint32_t>(i)] = extraction.paths[i];
+    }
+    AssetImportSettings checked;
+    if (!parseImportSettings(serializeImportSettings(linked), checked, m_materialStatus)) { return; }
+
     const auto reader = fileAssetReader(m_project.root());
     std::string bytes;
     std::vector<const GltfImage*> pending;
@@ -566,12 +620,25 @@ void AssetImportPanel::saveMaterialExtraction(MaterialExtraction& extraction) {
             if (ec) { m_materialStatus = "Cannot inspect " + path + ": " + ec.message(); break; }
             if (!writeAsset(assetFile(m_project, path), path, materialBytes[i], m_materialStatus)) { break; }
             ++materialsWritten;
-            m_renderer.invalidateMaterial(path);
+            m_renderer.invalidateAsset(path);
+        }
+    }
+    std::string linkError;
+    if (materialsWritten > 0) {
+        for (std::size_t i = 0; i < materialsWritten; ++i) {
+            settings.materialLinks[extraction.firstSourceIndex + static_cast<std::uint32_t>(i)] = extraction.paths[i];
+        }
+        if (saveImportSettings(source, settings, linkError)) {
+            m_saved.materialLinks = settings.materialLinks;
+            m_edited.materialLinks = std::move(settings.materialLinks);
+            m_renderer.invalidateAsset(m_path);
         }
     }
     if (materialsWritten == extraction.paths.size()) {
         m_materialStatus = materialsWritten == 1 ? "Extracted " + extraction.paths.front() :
             "Extracted " + std::to_string(materialsWritten) + " materials beside the model.";
+        if (linkError.empty()) { m_materialStatus += "\nLinked to the model."; }
+        else { m_materialStatus += "\nCould not save material links: " + linkError; }
         return;
     }
 
@@ -593,6 +660,7 @@ void AssetImportPanel::saveMaterialExtraction(MaterialExtraction& extraction) {
     if (materialsWritten > 0) {
         m_materialStatus = "Extracted " + std::to_string(materialsWritten) + " of " +
             std::to_string(extraction.paths.size()) + " materials.\n" + m_materialStatus;
+        if (!linkError.empty()) { m_materialStatus += "\nCould not save material links: " + linkError; }
     }
 }
 void AssetImportPanel::drawMeshMaterials() {

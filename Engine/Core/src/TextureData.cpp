@@ -11,8 +11,12 @@
 
 namespace sat {
 namespace {
+bool hdrImage(std::string_view bytes) {
+    return bytes.starts_with("#?RADIANCE\n") || bytes.starts_with("#?RGBE\n");
+}
+
 bool supportedImage(std::string_view bytes) {
-    return bytes.starts_with("\x89PNG\r\n\x1a\n") || bytes.starts_with("\xff\xd8");
+    return bytes.starts_with("\x89PNG\r\n\x1a\n") || bytes.starts_with("\xff\xd8") || hdrImage(bytes);
 }
 
 bool validDimensions(int width, int height) {
@@ -23,10 +27,10 @@ bool validDimensions(int width, int height) {
 bool readTextureDimensions(std::istream& stream, int& width, int& height, std::string& error) {
     error.clear();
     auto* buffer = stream.rdbuf();
-    char signature[8];
+    char signature[11];
     const auto count = buffer->sgetn(signature, sizeof(signature));
     if (!supportedImage(std::string_view(signature, static_cast<std::size_t>(count)))) {
-        error = "Only PNG and JPEG images are supported";
+        error = "Only PNG, JPEG and Radiance HDR images are supported";
         return false;
     }
     if (!stream.seekg(0)) { error = "Cannot seek image header"; return false; }
@@ -61,7 +65,7 @@ bool decodeTexture(std::string_view bytes, TextureData& texture, std::string& er
         return false;
     }
     if (!supportedImage(bytes)) {
-        error = "Only PNG and JPEG images are supported";
+        error = "Only PNG, JPEG and Radiance HDR images are supported";
         return false;
     }
     const auto* encoded = reinterpret_cast<const stbi_uc*>(bytes.data());
@@ -73,6 +77,22 @@ bool decodeTexture(std::string_view bytes, TextureData& texture, std::string& er
         !validDimensions(width, height)) {
         error = "Invalid image or dimensions outside 1..4096";
         return false;
+    }
+    if (hdrImage(bytes)) {
+        std::unique_ptr<float, decltype(&stbi_image_free)> pixels(
+            stbi_loadf_from_memory(encoded, size, &width, &height, nullptr, 4), stbi_image_free);
+        if (!pixels) {
+            const char* reason = stbi_failure_reason();
+            error = reason != nullptr ? reason : "HDR image decode failed";
+            return false;
+        }
+        TextureData candidate;
+        candidate.width = width;
+        candidate.height = height;
+        const auto count = static_cast<std::size_t>(width) * height * 4;
+        candidate.hdrPixels.assign(pixels.get(), pixels.get() + count);
+        texture = std::move(candidate);
+        return true;
     }
     std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels(
         stbi_load_from_memory(encoded, size, &width, &height, &channels, 4), stbi_image_free);

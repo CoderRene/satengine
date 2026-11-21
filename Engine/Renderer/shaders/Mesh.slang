@@ -15,7 +15,8 @@ cbuffer Frame : register(b0)
     float4 viewport;
     float environmentIntensity;
     int shadowLight;
-    float2 lightingPadding;
+    float environmentMaxLod;
+    float lightingPadding;
     float4x4 cascadeViewProj[4];
     float4 cascadeSplits;
     float4 cascadeTexel;
@@ -41,14 +42,15 @@ cbuffer Clusters : register(b4)
     uint4 clusterMasks[512];
 };
 
-Texture2D<float4> environmentMap : register(t4);
-SamplerState environmentSampler : register(s1);
 Texture2DArray<float> shadowMap : register(t5);
 SamplerComparisonState shadowSampler : register(s2);
 Texture2D<float4> opaqueScene : register(t12);
-SamplerState opaqueSceneSampler : register(s12);
+SamplerState linearClampSampler : register(s12);
 
 Texture2DArray<float> spotShadowMap : register(t15);
+TextureCube<float4> diffuseEnvironment : register(t16);
+TextureCube<float4> specularEnvironment : register(t17);
+Texture2D<float2> environmentBrdf : register(t18);
 
 float spotVisibility(float3 position)
 {
@@ -189,7 +191,7 @@ float3 transmittedScene(MeshFragment input, Surface surface, float3 v, float ior
             sceneUv = lerp(sceneUv, viewport.xy + exitPixel, edgeFade);
         }
     }
-    float3 background = opaqueScene.SampleLevel(opaqueSceneSampler, sceneUv / float2(dimensions.xy), lod).rgb;
+    float3 background = opaqueScene.SampleLevel(linearClampSampler, sceneUv / float2(dimensions.xy), lod).rgb;
     if (ambient.w == 0.0)
     {
         background = lerp(background / 12.92, pow((background + 0.055) / 1.055, 2.4), step(0.04045, background));
@@ -217,6 +219,7 @@ float4 shadeMesh(MeshFragment input, bool frontFace)
     float3 viewFresnel = specularStrength * (f0 + (1.0 - f0) * pow(1.0 - nv, 5.0));
     float coatWeight = coat.factor * (0.04 + 0.96 * pow(1.0 - saturate(abs(dot(coat.normal, v))), 5.0));
     float3 coatLight = float3(0.0, 0.0, 0.0);
+    float3 coatIndirect = float3(0.0, 0.0, 0.0);
     float transmission = sampleTransmission(input.uv, input.uv1);
     float3 transmitted = float3(0.0, 0.0, 0.0);
     if (transmission > 0.0 && surface.metal < 1.0)
@@ -232,21 +235,24 @@ float4 shadeMesh(MeshFragment input, bool frontFace)
     }
     float3 diffuseColor = surface.albedo * (1.0 - surface.metal) * (1.0 - transmission);
     float3 color = ambient.rgb * diffuseColor * surface.occlusion + surface.emission;
-    if (environmentIntensity > 0.0)
+    if (environmentMaxLod > 0.0)
     {
-        uint width, height, levels;
-        environmentMap.GetDimensions(0, width, height, levels);
-        float maxLod = float(levels - 1);
-        float3 diffuse = environmentMap.SampleLevel(environmentSampler, environmentUv(surface.normal), maxLod).rgb;
-        float3 reflection = reflect(-v, surface.normal);
-        float3 specular = environmentMap.SampleLevel(environmentSampler, environmentUv(reflection), surface.rough * maxLod).rgb;
-        color += environmentIntensity * surface.occlusion *
-            (diffuse * diffuseColor * (1.0 - viewFresnel) + specular * viewFresnel);
+        float envScale = environmentIntensity * surface.occlusion;
+        float roughness = saturate(surface.perceptualRoughness);
+        float3 diffuse = diffuseEnvironment.SampleLevel(linearClampSampler, surface.normal, 0.0).rgb;
+        float3 specular = specularEnvironment.SampleLevel(linearClampSampler, reflect(-v, surface.normal),
+            roughness * environmentMaxLod).rgb;
+        float2 brdf = environmentBrdf.SampleLevel(linearClampSampler, float2(nv, roughness), 0.0);
+        color += envScale * (diffuse * diffuseColor * (1.0 - viewFresnel) +
+            specular * specularStrength * (f0 * brdf.x + brdf.y));
         if (coatWeight > 0.0)
         {
-            float3 coatReflection = reflect(-v, coat.normal);
-            coatLight = environmentIntensity * surface.occlusion * environmentMap.SampleLevel(
-                environmentSampler, environmentUv(coatReflection), coat.roughness * maxLod).rgb;
+            float coatNv = saturate(dot(coat.normal, v));
+            float coatRoughness = saturate(coat.roughness);
+            float3 coatRadiance = specularEnvironment.SampleLevel(linearClampSampler, reflect(-v, coat.normal),
+                coatRoughness * environmentMaxLod).rgb;
+            float2 coatBrdf = environmentBrdf.SampleLevel(linearClampSampler, float2(coatNv, coatRoughness), 0.0);
+            coatIndirect = envScale * coat.factor * coatRadiance * (0.04 * coatBrdf.x + coatBrdf.y);
         }
     }
     PunctualLight evaluator;
@@ -275,7 +281,7 @@ float4 shadeMesh(MeshFragment input, bool frontFace)
             }
         }
     }
-    color = lerp(color, coatLight, coatWeight);
+    color = lerp(color, coatLight, coatWeight) + coatIndirect;
     transmitted *= 1.0 - coatWeight;
     if (ambient.w != 0.0) { return float4(color + transmitted, opacity); }
     float3 displayLinear = saturate(1.0 - 1.0 / (1.0 + color));

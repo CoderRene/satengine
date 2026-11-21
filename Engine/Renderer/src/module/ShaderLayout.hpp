@@ -25,7 +25,8 @@ struct alignas(16) MeshFrameCb {
     float viewport[4];
     float environmentIntensity;
     int shadowLight;
-    float lightingPadding[2];
+    float environmentMaxLod;
+    float lightingPadding;
     float cascadeViewProj[4][16];
     float cascadeSplits[4];
     float cascadeTexel[4];

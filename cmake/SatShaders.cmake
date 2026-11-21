@@ -13,7 +13,7 @@ set(editor_shader_dir "${CMAKE_BINARY_DIR}/Shaders")
 set(editor_shader_passes SelectionOutline CameraFrustum TransformGizmo Grid SelectionOutlineSkinned)
 set(shader_generated "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
 set(shader_layout "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/src/module/ShaderLayout.hpp")
-set(shader_shared Common Brdf Lighting Material MeshFragment Skinning Mesh GpuInstance Fullscreen)
+set(shader_shared Common Brdf Lighting Material MeshFragment Skinning Mesh GpuInstance Fullscreen IblSampling)
 list(TRANSFORM shader_shared PREPEND "${shader_source}/")
 list(TRANSFORM shader_shared APPEND ".slang")
 set(shader_flags -target dxbc -profile sm_5_0 -matrix-layout-column-major -O3)
@@ -52,7 +52,7 @@ foreach(pass Mesh SelectionOutline CameraFrustum TransformGizmo Grid PostProcess
         endif()
     endforeach()
 endforeach()
-foreach(pass ScatterInstances CullInstances DepthPyramid SkinVertices)
+foreach(pass ScatterInstances CullInstances DepthPyramid SkinVertices EnvironmentCube EnvironmentFilter EnvironmentBrdf)
     set(output "${shader_dir}/${pass}.cs.dxbc")
     add_custom_command(OUTPUT "${output}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${shader_dir}"

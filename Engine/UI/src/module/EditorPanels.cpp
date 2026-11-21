@@ -107,7 +107,8 @@ void EditorSession::drawPanels() {
     ImGui::EndDisabled();
 
     if (state.content) {
-        const auto drops = sceneReadOnly ? std::span<const FileDrop>{} : state.platformWindow->fileDrops();
+        const auto drops = sceneReadOnly || state.assetImports->importPending()
+            ? std::span<const FileDrop>{} : state.platformWindow->fileDrops();
         state.content->onImGuiRender(playing, drops,
             !sceneReadOnly && !state.assetImports->dirty() && (!state.viewport || !state.viewport->transformActive()));
 

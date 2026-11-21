@@ -70,11 +70,13 @@ public:
     // Set before the first frame. Captured reader sources must outlive rendering.
     void setShaderReader(AssetReader reader);
     [[nodiscard]] bool initializeShaders();
-    // Thumbnail requests can read concurrently with scene rendering.
+    // Scene decode workers, thumbnails, and the render thread may read concurrently.
     // The reader and its captured state must support concurrent reads.
     void setAssetReader(AssetReader reader);
     // Window thread only. Thumbnails prepare on a background worker.
     void setProjectAssetRoot(const std::filesystem::path& root);
+    // Device thread. Requests the mesh and its authored materials without adding an entity.
+    void prefetchMeshAsset(std::string_view path);
     void setProjectShaderSource(AssetReader reader);
     // Frame-boundary/device-thread import. Stage CPU/GPU data, invoke optional
     // persistence callback, then replace only this asset. Failure preserves it.

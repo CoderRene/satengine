@@ -49,6 +49,7 @@ private:
     void moveFiles(std::string_view paths, const std::filesystem::path& targetFolder);
     struct DeleteResult {
         std::vector<std::string> deleted;
+        std::string affectedFolder;
         std::string error;
     };
     void deletePendingFiles();
@@ -56,6 +57,7 @@ private:
     void drawRenameDialog(bool allowRename);
     void drawNewFolderDialog(bool allowCreate, bool requested);
     void acceptFileDrops(std::span<const FileDrop> fileDrops);
+    void drawImportProgress();
     void navigateInto(const std::filesystem::path& folderName);
     void navigateUp();
 
@@ -73,6 +75,7 @@ private:
     std::filesystem::path m_selectionFolder;
     std::vector<std::string> m_selectedFiles;
     std::vector<std::string> m_pendingDelete;
+    bool m_pendingDeleteFolder = false;
     std::string m_selectionAnchor;
     std::vector<std::string> m_revealedReferences;
     bool m_scrollToReference = false;
@@ -94,6 +97,8 @@ private:
     int m_parentDragHoverFrame = -1;
     bool m_parentDragNavigated = false;
     float m_zoom = 0.0f; // 0 = list, 1 = large icons
+    std::filesystem::path m_importRoot;
+    std::future<std::string> m_dropImport; // Joins on panel teardown.
     std::filesystem::path m_deleteRoot;
     std::future<DeleteResult> m_delete; // Joins on panel teardown.
 };

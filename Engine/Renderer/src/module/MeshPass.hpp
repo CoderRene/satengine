@@ -53,8 +53,14 @@ public:
         ++m_assetRevision;
         return true;
     }
-    [[nodiscard]] bool hasPendingAssets() const { return m_assets.hasPendingAssets(); }
-    void releaseDecodedAssets() { m_assets.releaseDecodedAssets(); }
+    [[nodiscard]] bool hasResidentMesh(std::string_view path) const { return m_assets.mesh(path) != nullptr; }
+    void prepareThumbnail(ID3D11Device* device, AssetReader reader, std::string_view path) {
+        m_assets.prepareThumbnail(device, std::move(reader), path);
+    }
+    [[nodiscard]] bool prepareResidentThumbnail(ID3D11Device* device, std::string_view path,
+        std::vector<std::string>& dependencies) {
+        return m_assets.prepareResidentThumbnail(device, path, dependencies);
+    }
     [[nodiscard]] bool reimportAsset(ID3D11Device* device, std::string_view path, const AssetImportSettings* settings,
         const AssetImportWriter& writer, std::string& error) {
         if (!m_assets.reimport(device, path, settings, writer, error)) { return false; }

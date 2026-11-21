@@ -1,6 +1,7 @@
 #include "MeshPass.hpp"
 
 #include "CascadedShadowMap.hpp"
+#include "EnvironmentLighting.hpp"
 #include "Renderer.hpp"
 #include "GpuCulling.hpp"
 #include "GpuScene.hpp"
@@ -40,6 +41,8 @@ constexpr UINT kSkinnedVertexSlot = 14;
 
 constexpr UINT kOpaqueSceneSlot = 12;
 constexpr UINT kSpotShadowSlot = 15;
+constexpr UINT kEnvironmentLightingSlot = 16;
+constexpr UINT kEnvironmentLightingViewCount = 3;
 
 void drawFullscreen(ID3D11DeviceContext& context, ShaderProgram program, ID3D11RasterizerState* rasterizer,
     ID3D11DepthStencilState* depth) {
@@ -105,7 +108,8 @@ struct MeshPass::Impl {
     GpuScene scenes[2];
     GpuScene transientScene;
     GpuScene* currentScene = nullptr;
-    GpuCulling culling[2];
+    static constexpr unsigned kThumbnailViewIndex = 2;
+    GpuCulling culling[kThumbnailViewIndex + 1];
     Microsoft::WRL::ComPtr<ID3D11Buffer> skinCb;
     Microsoft::WRL::ComPtr<ID3D11Buffer> transparentIndices;
     std::size_t transparentCapacity = 0;
@@ -148,7 +152,7 @@ struct MeshPass::Impl {
             return true;
         }
     };
-    WeightedTargets weightedTargets[2];
+    WeightedTargets weightedTargets[kThumbnailViewIndex + 1];
     Microsoft::WRL::ComPtr<ID3D11DepthStencilState> transparentDepth;
     struct OpaqueSnapshot {
         Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
@@ -212,11 +216,13 @@ struct MeshPass::Impl {
             return view.Get();
         }
     };
-    OpaqueSnapshot opaqueSnapshots[2];
+    OpaqueSnapshot opaqueSnapshots[kThumbnailViewIndex + 1];
     CascadedShadowMap shadowMap;
     CascadedShadowMap spotMap;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> shadowSampler;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> environmentSampler;
-    Microsoft::WRL::ComPtr<ID3D11SamplerState> transmissionSampler;
+    Microsoft::WRL::ComPtr<ID3D11SamplerState> linearClampSampler;
+    EnvironmentLighting environmentLighting;
     GpuMesh cubeMesh{};
     ID3D11Buffer* lightsCb = nullptr;
     ID3D11Buffer* clusterCb = nullptr;
@@ -259,6 +265,7 @@ void MeshPass::release() {
 }
 
 void MeshPass::setAssetReader(AssetReader reader, bool asynchronous) {
+    if (m_impl) { m_impl->environmentLighting.resetEnvironments(); }
     m_assets.setReader(std::move(reader), asynchronous);
     ++m_assetRevision;
 }
@@ -299,8 +306,19 @@ bool MeshPass::ensure(ID3D11Device* device) {
         return false;
     }
 
-    HRESULT hr = S_OK;
-
+    // The mesh shader declares this comparison sampler even when no light casts shadows.
+    D3D11_SAMPLER_DESC shadowSampler{};
+    shadowSampler.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    shadowSampler.AddressU = shadowSampler.AddressV = shadowSampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    shadowSampler.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
+    shadowSampler.MaxAnisotropy = 1;
+    shadowSampler.MaxLOD = D3D11_FLOAT32_MAX;
+    HRESULT hr = device->CreateSamplerState(&shadowSampler, m_impl->shadowSampler.GetAddressOf());
+    if (FAILED(hr)) {
+        std::cerr << "Cannot create mesh shadow comparison sampler (HRESULT " << hr << ")\n";
+        m_impl->failed = true;
+        return false;
+    }
 
     MeshVertex vertices[24];
     unsigned short indices[36];
@@ -448,8 +466,8 @@ bool MeshPass::ensure(ID3D11Device* device) {
         std::cerr << "Cannot create environment sampler\n";
     }
     environmentSampler.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-    if (FAILED(device->CreateSamplerState(&environmentSampler, m_impl->transmissionSampler.GetAddressOf()))) {
-        std::cerr << "Cannot create scene color sampler for glass\n";
+    if (FAILED(device->CreateSamplerState(&environmentSampler, m_impl->linearClampSampler.GetAddressOf()))) {
+        std::cerr << "Cannot create linear clamp sampler for environment lighting and glass\n";
     }
 
     m_impl->ready = true;
@@ -478,7 +496,9 @@ void MeshPass::draw(
     }
     const auto syncStart = std::chrono::steady_clock::now();
     const unsigned viewIndex = sceneView ? 0 : 1;
-    auto& culling = m_impl->culling[viewIndex];
+    // Prepared thumbnails have their own scratch targets and depth history.
+    const unsigned resourceIndex = !drawList.scene && !prepareAssets ? Impl::kThumbnailViewIndex : viewIndex;
+    auto& culling = m_impl->culling[resourceIndex];
     // The editor and game view share buffers when both render the same Scene.
     auto& first = m_impl->scenes[viewIndex];
     auto& second = m_impl->scenes[1 - viewIndex];
@@ -572,6 +592,10 @@ void MeshPass::draw(
         context->PSSetShaderResources(4, 1, &nullView);
     }
     if (scene.batches().empty() && scene.transparent().empty()) { culling.invalidateDepth(); return; }
+    const auto environmentLighting = frame.environmentIntensity > 0.0f ?
+        m_impl->environmentLighting.prepare(*device.Get(), *context, shaders, drawList.environmentPath, environment,
+            m_impl->environmentSampler.Get(), m_impl->linearClampSampler.Get()) : EnvironmentLightingViews{};
+    frame.environmentMaxLod = environmentLighting.maxSpecularLod;
 
     frame.shadowLight = -1;
     frame.spotLight = -1;
@@ -854,12 +878,18 @@ void MeshPass::draw(
 
     if (gpuStats) { gpuStats->mark(*context, ViewTimestamp::ShadowEnd); }
     ID3D11ShaderResourceView* lightingViews[] = {environment, frame.cascadeCount != 0 ? shadowMap.shaderView() : nullptr};
-    ID3D11SamplerState* lightingSamplers[] = {m_impl->environmentSampler.Get(),
-        frame.spotLight >= 0 ? spotMap.sampler() : shadowMap.sampler()};
+    ID3D11SamplerState* lightingSamplers[] = {m_impl->environmentSampler.Get(), m_impl->shadowSampler.Get()};
     auto* spotView = frame.spotLight >= 0 ? spotMap.shaderView() : nullptr;
     context->PSSetShaderResources(kSpotShadowSlot, 1, &spotView);
     context->PSSetShaderResources(4, 2, lightingViews);
     context->PSSetSamplers(1, 2, lightingSamplers);
+    if (environmentLighting.brdf) {
+        ID3D11ShaderResourceView* views[kEnvironmentLightingViewCount] = {
+            environmentLighting.diffuse, environmentLighting.specular, environmentLighting.brdf
+        };
+        context->PSSetShaderResources(kEnvironmentLightingSlot, kEnvironmentLightingViewCount, views);
+        context->PSSetSamplers(kOpaqueSceneSlot, 1, m_impl->linearClampSampler.GetAddressOf());
+    }
     const auto planes = frustumPlanes(viewProj);
     const auto width = static_cast<UINT>(viewport.Width);
     const auto height = static_cast<UINT>(viewport.Height);
@@ -908,17 +938,19 @@ void MeshPass::draw(
         needsSnapshot |= item.range.material->transmissive;
     }
     if (needsSnapshot) {
-        auto& snapshot = m_impl->opaqueSnapshots[viewIndex];
-        auto* background = m_impl->transmissionSampler ? snapshot.capture(*device.Get(), *context) : nullptr;
+        auto& snapshot = m_impl->opaqueSnapshots[resourceIndex];
+        auto* background = m_impl->linearClampSampler ? snapshot.capture(*device.Get(), *context) : nullptr;
         context->PSSetShaderResources(kOpaqueSceneSlot, 1, &background);
-        context->PSSetSamplers(kOpaqueSceneSlot, 1, m_impl->transmissionSampler.GetAddressOf());
+        if (!environmentLighting.brdf) {
+            context->PSSetSamplers(kOpaqueSceneSlot, 1, m_impl->linearClampSampler.GetAddressOf());
+        }
         if (hasTransmission) { submit(MeshQueue::Transmission, GpuCulling::Phase::Frustum, planes); }
     }
     if (gpuStats) { gpuStats->mark(*context, ViewTimestamp::TransmissionEnd); }
     if (!transparent.empty()) {
         Microsoft::WRL::ComPtr<ID3D11RenderTargetView> colorTarget;
         Microsoft::WRL::ComPtr<ID3D11DepthStencilView> sceneDepth;
-        auto& targets = m_impl->weightedTargets[viewIndex];
+        auto& targets = m_impl->weightedTargets[resourceIndex];
         if (weighted) {
             context->OMGetRenderTargets(1, colorTarget.GetAddressOf(), sceneDepth.GetAddressOf());
             D3D11_RENDER_TARGET_VIEW_DESC desc{};
@@ -1005,6 +1037,10 @@ void MeshPass::draw(
     if (boundRasterizer != m_impl->rasterizer) { context->RSSetState(m_impl->rasterizer); }
     ID3D11ShaderResourceView* unbound[kOpaqueSceneSlot + 1]{};
     context->PSSetShaderResources(0, static_cast<UINT>(std::size(unbound)), unbound);
+    if (environmentLighting.brdf) {
+        ID3D11ShaderResourceView* unboundLighting[kEnvironmentLightingViewCount]{};
+        context->PSSetShaderResources(kEnvironmentLightingSlot, kEnvironmentLightingViewCount, unboundLighting);
+    }
     context->PSSetShaderResources(kSpotShadowSlot, 1, &nullView);
 }
 

@@ -20,11 +20,17 @@ using AssetImportWriter = std::function<bool(const AssetImportSettings&, std::st
 [[nodiscard]] bool inspectTextureFile(const std::filesystem::path& root, std::string_view path,
     const AssetImportSettings& settings, TextureInfo& info, std::string& error);
 
+struct PreparedEmbeddedTexture {
+    TextureData data;
+    std::string error;
+};
+
 struct PreparedAssetImport {
     std::string path;
     AssetImportSettings settings;
     MeshData mesh;
     TextureData texture;
+    std::vector<PreparedEmbeddedTexture> embeddedTextures;
     bool isMesh = false;
     bool reservedNew = false;
 };

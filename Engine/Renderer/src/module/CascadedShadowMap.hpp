@@ -47,7 +47,6 @@ public:
     [[nodiscard]] unsigned resolution() const { return m_resolutionAttempted; }
     [[nodiscard]] ID3D11DepthStencilView* depthView(unsigned index) const { return m_depthViews[index].Get(); }
     [[nodiscard]] ID3D11ShaderResourceView* shaderView() const { return m_shaderView.Get(); }
-    [[nodiscard]] ID3D11SamplerState* sampler() const { return m_sampler.Get(); }
     [[nodiscard]] ID3D11RasterizerState* rasterizer(bool doubleSided = false) const {
         return doubleSided ? m_doubleSidedRasterizer.Get() : m_rasterizer.Get();
     }
@@ -63,7 +62,6 @@ private:
     float m_nearDepth = 0;
     std::array<Microsoft::WRL::ComPtr<ID3D11DepthStencilView>, kMaxCascades> m_depthViews;
     Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> m_shaderView;
-    Microsoft::WRL::ComPtr<ID3D11SamplerState> m_sampler;
     Microsoft::WRL::ComPtr<ID3D11RasterizerState> m_rasterizer;
     Microsoft::WRL::ComPtr<ID3D11RasterizerState> m_doubleSidedRasterizer;
     unsigned m_resolutionAttempted = 0;

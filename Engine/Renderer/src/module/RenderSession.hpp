@@ -41,6 +41,7 @@ public:
     [[nodiscard]] bool initializeShaders();
     void setAssetReader(AssetReader reader);
     void setProjectAssetRoot(const std::filesystem::path& root);
+    void prefetchMeshAsset(std::string_view path);
     void setProjectShaderSource(AssetReader reader);
     [[nodiscard]] bool reimportAsset(std::string_view path, const AssetImportSettings* settings,
         const AssetImportWriter& writer, std::string& error);
@@ -75,7 +76,7 @@ private:
     struct State;
     [[nodiscard]] bool makeThumbnailSpace();
     void uploadTextureThumbnail(std::string path, const TextureData& image);
-    void uploadReadyThumbnails();
+    void uploadReadyThumbnails(bool allowMeshThumbnail);
     void renderThumbnail(std::string path, MeshPass& pass, std::span<const Mat4> palette = {});
     std::unique_ptr<State> m_state;
 

@@ -25,8 +25,8 @@ inline constexpr std::array kShaderNames{"Mesh", "SelectionOutline", "CameraFrus
         id == ShaderId::CameraFrustum || id == ShaderId::TransformGizmo || id == ShaderId::Grid;
 }
 
-enum class ComputeShaderId : std::uint8_t { ScatterInstances, CullInstances, DepthPyramid, SkinVertices, Count };
-inline constexpr std::array kComputeShaderNames{"ScatterInstances", "CullInstances", "DepthPyramid", "SkinVertices"};
+enum class ComputeShaderId : std::uint8_t { ScatterInstances, CullInstances, DepthPyramid, SkinVertices, EnvironmentCube, EnvironmentFilter, EnvironmentBrdf, Count };
+inline constexpr std::array kComputeShaderNames{"ScatterInstances", "CullInstances", "DepthPyramid", "SkinVertices", "EnvironmentCube", "EnvironmentFilter", "EnvironmentBrdf"};
 
 struct ShaderProgram {
     ID3D11VertexShader* vertex;

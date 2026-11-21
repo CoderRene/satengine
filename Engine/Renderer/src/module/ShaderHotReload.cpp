@@ -99,10 +99,9 @@ void ShaderHotReload::poll(ID3D11Device* device, ShaderLibrary& library) {
     };
     std::array<bool, kPassCount> changed{};
     bool shared = false;
-    constexpr const char* kShared[] = {"Common", "Brdf", "Lighting", "Material", "MeshFragment", "Skinning", "GpuInstance", "Fullscreen"};
     for (std::size_t i = 0; i < m_times.size(); ++i) {
         const bool pass = i < kPassCount;
-        const auto* name = pass ? passName(i) : kShared[i - kPassCount];
+        const auto* name = pass ? passName(i) : kSharedShaderNames[i - kPassCount];
         std::error_code ec;
         const auto time = std::filesystem::last_write_time(
             std::filesystem::path(SAT_SHADER_SOURCE_DIR) / (std::string(name) + ".slang"), ec);

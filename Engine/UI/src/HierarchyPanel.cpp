@@ -1,7 +1,6 @@
 #include "HierarchyPanel.hpp"
 
 #include "AssetData.hpp"
-#include "AssetImportSettings.hpp"
 #include "AssetLibrary.hpp"
 #include "Project.hpp"
 #include "Scene.hpp"
@@ -12,6 +11,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -36,6 +36,21 @@ void pushEntityId(EntityId id) {
 
 EntityId draggedEntity() {
     return hierarchyPayloadEntity(ImGui::GetDragDropPayload());
+}
+
+void attachImportedLight(Entity& entity, const MeshLight& source) {
+    entity.hasLight = true;
+    entity.light = source.light;
+    const auto& direction = source.direction;
+    if (source.light.type != LightType::Point &&
+        std::isfinite(direction.x) && std::isfinite(direction.y) && std::isfinite(direction.z)) {
+        // Match the light renderer's +Z axis and rotationMatrixEuler's pitch sign.
+        entity.transform.rotation = {
+            std::atan2(-direction.y, std::hypot(direction.x, direction.z)) / kDegToRad,
+            std::atan2(direction.x, direction.z) / kDegToRad,
+            0
+        };
+    }
 }
 
 } // namespace
@@ -396,45 +411,60 @@ struct HierarchyPanel::Impl {
             return;
         }
 
-        AssetImportSettings settings;
         PreparedAssetImport imported;
-        if (m_project && isSceneModelAssetPath(path)) {
-            const auto reader = fileAssetReader(m_project->root());
-            std::string metadata;
-            const auto result = reader(m_droppedMeshPath + ".satimport", metadata, m_meshDropError);
-            if (result == AssetReadResult::Error ||
-                (result == AssetReadResult::Found && !parseImportSettings(metadata, settings, m_meshDropError))) {
-                return;
-            }
-            if (settings.preserveNodeHierarchy) {
-                settings.mergeGeometry = false;
-                if (!decodeAssetImport(reader, path, &settings, imported, m_meshDropError)) { return; }
-                if (imported.mesh.nodes.size() >= kMaxSceneEntities - m_scene->entityCount()) {
-                    m_meshDropError = "This model hierarchy would exceed the scene entity limit.";
-                    return;
-                }
-            }
+        const bool sceneModel = m_project && isSceneModelAssetPath(path);
+        if (sceneModel && !decodeAssetImport(fileAssetReader(m_project->root()), path, nullptr, imported, m_meshDropError)) {
+            return;
+        }
+
+        const auto& mesh = imported.mesh;
+        const bool preserveHierarchy = imported.settings.preserveNodeHierarchy;
+        auto childCount = preserveHierarchy ? mesh.nodes.size() : mesh.lights.size();
+        if (preserveHierarchy && !mesh.lights.empty()) {
+            childCount += static_cast<std::size_t>(std::ranges::count_if(mesh.nodes, [](const MeshNode& node) {
+                return node.sectionCount != 0 && node.lightIndex != kNoMeshLight;
+            }));
+        }
+        if (childCount >= kMaxSceneEntities - m_scene->entityCount()) {
+            m_meshDropError = "This model hierarchy would exceed the scene entity limit.";
+            return;
         }
 
         auto& root = m_scene->createEntity(std::move(name));
         const EntityId rootId = root.id();
         (void)m_scene->setParent(rootId, m_destination);
-        if (!settings.preserveNodeHierarchy) {
+        if (!preserveHierarchy && (!sceneModel || !mesh.indices.empty())) {
             root.hasMesh = true;
             root.mesh.meshPath = path;
-        } else {
+        }
+        if (preserveHierarchy || !mesh.lights.empty()) {
             std::unordered_map<std::uint32_t, EntityId> ids;
-            ids.reserve(imported.mesh.nodes.size());
-            for (const auto& source : imported.mesh.nodes) {
+            if (preserveHierarchy) { ids.reserve(mesh.nodes.size()); }
+            for (const auto& source : mesh.nodes) {
+                const bool hasLight = source.lightIndex != kNoMeshLight;
+                if (!preserveHierarchy && !hasLight) { continue; }
                 auto& child = m_scene->createEntity(source.name);
+                const EntityId childId = child.id();
+                const EntityId parentId = preserveHierarchy && source.parent != 0 ? ids.at(source.parent) : rootId;
                 child.transform.position = {source.origin[0], source.origin[1], source.origin[2]};
-                if (source.sectionCount != 0) {
+                (void)m_scene->setParent(childId, parentId);
+                if (preserveHierarchy) { ids.emplace(source.id, childId); }
+
+                if (preserveHierarchy && source.sectionCount != 0) {
                     child.hasMesh = true;
                     child.mesh.meshPath = path;
                     child.mesh.meshNode = source.id;
+                    if (hasLight) {
+                        // The mesh already has its source rotation baked into its vertices.
+                        const auto position = child.transform.position;
+                        auto& light = m_scene->createEntity(source.name + " Light");
+                        light.transform.position = position;
+                        attachImportedLight(light, mesh.lights[source.lightIndex]);
+                        (void)m_scene->setParent(light.id(), childId);
+                    }
+                } else if (hasLight) {
+                    attachImportedLight(child, mesh.lights[source.lightIndex]);
                 }
-                (void)m_scene->setParent(child.id(), source.parent == 0 ? rootId : ids.at(source.parent));
-                ids.emplace(source.id, child.id());
             }
         }
         m_reveal = rootId;

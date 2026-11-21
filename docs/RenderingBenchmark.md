@@ -74,7 +74,10 @@ project with identical release settings and start it with
 `SAT_LOADING_BENCHMARK` set to a separate CSV path. The player captures 180
 frames from startup. The first row’s elapsed time ends at first presentation.
 Compare peak working set and the largest frame times around frame 30, when Lua
-instantiates an asset for the first time. Use `SAT_RENDER_BENCHMARK` separately
+instantiates an asset for the first time. The texture columns report coarse
+and full external textures published in each frame, worker read and decode
+times summed across completed jobs, and CPU time to publish their GPU
+resources. Worker timings can overlap. Use `SAT_RENDER_BENCHMARK` separately
 for warm steady-state timing.
 
 Compare **Full Project** and **Referenced Assets** archives by summing the

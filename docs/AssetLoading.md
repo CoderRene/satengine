@@ -180,11 +180,16 @@ previous GPU resource and reports the asset path in **Asset Errors**. Fix and
 save the file again to retry. The editor defers automatic reloads during Play
 and while Inspector import edits are pending.
 
-First-use mesh and texture decoding runs on a worker. The render thread
-publishes one prepared upload per frame. Geometry can appear after its first
-frame and materials use fallback textures until their maps are ready. Use
-**Reimport** for a manual retry or **File > Reload Assets** to reset the project’s
-caches and diagnostics.
+First-use mesh and external texture decoding use up to three CPU workers.
+Each worker slot holds one job until the render thread consumes its result. The
+render thread can publish several ready assets per frame and stops after its
+2 ms upload budget is spent. A single upload can exceed the budget. Geometry
+appears as soon as its buffers are ready, while external textures continue
+loading. Selecting or dragging a mesh in Content starts prefetching before
+the drop, and queued geometry gets priority over texture jobs. Assigned
+base-color maps use the pink fallback while unavailable.
+Use **Reimport** for a manual retry or **File > Reload Assets** to reset the
+project’s caches and diagnostics.
 
 Asset paths are UTF-8, relative to the project root and begin with `Assets/`.
 Absolute paths, traversal, empty segments, backslashes and control characters
@@ -204,6 +209,20 @@ with a load warning. Create a material that references the texture to restore it
 Standalone builds validate the selected meshes, materials, textures, and
 sidecars before creating archives. Orphaned or unsupported sidecars are
 rejected, and sidecar changes trigger repacking.
+
+The packer cooks eligible LDR textures into GPU-ready BC7 blocks, including
+model-embedded images. Images that exceed the compression error limits, HDR
+images, and images with dimensions unsuited to BC7 keep the source import
+path. The original images are packaged for UI and compatibility. Large
+external textures with mipmaps include a separate coarse mip chain. The
+player can display that chain before loading the full texture.
+
+In the editor, **Apply** and **Reimport** cache eligible textures under the
+project's `.cache/sat-textures-v1` folder, including a small preview chain
+for eligible large mipmapped images. Subsequent loads can show that preview
+before loading full resolution while the source bytes and import settings
+match. First appearances take priority over queued full-resolution refinements.
+This folder can be deleted to clear the disk cache.
 Standalone archives load their authenticated indexes at startup. The player
 reads and authenticates asset chunks on demand and keeps the last chunk from
 each group in an 8 MiB cache. It uses the same importer and settings as the

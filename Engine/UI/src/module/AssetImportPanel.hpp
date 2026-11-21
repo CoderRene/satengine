@@ -5,6 +5,7 @@
 #include "AnimationSystem.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <future>
 #include <optional>
@@ -55,6 +56,7 @@ private:
     void revert();
     void drawMaterial(bool readOnly);
     struct MaterialExtraction {
+        std::uint32_t firstSourceIndex = 0;
         std::vector<MaterialData> materials;
         std::vector<std::string> paths;
         std::vector<GltfImage> images;

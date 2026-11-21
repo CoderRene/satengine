@@ -129,6 +129,7 @@ void GpuScene::rebuild(const GpuAssetCache& assets, const GpuMesh& cube, const S
     const auto add = [&](MeshInstance instance, std::size_t sourceIndex, EntityId id) {
         const auto* mesh = instance.meshPath.empty() ? &cube : assets.mesh(instance.meshPath);
         if (!mesh || !mesh->valid()) { return; }
+        const auto* material = assets.material(instance.materialPath);
         const auto* node = mesh->node(instance.meshNode);
         if (instance.meshNode != 0 && !node) { return; }
         const unsigned object = static_cast<unsigned>(m_objects.size());
@@ -142,7 +143,6 @@ void GpuScene::rebuild(const GpuAssetCache& assets, const GpuMesh& cube, const S
         }
         if (id != kInvalidEntityId) { m_objectIndices.emplace(id, object); }
 
-        const auto* material = assets.material(instance.materialPath);
         const auto visit = [&](const GpuMaterial* sectionMaterial, UINT first, UINT count, UINT vertices,
             Vec3 center, Vec3 thickness) {
             if (!sectionMaterial || !count) { return; }

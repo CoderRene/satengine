@@ -95,6 +95,7 @@ struct RenderSession::State {
     OffscreenView scene;
     OffscreenView thumbnail;
     AssetThumbnailLoader thumbnailLoader;
+    std::string residentThumbnailRequest;
     struct Thumbnail {
         Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> view;
         std::uint64_t lastUsed = 0;

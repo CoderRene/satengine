@@ -1,4 +1,5 @@
 #include "Application.hpp"
+#include "CookedTexture.hpp"
 #include "PakArchive.hpp"
 #include "GamePakKeys.hpp"
 #include "AudioSystem.hpp"
@@ -151,8 +152,12 @@ protected:
             return sat::AssetReadResult::Error;
         };
         const sat::AssetReader readAsset = [this, read](std::string_view path, std::string& bytes, std::string& error) {
+            if (path.starts_with("CookedTextures/")) {
+                return read(m_assets[0], path, bytes, error, sat::kMaxCookedTextureBytes);
+            }
+            const auto limit = path.ends_with(".satimport") ? 4096 : sat::assetSourceByteLimit(path);
             for (const auto& archive : m_assets) {
-                const auto result = read(archive, path, bytes, error, path.ends_with(".satimport") ? 4096 : sat::kMaxAssetBytes);
+                const auto result = read(archive, path, bytes, error, limit);
                 if (result != sat::AssetReadResult::Missing) { return result; }
             }
             return sat::AssetReadResult::Missing;

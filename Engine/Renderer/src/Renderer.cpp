@@ -47,6 +47,10 @@ void Renderer::setProjectAssetRoot(const std::filesystem::path& root) {
     m_impl->setProjectAssetRoot(root);
 }
 
+void Renderer::prefetchMeshAsset(std::string_view path) {
+    m_impl->prefetchMeshAsset(path);
+}
+
 void Renderer::setProjectShaderSource(AssetReader reader) {
     m_impl->setProjectShaderSource(std::move(reader));
 }

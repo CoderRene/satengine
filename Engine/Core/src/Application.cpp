@@ -73,7 +73,7 @@ int Application::run() {
     constexpr unsigned kWarmupFrames = 120;
     constexpr unsigned kSampleFrames = 600;
     const auto capturePath = benchmarkPath(L"SAT_RENDER_BENCHMARK");
-    const RenderBenchmark benchmark(!capturePath.empty() || !loadingPath.empty());
+    const RenderBenchmark benchmark(!capturePath.empty() || !loadingPath.empty(), !loadingPath.empty());
     std::ofstream capture;
     unsigned captured = 0;
     if (!capturePath.empty()) {
@@ -94,7 +94,8 @@ int Application::run() {
             onStop();
             return 1;
         }
-        loading << "frame,elapsed_ms,frame_ms,peak_working_set_bytes,gpu_shadow_ms,gpu_transparent_ms\n";
+        loading << "frame,elapsed_ms,frame_ms,peak_working_set_bytes,gpu_shadow_ms,gpu_transparent_ms,"
+            "texture_previews,texture_full,texture_read_ms,texture_decode_ms,texture_upload_ms\n";
     }
     SceneRenderData renderData;
     int previousWidth = 0, previousHeight = 0;
@@ -164,7 +165,9 @@ int Application::run() {
             if (stats.gpuShadowMs) { loading << *stats.gpuShadowMs; }
             loading << ',';
             if (stats.gpuTransparentMs) { loading << *stats.gpuTransparentMs; }
-            loading << '\n';
+            const auto& textures = RenderBenchmark::textureLoads();
+            loading << ',' << textures.previews << ',' << textures.full << ',' << milliseconds(textures.read) <<
+                ',' << milliseconds(textures.decode) << ',' << milliseconds(textures.upload) << '\n';
             if (loadingFrame == 180) {
                 loading.close();
                 if (!capture.is_open()) { break; }

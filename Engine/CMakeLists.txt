@@ -2,6 +2,7 @@
 add_library(SatUfbx STATIC ThirdParty/ufbx/ufbx.c)
 
 add_library(SatAssets STATIC
+    Core/include/LightComponent.hpp
     Core/src/AssetData.cpp
     Core/src/AnimationAsset.cpp
     Core/src/AnimationGraph.cpp
@@ -11,6 +12,7 @@ add_library(SatAssets STATIC
     Core/src/AssetImporter.cpp
     Core/src/AssetLibrary.cpp
     Core/src/TextureData.cpp
+    Core/src/CookedTexture.cpp
 )
 target_include_directories(SatAssets PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Core/include")
 target_include_directories(SatAssets PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Core/src")
@@ -267,6 +269,7 @@ add_library(SatRuntime STATIC
     Renderer/src/module/AssetThumbnail.cpp
     Renderer/src/module/AssetThumbnailLoader.cpp
     Renderer/src/module/MeshPass.cpp
+    Renderer/src/module/EnvironmentLighting.cpp
     Renderer/src/module/GpuScene.cpp
     Renderer/src/module/GpuCulling.cpp
     Renderer/src/module/GpuViewStats.cpp
@@ -281,6 +284,7 @@ add_library(SatRuntime STATIC
     Renderer/src/module/TransformGizmoPass.cpp
 )
 target_include_directories(SatRuntime PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/Core/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/stb"
     "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/src"
 )
@@ -294,6 +298,14 @@ if(SAT_SHADER_HOT_RELOAD)
     target_compile_definitions(SatRuntime PRIVATE
         "$<$<NOT:$<CONFIG:Release>>:SAT_SHADER_HOT_RELOAD=1;SAT_SHADER_SOURCE_DIR=\"${shader_source}\">")
     target_link_libraries(SatRuntime PRIVATE "$<$<NOT:$<CONFIG:Release>>:${sat_slang_lib}>")
+endif()
+
+if(BUILD_TESTING)
+    add_executable(EnvironmentLightingTests Renderer/validation/EnvironmentLightingTests.cpp)
+    target_include_directories(EnvironmentLightingTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Renderer/src")
+    target_link_libraries(EnvironmentLightingTests PRIVATE SatRuntime)
+    add_test(NAME EnvironmentLighting COMMAND EnvironmentLightingTests "${SAT_GAME_SHADER_ROOT}")
+    set_tests_properties(EnvironmentLighting PROPERTIES TIMEOUT 60)
 endif()
 
 if(NOT SAT_BUILD_EDITOR)
